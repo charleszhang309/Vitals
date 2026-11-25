@@ -1,0 +1,64 @@
+{
+  "host": "0.0.0.0",
+  "port": 3993,
+  "upload_limit_mib": 50,
+  "weather": {
+    "city_name": "伦敦",
+    "latitude": 51.5074,
+    "longitude": -0.1278
+  },
+  "health": {
+    "export_dir": null,
+    "timezone": "UTC",
+    "ingest_token": null
+  },
+  "ai": {
+    "enabled": false,
+    "base_url": "https://api.openai.com/v1",
+    "api_key": null,
+    "model": "gpt-6-luna",
+    "include_vitals_context": true
+  },
+  "lhm": {
+    "url": "http://localhost:8085/data.json",
+    "timeout_seconds": 1.0,
+    "fan_mapping": {}
+  },
+  "task": {
+    "source": "auto",
+    "high_percent": 70,
+    "high_seconds": 300,
+    "low_percent": 10,
+    "low_seconds": 120
+  },
+  "alerts": {
+    "cpu_temperature_c": 90,
+    "gpu_temperature_c": 90,
+    "temperature_seconds": 30,
+    "disk_free_gib": 15,
+    "cooldown_seconds": 1800
+  },
+  "webhook": {
+    "kind": "disabled",
+    "bark_url_template": "https://api.day.app/REPLACE_WITH_DEVICE_KEY/{title}/{body}",
+    "json_url": null,
+    "timeout_seconds": 5,
+    "daily_briefing_time": null
+  },
+  "fancontrol_mode_sensor": false,
+  "fancontrol_exe": null,
+  "power_modes": {
+    "silent": {
+      "guid": "a1841308-3541-4fab-bc81-f71556f20b4a",
+      "fan_profile": null
+    },
+    "balanced": {
+      "guid": "381b4222-f694-41f0-9685-ff5bb260df2e",
+      "fan_profile": null
+    },
+    "performance": {
+      "guid": "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
+      "fan_profile": null
+    }
+  }
+}
