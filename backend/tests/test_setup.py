@@ -1,10 +1,12 @@
 import json
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+from backend import setup_api
 from backend.main import create_app
 
 
@@ -90,6 +92,20 @@ def test_setup_pairing_token_can_be_read_and_rotated_locally(tmp_path):
     assert content["token"] != "old-token" and len(content["token"]) >= 32
     assert content["restart_required"] is True
     assert json.loads(path.read_text(encoding="utf-8"))["agents"]["token"] == content["token"]
+
+
+@pytest.mark.parametrize("installed", [
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "/opt/homebrew/bin/tailscale",
+    "/usr/local/bin/tailscale",
+    None,
+])
+def test_tailscale_discovery_on_macos_with_a_minimal_path(monkeypatch, installed):
+    monkeypatch.setattr(setup_api, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(Path, "is_file", lambda path: str(path) == installed)
+    monkeypatch.setattr(setup_api.os, "access", lambda path, mode: str(path) == installed)
+    monkeypatch.setattr(setup_api.shutil, "which", lambda _: None)
+    assert setup_api.tailscale_cli() == installed
 
 
 def test_tailscale_writes_only_the_vitals_https_rule(tmp_path, monkeypatch):

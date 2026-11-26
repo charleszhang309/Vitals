@@ -8,6 +8,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
@@ -167,7 +168,12 @@ def write_config(path, update):
 
 
 def tailscale_cli():
-    if os.name == "nt":
+    if sys.platform == "darwin":
+        for candidate in ("/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+                          "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"):
+            if Path(candidate).is_file() and os.access(candidate, os.X_OK):
+                return candidate
+    elif os.name == "nt":
         for key in ("ProgramFiles", "ProgramFiles(x86)"):
             if root := os.environ.get(key):
                 path = Path(root) / "Tailscale" / "tailscale.exe"

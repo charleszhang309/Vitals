@@ -1,0 +1,6 @@
+{
+  "bundle": {
+    "targets": ["nsis", "msi"],
+    "resources": { "binaries/vitals-hub-runtime/": "_internal/" }
+  }
+}

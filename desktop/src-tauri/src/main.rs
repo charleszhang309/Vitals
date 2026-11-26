@@ -4,8 +4,12 @@ mod service;
 
 use service::{Hub, Operation, Status};
 use std::sync::mpsc::{self, Sender};
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+#[cfg(target_os = "macos")]
+use tauri::menu::Submenu;
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
+#[cfg(not(target_os = "macos"))]
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::{
     AppHandle, Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
@@ -20,13 +24,50 @@ fn open_window(app: &AppHandle) {
 }
 
 struct TrayMenu<R: Runtime> {
+    open: MenuItem<R>,
     status: MenuItem<R>,
+    separator: PredefinedMenuItem<R>,
     start: MenuItem<R>,
     stop: MenuItem<R>,
     restart: MenuItem<R>,
+    autostart: CheckMenuItem<R>,
+    quit: MenuItem<R>,
 }
 
 impl<R: Runtime> TrayMenu<R> {
+    fn new(app: &AppHandle<R>) -> tauri::Result<Self> {
+        Ok(Self {
+            open: MenuItem::with_id(app, "open", "打开 Vitals", true, None::<&str>)?,
+            status: MenuItem::with_id(app, "status", "服务状态：正在启动", false, None::<&str>)?,
+            separator: PredefinedMenuItem::separator(app)?,
+            start: MenuItem::with_id(app, "start", "启动服务", false, None::<&str>)?,
+            stop: MenuItem::with_id(app, "stop", "停止服务", false, None::<&str>)?,
+            restart: MenuItem::with_id(app, "restart", "重启服务", false, None::<&str>)?,
+            autostart: CheckMenuItem::with_id(
+                app,
+                "autostart",
+                "开机自启",
+                true,
+                app.autolaunch().is_enabled().unwrap_or(false),
+                None::<&str>,
+            )?,
+            quit: MenuItem::with_id(app, "quit", "退出 Vitals", true, None::<&str>)?,
+        })
+    }
+
+    fn items(&self) -> [&dyn IsMenuItem<R>; 8] {
+        [
+            &self.open,
+            &self.status,
+            &self.separator,
+            &self.start,
+            &self.stop,
+            &self.restart,
+            &self.autostart,
+            &self.quit,
+        ]
+    }
+
     fn update(&self, state: Status) {
         let _ = self.status.set_text(state.label());
         let _ = self.start.set_enabled(matches!(
@@ -36,6 +77,38 @@ impl<R: Runtime> TrayMenu<R> {
         let _ = self.stop.set_enabled(state == Status::Running);
         let _ = self.restart.set_enabled(state == Status::Running);
     }
+}
+
+#[cfg(target_os = "macos")]
+fn install_macos_menu(app: &AppHandle) -> tauri::Result<TrayMenu<tauri::Wry>> {
+    let services = TrayMenu::new(app)?;
+    let native = Menu::default(app)?;
+    // AppKit's built-in Quit bypasses the asynchronous Tauri exit request.
+    let quit = MenuItem::with_id(app, "quit", "退出 Vitals", true, Some("Cmd+Q"))?;
+    let application = Submenu::with_items(
+        app,
+        "Vitals",
+        true,
+        &[
+            &PredefinedMenuItem::about(app, None, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::show_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
+    )?;
+    native.remove_at(0)?;
+    native.insert(&application, 0)?;
+    native.insert(
+        &Submenu::with_items(app, "Vitals 服务", true, &services.items())?,
+        1,
+    )?;
+    app.set_menu(native)?;
+    Ok(services)
 }
 
 fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -62,43 +135,30 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let open = MenuItem::with_id(app, "open", "打开 Vitals", true, None::<&str>)?;
-    let status = MenuItem::with_id(app, "status", "服务状态：正在启动", false, None::<&str>)?;
-    let start = MenuItem::with_id(app, "start", "启动服务", false, None::<&str>)?;
-    let stop = MenuItem::with_id(app, "stop", "停止服务", false, None::<&str>)?;
-    let restart = MenuItem::with_id(app, "restart", "重启服务", false, None::<&str>)?;
-    let autostart = CheckMenuItem::with_id(
-        app,
-        "autostart",
-        "开机自启",
-        true,
-        app.autolaunch().is_enabled().unwrap_or(false),
-        None::<&str>,
-    )?;
-    let quit = MenuItem::with_id(app, "quit", "退出 Vitals", true, None::<&str>)?;
-    let sep = PredefinedMenuItem::separator(app)?;
-    let actions = Menu::with_items(
-        app,
-        &[
-            &open, &status, &sep, &start, &stop, &restart, &autostart, &quit,
-        ],
-    )?;
-    let menu = TrayMenu {
-        status,
-        start,
-        stop,
-        restart,
-    };
+    let tray_menu = TrayMenu::new(app.handle())?;
+    let actions = Menu::with_items(app, &tray_menu.items())?;
+    #[cfg(target_os = "macos")]
+    let menus = [tray_menu, install_macos_menu(app.handle())?];
+    #[cfg(not(target_os = "macos"))]
+    let menus = [tray_menu];
+    let autostart_items = menus.each_ref().map(|menu| menu.autostart.clone());
     let (send, receive) = mpsc::channel();
     app.manage(send.clone());
-    TrayIconBuilder::with_id("vitals")
+    let tray = TrayIconBuilder::with_id("vitals");
+    #[cfg(target_os = "macos")]
+    let tray = tray
+        .icon(tauri::image::Image::from_bytes(include_bytes!(
+            "../icons/tray-template.png"
+        ))?)
+        .icon_as_template(true)
+        .show_menu_on_left_click(true);
+    #[cfg(not(target_os = "macos"))]
+    let tray = tray
         .icon(
             app.default_window_icon()
                 .expect("bundled Vitals icon")
                 .clone(),
         )
-        .tooltip("Vitals")
-        .menu(&actions)
         .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
             if matches!(
@@ -111,7 +171,9 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             ) {
                 open_window(tray.app_handle());
             }
-        })
+        });
+    tray.tooltip("Vitals")
+        .menu(&actions)
         .on_menu_event(move |app, event| {
             let operation = match event.id().as_ref() {
                 "open" => {
@@ -133,7 +195,10 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     if let Err(error) = result {
                         eprintln!("Vitals auto-start: {error}");
                     }
-                    let _ = autostart.set_checked(manager.is_enabled().unwrap_or(false));
+                    let enabled = manager.is_enabled().unwrap_or(false);
+                    for item in &autostart_items {
+                        let _ = item.set_checked(enabled);
+                    }
                     return;
                 }
                 _ => return,
@@ -147,7 +212,9 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     std::thread::spawn(move || {
         let mut initial = true;
         hub.run(receive, |state| {
-            menu.update(state);
+            for menu in &menus {
+                menu.update(state);
+            }
             if matches!(state, Status::Running | Status::External) {
                 let _ = window.navigate(origin.clone());
             } else if !matches!(state, Status::Starting) {
@@ -179,6 +246,14 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("could not initialize Vitals");
     app.run(|app, event| {
+        #[cfg(target_os = "macos")]
+        if let RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } = &event
+        {
+            open_window(app);
+        }
         if let RunEvent::ExitRequested {
             api, code: None, ..
         } = event

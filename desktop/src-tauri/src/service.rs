@@ -60,23 +60,24 @@ impl Hub {
         } else {
             "vitals-hub"
         });
-        let (home, dev_project, port) = (app.path().app_local_data_dir()?, None, 3993);
+        let (home, dev_project) = (app.path().app_local_data_dir()?, None);
         #[cfg(debug_assertions)]
-        let (home, dev_project, port) = if !sidecar.is_file() {
+        let (home, dev_project) = if !sidecar.is_file() {
             let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../..")
                 .canonicalize()?;
-            let home = std::env::var_os("VITALS_DESKTOP_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| root.clone());
-            let port = std::env::var("VITALS_DESKTOP_PORT")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|port| *port != 0)
-                .unwrap_or(3993);
-            (home, Some(root), port)
+            (root.clone(), Some(root))
         } else {
-            (home, dev_project, port)
+            (home, dev_project)
+        };
+        let home = match std::env::var_os("VITALS_DESKTOP_HOME") {
+            Some(path) => std::path::absolute(path)?,
+            None => home,
+        };
+        let port = match std::env::var("VITALS_DESKTOP_PORT") {
+            Ok(port) => port.parse::<std::num::NonZeroU16>()?.get(),
+            Err(std::env::VarError::NotPresent) => 3993,
+            Err(error) => return Err(error.into()),
         };
         Ok(Self {
             home,
@@ -156,6 +157,12 @@ impl Hub {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::unix::process::CommandExt;
+            // PyInstaller runs the frozen Python interpreter in a child of its bootloader.
+            command.process_group(0);
+        }
         command
             .arg("--config")
             .arg(self.home.join("config.json"))
@@ -217,6 +224,11 @@ impl Hub {
                     Ok(None) => std::thread::sleep(Duration::from_millis(100)),
                     Err(_) => break,
                 }
+            }
+            #[cfg(target_os = "macos")]
+            // The unreaped bootloader PID is also the process group ID.
+            unsafe {
+                libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
             }
             let _ = child.kill();
             let _ = child.wait();

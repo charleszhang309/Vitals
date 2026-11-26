@@ -72,7 +72,7 @@
 
 ### Windows 桌面版
 
-使用 Windows 安装包时，安装后从开始菜单打开 **Vitals**。托盘图标左键显示窗口，关闭窗口会将其隐藏到托盘。右键菜单提供本机服务的启动、停止、重启、登录自启与退出。登录自启在该 Windows 用户登录时启动托盘程序。若需要登录前运行，继续使用现有任务计划程序方式。
+运行 `.exe`（NSIS）或 `.msi` 安装包，再从开始菜单打开 **Vitals**。托盘图标左键显示窗口，关闭窗口会将其隐藏到托盘。右键菜单提供本机服务的启动、停止、重启、登录自启与退出。登录自启在该 Windows 用户登录时启动托盘程序。若需要登录前运行，继续使用现有任务计划程序方式。
 
 桌面版自带 Python 服务、网页资源和 Windows 媒体与音量控制。打包版将配置和数据保存在当前用户的 `%LOCALAPPDATA%\org.vitals.desktop\`。安装前如已用任务计划程序或脚本运行 Vitals，请先从旧实例导出 ZIP 备份，再停止旧服务并关闭其自启，以免占用 3993。桌面版可识别同端口的兼容 Vitals 服务并打开其界面，外部服务的启停仍由原启动方式管理。需要迁移时，在桌面版导入 ZIP，并重新填写集成凭据。安装程序目前未做代码签名。
 
@@ -88,7 +88,29 @@
 .\desktop\scripts\build_windows.ps1
 ```
 
-脚本依次构建前端、PyInstaller 后端与 Tauri 外壳。NSIS 和 MSI 安装包生成在 `desktop/src-tauri/target/release/bundle/`。Tauri 外壳可跨平台，本阶段提供 Windows 安装脚本。
+脚本依次构建前端、PyInstaller 后端与 Tauri 外壳。NSIS 和 MSI 安装包生成在 `desktop/src-tauri/target/release/bundle/`。
+
+### macOS 桌面版
+
+打开与 Mac 架构相符的 `.dmg`，将 **Vitals.app** 拖入 **Applications**，然后从「应用程序」打开。顶部菜单栏的脉搏图标会随系统外观切换明暗。点击图标可打开窗口、查看服务状态、启动、停止、重启服务，或启用「开机自启」。前台应用菜单中的「Vitals 服务」也提供这些操作。自启在当前用户登录时运行。红色关闭按钮只隐藏窗口，菜单栏的「打开 Vitals」和 Dock 图标都能唤回窗口。「退出 Vitals」和 `⌘Q` 会关闭应用启动的本机服务。
+
+在「个性化设置 → 主机配置」保存配置后，从菜单栏重启服务。桌面版的数据与日志默认位于 `~/Library/Application Support/org.vitals.desktop/`。桌面版用于让 Mac 担任 Vitals 主机。如果 Windows 继续担任主机，使用 [Mac Agent](mac_agent/README.md) 即可。已有独立 Mac Hub 自启时，可先导出备份并停止旧服务，再在桌面版导入。
+
+#### 在 macOS 构建桌面安装包
+
+准备 Xcode Command Line Tools、原生 Rust 工具链、同架构的 Python 3.10+ 和 Node.js，然后在仓库根目录运行。
+
+```bash
+./desktop/scripts/build_macos.sh
+```
+
+脚本会构建网页、冻结 Python 后端并调用 Tauri。产物位于 `desktop/src-tauri/target/<target>/release/bundle/` 下的 `macos/Vitals.app` 和 `dmg/`。Apple Silicon 使用 `aarch64-apple-darwin`，Intel 使用 `x86_64-apple-darwin`。本地构建默认使用 ad-hoc 签名。对外分发时可配置 Developer ID 签名和公证。[Tauri 签名文档](https://v2.tauri.app/distribute/sign/macos/)
+
+可指定独立目录和端口试运行打包版。先退出已打开的 Vitals 桌面应用，以免触发单实例唤回。
+
+```bash
+VITALS_DESKTOP_HOME="$(mktemp -d)" VITALS_DESKTOP_PORT=43993 /Applications/Vitals.app/Contents/MacOS/vitals-desktop
+```
 
 ### Windows 命令行启动
 在项目根目录直接双击或运行：
