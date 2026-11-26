@@ -16,7 +16,7 @@ AGENT = "/api/agents/macbook"
 SYNC = "/api/todos/sync/reminders"
 SNAPSHOT = {
     "name": "MacBook", "os": "macos", "timestamp": "2026-01-01T00:00:00Z",
-    "battery": {"percent": 63, "charging": False, "minutes_left": 95},
+    "battery": {"percent": 63, "charging": False, "state": "discharging", "minutes_left": 95},
     "cpu": {"usage_percent": 12}, "memory": {"used_bytes": 4, "total_bytes": 8, "percent": 50},
     "disks": [{"mountpoint": "/", "free_bytes": 50, "total_bytes": 100}],
     "network": {"download_bytes_per_sec": 100, "upload_bytes_per_sec": 50},
@@ -48,6 +48,7 @@ def test_heartbeat_authorization_and_server_offline_clock(tmp_path, monkeypatch)
             assert (await client.post(AGENT + "/heartbeat", json=SNAPSHOT, headers=AUTH)).json() == {"commands": []}
             info = (await client.get("/api/agents")).json()["devices"][0]
             assert info["device_id"] == "macbook" and info["online"]
+            assert info["snapshot"]["battery"]["state"] == "discharging"
             assert info["last_seen"] > info["snapshot"]["timestamp"]
             assert [row["rss_bytes"] for row in info["snapshot"]["top_processes"]] == [7, 6, 5, 4, 3]
             now += 15

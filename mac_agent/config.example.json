@@ -1,0 +1,7 @@
+{
+  "server_url": "https://<your-device>.<your-tailnet>.ts.net",
+  "token": "replace-with-windows-agents-token",
+  "device_id": "macbook",
+  "device_name": "MacBook",
+  "reminders_list": null
+}

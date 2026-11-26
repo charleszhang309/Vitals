@@ -16,11 +16,15 @@ export function DevicePicker({ id, devices, device, onChange }) {
     onChange={(value) => onChange(value === 'windows' ? null : value.slice('agent:'.length))} /></div>;
 }
 
+const batteryStates = {
+  charging: '充电中', charged: '已充满', discharging: '使用电池', not_charging: '未充电', unknown: '状态未知',
+};
+
 export function RemoteHardware({ device, onOpen }) {
   const { snapshot, online, last_seen: lastSeen, name } = device;
   const { battery, cpu, memory, disks, network, top_processes: processes } = snapshot;
   const batteryStatus = battery && [
-    battery.charging ? '充电中' : '使用电池',
+    batteryStates[battery.state] ?? (battery.charging ? '充电中' : '使用电池'),
     battery.minutes_left != null && `${battery.charging ? '预计充满' : '剩余'} ${sleepTime(battery.minutes_left)}`,
   ].filter(Boolean).join(' · ');
   const stats = [

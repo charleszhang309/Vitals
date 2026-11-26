@@ -40,6 +40,7 @@ def require_agent_token(config):
 class Battery(BaseModel):
     percent: Percent
     charging: StrictBool
+    state: Literal["charging", "charged", "discharging", "not_charging", "unknown"] | None = None
     minutes_left: Annotated[int, Field(ge=0, strict=True)] | None = None
 
 

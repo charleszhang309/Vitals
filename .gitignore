@@ -57,3 +57,7 @@ tmp/
 temp/
 backup/
 backups/
+
+# Mac agent configuration
+/mac_agent/config.json
+!/mac_agent/config.example.json
