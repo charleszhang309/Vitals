@@ -15,6 +15,21 @@
 
 ---
 
+## 界面预览
+
+| 今日概览（Bento 小组件） | 控制中心与硬件监控 |
+| :---: | :---: |
+| ![今日概览](docs/screenshots/today.jpg) | ![控制中心](docs/screenshots/control.jpg) |
+
+<details>
+<summary>查看更多弹窗预览（汇率换算与历史走势）</summary>
+
+![汇率弹窗](docs/screenshots/rates.jpg)
+
+</details>
+
+---
+
 ## 核心功能
 
 ### 1. 今日概览
