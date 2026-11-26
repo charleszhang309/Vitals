@@ -1,10 +1,13 @@
 """远程设备快照、一次性指令下发及共享 Agent 鉴权。"""
 
+import asyncio
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
 from hmac import compare_digest
 from io import BytesIO
+import json
 from threading import Lock
 from time import monotonic
 from typing import Annotated, Literal
@@ -14,12 +17,15 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Res
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from PIL import Image
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, IPvAnyAddress, StrictBool, StringConstraints
+from starlette.responses import StreamingResponse
 
 from .lyrics import metadata_track_id
 
 
 OFFLINE_AFTER = 15
 RESULT_TIMEOUT = 60
+KEEPALIVE_SECONDS = 20
+STREAM_FALLBACK_DELAY = 0.75
 MAX_DEVICES = 32
 MAX_COMMANDS = 32
 DEVICE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
@@ -194,6 +200,7 @@ class AgentCommand:
     queued_at: float
     sent_at: float | None = None
     result: CommandResult | None = None
+    completed_at: datetime | None = None
 
     def status(self, now):
         if self.result is not None:
@@ -210,9 +217,18 @@ class Device:
     heartbeat_at: float
     commands: dict[UUID, AgentCommand] = field(default_factory=dict)
     artwork: tuple[str, bytes] | None = None
+    stream_wake: asyncio.Event | None = None
 
     def online(self, now):
         return now - self.heartbeat_at <= OFFLINE_AFTER
+
+    def claim(self, now, minimum_age=0):
+        # 由注册表持锁调用，SSE 和心跳共用同一份下发状态。
+        if self.online(now):
+            for identifier, command in self.commands.items():
+                if command.status(now) == "queued" and now - command.queued_at >= minimum_age:
+                    command.sent_at = now
+                    yield {"id": str(identifier), "action": command.action, "payload": command.payload}
 
 
 class AgentRegistry:
@@ -244,11 +260,8 @@ class AgentRegistry:
                     raise HTTPException(409, "Agent 设备数量已达上限")
                 device = self.devices[device_id] = Device(snapshot, seen, now)
             device.snapshot, device.last_seen, device.heartbeat_at = snapshot, seen, now
-            commands = []
-            for identifier, command in device.commands.items():
-                if command.status(now) == "queued":
-                    command.sent_at = now
-                    commands.append({"id": str(identifier), "action": command.action, "payload": command.payload})
+            minimum_age = STREAM_FALLBACK_DELAY if device.stream_wake is not None else 0
+            commands = list(device.claim(now, minimum_age))
             media = snapshot["media"] or {}
             version = media.get("artwork_version") if media.get("track_id") else None
             if device.artwork and device.artwork[0] != version:
@@ -295,12 +308,14 @@ class AgentRegistry:
                 {"device_id": device_id, "name": device.snapshot["name"], "os": device.snapshot["os"],
                  "snapshot": self.public_snapshot(device), "last_seen": device.last_seen.isoformat(), "online": device.online(now),
                  "commands": [{"id": str(identifier), "action": command.action, "status": command.status(now),
-                               **(command.result.model_dump() if command.result else {})}
+                               **(command.result.model_dump() if command.result else {}),
+                               **({"completed_at": command.completed_at.isoformat()} if command.completed_at else {})}
                               for identifier, command in device.commands.items()]}
                 for device_id, device in self.devices.items()
             ]
 
     def enqueue(self, device_id, payload):
+        # 从异步 POST 路由调用，使 Event.set 在流所在的事件循环执行。
         with self.lock:
             now = monotonic()
             device = self.devices.get(device_id)
@@ -320,7 +335,49 @@ class AgentRegistry:
                 del device.commands[oldest]
             identifier = uuid4()
             device.commands[identifier] = AgentCommand(payload.action, payload.payload.model_dump(), now)
+            if device.stream_wake is not None:
+                device.stream_wake.set()
             return {"id": str(identifier), "status": "queued"}
+
+    def require_device(self, device_id):
+        with self.lock:
+            if device_id not in self.devices:
+                raise HTTPException(404, "找不到该设备")
+
+    async def stream(self, device_id):
+        wake = asyncio.Event()
+        with self.lock:
+            device = self.devices[device_id]
+            if device.stream_wake is not None:
+                device.stream_wake.set()
+            device.stream_wake = wake
+
+        try:
+            loop = asyncio.get_running_loop()
+            keepalive_at = loop.time() + KEEPALIVE_SECONDS
+            yield b": connected\n\n"
+            while True:
+                remaining = keepalive_at - loop.time()
+                if remaining <= 0:
+                    keepalive_at = loop.time() + KEEPALIVE_SECONDS
+                    yield b": keepalive\n\n"
+                    continue
+                wake.clear()
+                with self.lock:
+                    if device.stream_wake is not wake:
+                        return
+                    command = next(device.claim(monotonic()), None)
+                if command is not None:
+                    yield f"event: command\ndata: {json.dumps(command, ensure_ascii=False)}\n\n".encode()
+                    continue
+                try:
+                    await asyncio.wait_for(wake.wait(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            with self.lock:
+                if device.stream_wake is wake:
+                    device.stream_wake = None
 
     def result(self, device_id, cmd_id, result):
         with self.lock:
@@ -330,7 +387,16 @@ class AgentRegistry:
                 raise HTTPException(404, "找不到该设备的已下发指令")
             if command.result is not None and command.result != result:
                 raise HTTPException(409, "已记录该指令的结果")
-            command.result = result
+            if command.result is None:
+                command.result = result
+                command.completed_at = datetime.now(timezone.utc)
+
+
+class AgentStreamResponse(StreamingResponse):
+    async def stream_response(self, send):
+        # 发送协程被取消时也立刻释放本设备的流注册。
+        async with aclosing(self.body_iterator):
+            await super().stream_response(send)
 
 
 def agents_router(registry, authenticate):
@@ -374,8 +440,14 @@ def agents_router(registry, authenticate):
         return Response(contents, media_type="image/jpeg", headers=headers)
 
     @router.post("/{device_id}/command", status_code=202)
-    def command(device_id: DeviceId, payload: Command):
+    async def command(device_id: DeviceId, payload: Command):
         return registry.enqueue(device_id, payload)
+
+    @router.get("/{device_id}/commands/stream", dependencies=[Depends(authenticate)])
+    async def command_stream(device_id: DeviceId):
+        registry.require_device(device_id)
+        return AgentStreamResponse(registry.stream(device_id), media_type="text/event-stream",
+                                   headers={"Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no"})
 
     @router.post("/{device_id}/commands/{cmd_id}/result", status_code=204, dependencies=[Depends(authenticate)])
     def result(device_id: DeviceId, cmd_id: UUID, payload: CommandResult):

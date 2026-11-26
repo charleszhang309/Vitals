@@ -1,10 +1,13 @@
 import asyncio
+from contextlib import aclosing, asynccontextmanager
 from datetime import datetime, timedelta, timezone
+import json
 from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 
+from backend.agents import AgentRegistry, ButtonCommand, Heartbeat
 from backend.config import Settings
 from backend.life import LifeStore
 from backend.main import create_app
@@ -26,10 +29,17 @@ SNAPSHOT = {
 }
 
 
-def client_for(tmp_path, token="fixture-agent-token"):
+def agent_app(tmp_path, token="fixture-agent-token"):
     settings = Settings(agents={"token": token}, health={"timezone": "America/Toronto"})
-    app = create_app(settings, tmp_path, static_dir=tmp_path / "no-static")
+    return create_app(settings, tmp_path, static_dir=tmp_path / "no-static")
+
+
+def client_for_app(app):
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1")
+
+
+def client_for(tmp_path, token="fixture-agent-token"):
+    return client_for_app(agent_app(tmp_path, token))
 
 
 def test_heartbeat_authorization_and_server_offline_clock(tmp_path, monkeypatch):
@@ -115,6 +125,114 @@ def test_command_whitelist_delivery_and_result(tmp_path, monkeypatch):
             now += 60
             statuses = (await client.get("/api/agents")).json()["devices"][0]["commands"]
             assert all(row["status"] == "expired" for row in statuses[1:])
+
+    asyncio.run(verify())
+
+
+@asynccontextmanager
+async def connect_command_stream(app, path):
+    incoming, outgoing = asyncio.Queue(), asyncio.Queue()
+    incoming.put_nowait({"type": "http.request"})
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1",
+        "method": "GET", "scheme": "http", "path": path, "raw_path": path.encode(), "query_string": b"",
+        "root_path": "", "server": ("127.0.0.1", 80), "client": ("127.0.0.1", 1234),
+        "headers": [(b"host", b"127.0.0.1"), (b"authorization", AUTH["Authorization"].encode())],
+    }
+    task = asyncio.create_task(app(scope, incoming.get, outgoing.put))
+
+    async def read():
+        return await asyncio.wait_for(outgoing.get(), 1)
+
+    try:
+        start = await read()
+        assert start["status"] == 200
+        assert dict(start["headers"])[b"content-type"].startswith(b"text/event-stream")
+        assert (await read())["body"] == b": connected\n\n"
+        yield read
+    finally:
+        incoming.put_nowait({"type": "http.disconnect"})
+        await asyncio.wait_for(task, 1)
+
+
+def test_command_stream_wakes_the_target_without_waiting_for_a_heartbeat(tmp_path):
+    path = AGENT + "/commands/stream"
+    other = "/api/agents/other"
+
+    async def verify():
+        app = agent_app(tmp_path)
+        async with client_for_app(app) as client:
+            assert (await client.get(path)).status_code == 401
+            assert (await client.get(path, headers=AUTH)).status_code == 404
+            for device in (AGENT, other):
+                assert (await client.post(device + "/heartbeat", headers=AUTH, json=SNAPSHOT)).status_code == 200
+            async with (connect_command_stream(app, other + "/commands/stream") as read_other,
+                        connect_command_stream(app, path) as read):
+                response = await client.post(AGENT + "/command", json={"action": "volume_set", "payload": {"percent": 35}})
+                assert response.status_code == 202
+                identifier = response.json()["id"]
+                body = (await read())["body"]
+                assert body.startswith(b"event: command\ndata: ") and body.endswith(b"\n\n")
+                assert json.loads(body.split(b"data: ", 1)[1]) == {"id": identifier, "action": "volume_set", "payload": {"percent": 35}}
+                response = await client.post(other + "/command", json={"action": "media_next"})
+                body = (await read_other())["body"]
+                assert json.loads(body.split(b"data: ", 1)[1])["id"] == response.json()["id"]
+                heartbeat = await client.post(AGENT + "/heartbeat", headers=AUTH, json=SNAPSHOT)
+                assert heartbeat.json()["commands"] == []
+                result = await client.post(f"{AGENT}/commands/{identifier}/result", headers=AUTH, json={"ok": True})
+                assert result.status_code == 204
+                devices = (await client.get("/api/agents")).json()["devices"]
+                assert devices[0]["commands"][0]["completed_at"]
+
+            # A new command returns in the next heartbeat after the stream closes.
+            response = await client.post(AGENT + "/command", json={"action": "media_play_pause"})
+            heartbeat = await client.post(AGENT + "/heartbeat", headers=AUTH, json=SNAPSHOT)
+            assert [command["id"] for command in heartbeat.json()["commands"]] == [response.json()["id"]]
+
+    asyncio.run(verify())
+
+
+def test_command_stream_keepalive_and_reconnect(tmp_path, monkeypatch):
+    monkeypatch.setattr("backend.agents.KEEPALIVE_SECONDS", 0.04)
+    path = AGENT + "/commands/stream"
+
+    async def verify():
+        app = agent_app(tmp_path)
+        async with client_for_app(app) as client:
+            await client.post(AGENT + "/heartbeat", headers=AUTH, json=SNAPSHOT)
+            async with connect_command_stream(app, path) as first:
+                assert (await first())["body"] == b": keepalive\n\n"
+                async with connect_command_stream(app, path) as second:
+                    while (await first())["more_body"]:
+                        pass
+                    response = await client.post(AGENT + "/command", json={"action": "display_lock"})
+                    body = (await second())["body"]
+                    while body.startswith(b":"):
+                        body = (await second())["body"]
+                    assert json.loads(body.split(b"data: ", 1)[1])["id"] == response.json()["id"]
+
+    asyncio.run(verify())
+
+
+def test_stalled_command_stream_leaves_unclaimed_commands_for_heartbeat(monkeypatch):
+    now = 100
+    monkeypatch.setattr("backend.agents.monotonic", lambda: now)
+    monkeypatch.setattr("backend.agents.KEEPALIVE_SECONDS", 0.04)
+    registry = AgentRegistry()
+    snapshot = Heartbeat.model_validate(SNAPSHOT)
+    registry.heartbeat("macbook", snapshot)
+
+    async def verify():
+        nonlocal now
+        async with aclosing(registry.stream("macbook")) as stream:
+            assert await anext(stream) == b": connected\n\n"
+            reply = registry.enqueue("macbook", ButtonCommand(action="lock"))
+            assert registry.heartbeat("macbook", snapshot)["commands"] == []
+            now += 1
+            assert registry.heartbeat("macbook", snapshot)["commands"] == [
+                {"id": reply["id"], "action": "lock", "payload": {}},
+            ]
+            assert await asyncio.wait_for(anext(stream), 1) == b": keepalive\n\n"
 
     asyncio.run(verify())
 

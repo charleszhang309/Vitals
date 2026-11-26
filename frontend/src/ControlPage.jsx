@@ -344,12 +344,13 @@ function WindowsControl({ sample, power, onMonitor, ...player }) {
   </>;
 }
 
-export default function ControlPage({ devices, device, onDevice, onAgentCommand, ...props }) {
+export default function ControlPage({ devices, device, onDevice, onAgentCommand, onAgentActivity, ...props }) {
   return <>
     <div className="page-heading control-heading"><h1>控制</h1>
       <DevicePicker id="control-device" devices={devices} device={device} onChange={onDevice} />
     </div>
-    {device ? <RemoteControl key={device.device_id} device={device} onMonitor={props.onMonitor} onCommand={onAgentCommand}>
+    {device ? <RemoteControl key={device.device_id} device={device} onMonitor={props.onMonitor}
+      onCommand={onAgentCommand} onActivity={onAgentActivity}>
       {(playback) => <PlaybackControls {...playback} open={props.open} onOpenChange={props.onOpenChange} />}
     </RemoteControl>
       : <WindowsControl {...props} />}

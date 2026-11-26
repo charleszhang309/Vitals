@@ -112,101 +112,148 @@ const actions = {
 };
 const results = { queued: '等待设备接收', delivered: '等待设备回报', succeeded: '已执行', failed: '执行失败', expired: '等待超时' };
 const transportActions = { toggle: 'media_play_pause', next: 'media_next', previous: 'media_previous' };
+const pending = (command) => command?.status === 'queued' || command?.status === 'delivered';
 
-export function RemoteControl({ device, onMonitor, onCommand, children }) {
+export function RemoteControl({ device, onMonitor, onCommand, onActivity, children }) {
   const [confirm, setConfirm] = useState(null);
-  const [sending, setSending] = useState(false);
+  const [sending, setSending] = useState(0);
   const [lastCommand, setLastCommand] = useState(null);
-  const [volumeCommand, setVolumeCommand] = useState(null);
   const [error, setError] = useState('');
-  const [draft, setDraft] = useState(null);
+  const [optimistic, setOptimistic] = useState({});
   const volumeTimer = useRef(null);
-  const pendingPercent = useRef(null);
+  const pendingVolume = useRef(null);
   const volumeWriting = useRef(false);
 
   useEffect(() => () => {
     window.clearTimeout(volumeTimer.current);
-    pendingPercent.current = null;
+    pendingVolume.current = null;
   }, []);
   useEffect(() => {
     if (!device.online) {
       window.clearTimeout(volumeTimer.current);
-      pendingPercent.current = null;
-      setDraft(null);
+      pendingVolume.current = null;
     }
   }, [device.online]);
 
   const { media, volume, caffeinate, timestamp } = device.snapshot;
-  const received = useMemo(() => {
+  const sampledAt = useMemo(() => {
     const elapsed = Math.max(0, Date.now() - Date.parse(device.last_seen));
     const sampleDelay = Math.max(0, Date.parse(timestamp) - Date.parse(media?.updated_at));
     return performance.now() - Math.min(15000, (elapsed || 0) + (sampleDelay || 0));
   }, [device.last_seen, timestamp, media?.updated_at]);
   const command = device.commands.find(({ id }) => id === lastCommand?.id) ?? lastCommand;
-  const volumeStatus = device.commands.find(({ id }) => id === volumeCommand?.id)?.status;
-  const pending = ({ status }) => status === 'queued' || status === 'delivered';
   function awaiting(action) {
-    return (command?.action === action && pending(command))
+    return Boolean(optimistic[action]) || (command?.action === action && pending(command))
       || device.commands.some((item) => item.action === action && pending(item));
   }
 
-  const disabled = !device.online || sending;
+  const active = device.online && (sending > 0 || pending(command) || Object.keys(optimistic).length > 0);
+  useEffect(() => {
+    onActivity(active);
+    return () => onActivity(false);
+  }, [active, onActivity]);
+
+  useEffect(() => {
+    setOptimistic((previous) => {
+      const entries = Object.entries(previous);
+      const next = entries.filter(([, entry]) => {
+        if (!device.online || entry.expires <= Date.now()) return false;
+        const receipt = device.commands.find(({ id }) => id === entry.id);
+        if (receipt?.status === 'failed' || receipt?.status === 'expired') return false;
+        // Native acknowledgements can arrive before the next telemetry sample.
+        const freshSnapshot = Date.parse(device.last_seen) > Date.parse(receipt?.completed_at ?? entry.lastSeen);
+        return !(receipt?.status === 'succeeded' && freshSnapshot);
+      });
+      return next.length === entries.length ? previous : Object.fromEntries(next);
+    });
+  }, [device.commands, device.last_seen, device.online]);
+
+  const disabled = !device.online || sending > 0;
   const upgraded = typeof caffeinate === 'boolean';
+  const mediaChange = optimistic.media_play_pause?.value;
+  const playingOverride = device.online && media && mediaChange?.trackId === media.track_id ? mediaChange : null;
   const track = media?.title || media?.artist ? {
     ...media, agent_id: device.device_id, session_id: device.device_id,
-    status: device.online ? media.status : 'offline',
+    status: device.online ? playingOverride?.status ?? media.status : 'offline',
+    position_seconds: playingOverride?.position ?? media.position_seconds,
     actions: { toggle: device.online && !awaiting('media_play_pause'), previous: device.online, next: device.online },
   } : null;
+  const received = playingOverride?.received ?? sampledAt;
   const playback = { track, sessions: [], received, reload: onCommand, reason: device.online ? null : 'agent_offline' };
-  const switching = disabled || awaiting('audio_device_set');
+  const switching = !device.online || awaiting('audio_device_set');
   const canAdjust = device.online && Number.isFinite(volume?.percent);
   const canMute = device.online && typeof volume?.muted === 'boolean' && !awaiting('volume_mute');
 
-  async function send(action, payload = {}) {
+  function predict(action, value) {
+    const token = Symbol(action);
+    setOptimistic((previous) => ({ ...previous, [action]: {
+      token, value, lastSeen: device.last_seen, expires: Date.now() + 65_000,
+    } }));
+    return token;
+  }
+
+  function settle(action, token, id) {
+    if (!token) return;
+    setOptimistic((previous) => {
+      if (previous[action]?.token !== token) return previous;
+      if (id) return { ...previous, [action]: { ...previous[action], id } };
+      const next = { ...previous };
+      delete next[action];
+      return next;
+    });
+  }
+
+  async function send(action, payload = {}, token) {
     if (!device.online) return;
-    setSending(true);
+    setSending((count) => count + 1);
     setError('');
     try {
       const queued = await postJson(`/api/agents/${encodeURIComponent(device.device_id)}/command`, { action, payload });
       setLastCommand({ ...queued, action });
-      if (action === 'volume_set') setVolumeCommand({ id: queued.id, percent: payload.percent });
+      settle(action, token, queued.id);
       onCommand();
     } catch (failure) {
       setError(failure.message);
-      if (action === 'volume_set' && pendingPercent.current == null) setDraft(null);
+      settle(action, token);
     } finally {
-      setSending(false);
+      setSending((count) => count - 1);
     }
   }
 
   async function flushVolume() {
     window.clearTimeout(volumeTimer.current);
-    const percent = pendingPercent.current;
-    if (volumeWriting.current || percent == null) return;
-    pendingPercent.current = null;
+    const change = pendingVolume.current;
+    if (volumeWriting.current || !change) return;
+    pendingVolume.current = null;
     volumeWriting.current = true;
     try {
-      await send('volume_set', { percent });
+      await send('volume_set', { percent: change.percent }, change.token);
     } finally {
       volumeWriting.current = false;
-      if (pendingPercent.current != null) flushVolume();
+      if (pendingVolume.current) flushVolume();
     }
   }
 
   function queueVolume(change) {
-    if (Object.hasOwn(change, 'device_id')) return send('audio_device_set', change);
-    if (Object.hasOwn(change, 'muted')) return send('volume_mute', change);
-    setDraft(change.percent);
-    pendingPercent.current = change.percent;
+    if (Object.hasOwn(change, 'device_id')) return send('audio_device_set', change, predict('audio_device_set', change.device_id));
+    if (Object.hasOwn(change, 'muted')) return send('volume_mute', change, predict('volume_mute', change.muted));
+    pendingVolume.current = { percent: change.percent, token: predict('volume_set', change.percent) };
     window.clearTimeout(volumeTimer.current);
-    volumeTimer.current = window.setTimeout(flushVolume, 350);
+    volumeTimer.current = window.setTimeout(flushVolume, 80);
   }
 
-  useEffect(() => {
-    if (['succeeded', 'failed', 'expired'].includes(volumeStatus) && pendingPercent.current == null) {
-      setDraft((value) => value === volumeCommand.percent ? null : value);
-    }
-  }, [volumeStatus, volumeCommand]);
+  function controlPlayback(operation) {
+    const action = transportActions[operation];
+    if (operation !== 'toggle' || !track) return send(action);
+    const now = performance.now();
+    const playing = track.status === 'playing';
+    const elapsed = playing ? Math.max(0, (now - received) / 1000) : 0;
+    const position = Number.isFinite(track.position_seconds)
+      ? Math.min(track.duration_seconds ?? Infinity, track.position_seconds + elapsed) : null;
+    return send(action, {}, predict(action, {
+      trackId: track.track_id, status: playing ? 'paused' : 'playing', position, received: now,
+    }));
+  }
 
   const commandText = command && [actions[command.action], results[command.status],
     command.status === 'failed' && command.message].filter(Boolean).join(' · ');
@@ -232,12 +279,14 @@ export function RemoteControl({ device, onMonitor, onCommand, children }) {
       </div>
     </section>
     {children({
-      media: playback, onAction: (action) => send(transportActions[action]),
+      media: playback, onAction: controlPlayback,
       commandStatus: commandText, commandError: error || (commandFailed ? commandText : ''),
       sound: {
         available: device.online && Boolean(volume),
-        canAdjust, canMute, switching, percent: draft ?? (Number.isFinite(volume?.percent) ? Math.round(volume.percent) : null),
-        muted: volume?.muted, devices: volume?.devices ?? [], output: volume?.device_id ?? '',
+        canAdjust, canMute, switching, percent: optimistic.volume_set?.value
+          ?? (Number.isFinite(volume?.percent) ? Math.round(volume.percent) : null),
+        muted: optimistic.volume_mute?.value ?? volume?.muted,
+        devices: volume?.devices ?? [], output: optimistic.audio_device_set?.value ?? volume?.device_id ?? '',
         unavailableLabel: device.online ? '当前输出设备未提供音量' : 'MacBook 已休眠或离线',
         queue: queueVolume, flush: flushVolume,
       },

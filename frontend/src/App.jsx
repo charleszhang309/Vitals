@@ -26,7 +26,8 @@ export default function App() {
   const [monitorOpen, setMonitorOpen] = useState(false);
   const [settings, setSettings] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState(null);
-  const agents = useOverviewResource('/api/agents', 2500, view === 'control' || monitorOpen);
+  const [agentActive, setAgentActive] = useState(false);
+  const agents = useOverviewResource('/api/agents', agentActive ? 250 : 2500, view === 'control' || monitorOpen);
   const devices = agents.data?.devices ?? [];
   const selected = devices.find((device) => device.device_id === selectedDevice);
   const device = selected && agents.error ? { ...selected, online: false } : selected;
@@ -80,7 +81,7 @@ export default function App() {
                 briefingEnabled={Boolean(ai.settings?.enabled && ai.settings.configured && ai.settings.include_vitals_context)} />}
               {view === 'control' && <ControlPage media={media} open={playerOpen} onOpenChange={setPlayerOpen}
                 sample={telemetry.sample} power={power} onMonitor={() => setMonitorOpen(true)}
-                devices={devices} device={device} onDevice={chooseDevice} onAgentCommand={agents.retry} />}
+                devices={devices} device={device} onDevice={chooseDevice} onAgentCommand={agents.retry} onAgentActivity={setAgentActive} />}
               {view === 'scratchpad' && <ScratchpadPage aiEnabled={Boolean(ai.settings?.enabled && ai.settings.configured)} />}
             </motion.section>
           </AnimatePresence>

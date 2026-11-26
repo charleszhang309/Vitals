@@ -59,7 +59,7 @@ class Config:
             raise ValueError("reminders_list 必须是列表名称或 null")
         return cls(server_url.rstrip("/"), token, device_id, device_name.strip(), reminders_list)
 
-    def client(self, timeout: float = 5):
+    def client(self, timeout: float | httpx.Timeout = 5):
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         return httpx.Client(
             base_url=self.server_url, headers=headers, timeout=timeout,

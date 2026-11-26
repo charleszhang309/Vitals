@@ -23,14 +23,17 @@ def load_state(path, default):
 
 
 def save_state(path, state):
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as temporary:
-        try:
+    pending = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as temporary:
+            pending = Path(temporary.name)
             json.dump(state, temporary, ensure_ascii=False)
             temporary.flush()
             os.fsync(temporary.fileno())
-            os.replace(temporary.name, path)
-        finally:
-            Path(temporary.name).unlink(missing_ok=True)
+        os.replace(pending, path)
+    finally:
+        if pending is not None:
+            pending.unlink(missing_ok=True)
 
 
 @contextmanager

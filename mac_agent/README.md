@@ -2,6 +2,8 @@
 
 在登录后的 Mac 会话运行。每 3 秒向 Vitals 上报 CPU、内存、磁盘、网速、内存占用最高的 5 个进程、电池、系统音量及 Music / Spotify 状态。每 30 秒同步选定的 Apple 提醒事项列表。
 
+新版中心端通过 SSE 实时下发指令，Mac 执行后立即补发快照。流断开时 Agent 自动重连，并继续从心跳接收指令。升级中心端与 Mac Agent 后才会启用实时通道。
+
 ## 安装和配置
 
 需要 macOS、Python 3.10 或更新版本。请先在 Windows 部署同版本的后端和前端，再升级 Mac agent。Windows 端的 `config.json` 必须设置 `agents.token`。从仓库根目录执行以下命令。

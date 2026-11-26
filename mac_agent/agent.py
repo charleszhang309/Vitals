@@ -7,11 +7,12 @@ from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
+from queue import Empty, Full, Queue
 import re
 import signal
 import subprocess
 import sys
-from threading import Event
+from threading import Event, Thread
 from time import monotonic, time
 
 import httpx
@@ -28,6 +29,7 @@ from mac_agent.state import load_state, save_state, single_instance, state_direc
 
 HEARTBEAT_SECONDS = 3
 REMINDERS_SECONDS = 30
+STREAM_RETRY_SECONDS = 2
 COMMAND_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 RECEIPT_TTL = 48 * 3600
 FAILURES = (httpx.HTTPError, OSError, RuntimeError, ValueError, TypeError, KeyError, psutil.Error,
@@ -60,89 +62,154 @@ def heartbeat(client, config, sampler, caffeinate):
     return commands
 
 
-def process_commands(config, commands, directory, caffeinate):
+def command_events(lines):
+    event = None
+    data = []
+    for line in lines:
+        if not line:
+            if event == "command" and data:
+                command = json.loads("\n".join(data))
+                if isinstance(command, dict):
+                    yield command
+            event, data = None, []
+        elif not line.startswith(":"):
+            field, separator, value = line.partition(":")
+            if separator and field == "event":
+                event = value.removeprefix(" ")
+            elif separator and field == "data":
+                data.append(value.removeprefix(" "))
+
+
+def listen_commands(config, stopped, inbox):
+    path = f"/api/agents/{config.device_id}/commands/stream"
+    with config.client(timeout=httpx.Timeout(5, read=26)) as client:
+        while not stopped.is_set():
+            try:
+                with client.stream("GET", path, headers={"Accept": "text/event-stream"}) as response:
+                    response.raise_for_status()
+                    if not response.headers.get("content-type", "").startswith("text/event-stream"):
+                        raise ValueError("指令流响应格式不正确")
+                    for command in command_events(response.iter_lines()):
+                        if stopped.is_set():
+                            return
+                        while not stopped.is_set():
+                            try:
+                                inbox.put([command], timeout=0.5)
+                                break
+                            except Full:
+                                continue
+            except (httpx.HTTPError, ValueError) as exc:
+                # 旧中心端或正在重启的中心端继续通过心跳下发。
+                logger.debug("指令流暂不可用（%s）", type(exc).__name__)
+            stopped.wait(STREAM_RETRY_SECONDS)
+
+
+def process_commands(client, config, commands, directory, caffeinate):
     path = directory / "command-receipts.json"
     now = time()
     receipts = {key: value for key, value in load_state(path, {}).items() if now - value["time"] < RECEIPT_TTL}
+    def send_clipboard():
+        push(client)
+        notify("push")
+
+    def report(command_id, receipt):
+        route = f"/api/agents/{config.device_id}/commands/{command_id}/result"
+        try:
+            response = client.post(route, json=receipt["result"])
+            if response.status_code not in (404, 409):
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.warning("指令 %s 回报失败，将重试：%s", command_id, exc)
+        else:
+            receipt["reported"] = True
+            save_state(path, receipts)
+
+    changed = False
+    retried = [(key, value) for key, value in receipts.items() if not value["reported"]]
+    for command in commands:
+        if not isinstance(command, dict):
+            continue
+        command_id = command.get("id")
+        if not isinstance(command_id, str) or not COMMAND_ID.fullmatch(command_id):
+            logger.warning("忽略没有有效 ID 的指令")
+            continue
+        if command_id in receipts:
+            continue
+        receipt = {"time": time(), "reported": False,
+                   "result": {"ok": False, "message": "执行时进程中断，结果未知"}}
+        receipts[command_id] = receipt
+        save_state(path, receipts)
+        try:
+            action = command.get("action")
+            if not isinstance(action, str):
+                raise ValueError("action 必须是字符串")
+            execute_command(action, command.get("payload", {}), caffeinate=caffeinate,
+                            clipboard_push=send_clipboard)
+            receipt["result"] = {"ok": True, "message": "已完成"}
+            changed = True
+        except FAILURES as exc:
+            receipt["result"] = {"ok": False, "message": str(exc)[:500]}
+        save_state(path, receipts)
+        report(command_id, receipt)
+    for command_id, receipt in retried:
+        report(command_id, receipt)
+    return changed
+
+
+def command_worker(config, directory, caffeinate, stopped, inbox, sample_now):
     with config.client() as client:
-        def send_clipboard():
-            push(client)
-            notify("push")
-
-        def report(command_id, receipt):
-            route = f"/api/agents/{config.device_id}/commands/{command_id}/result"
+        while not stopped.is_set():
             try:
-                response = client.post(route, json=receipt["result"])
-                if response.status_code not in (404, 409):
-                    response.raise_for_status()
-            except httpx.HTTPError as exc:
-                logger.warning("指令 %s 回报失败，下次心跳后重试：%s", command_id, exc)
-            else:
-                receipt["reported"] = True
-                save_state(path, receipts)
-
-        for command_id, receipt in receipts.items():
-            if not receipt["reported"]:
-                report(command_id, receipt)
-        for command in commands:
-            if not isinstance(command, dict):
-                continue
-            command_id = command.get("id")
-            if not isinstance(command_id, str) or not COMMAND_ID.fullmatch(command_id):
-                logger.warning("忽略没有有效 ID 的指令")
-                continue
-            if command_id in receipts:
-                continue
-            receipt = {"time": time(), "reported": False,
-                       "result": {"ok": False, "message": "执行时进程中断，结果未知"}}
-            receipts[command_id] = receipt
-            save_state(path, receipts)
+                commands = inbox.get(timeout=HEARTBEAT_SECONDS)
+            except Empty:
+                commands = []
+            if stopped.is_set():
+                break
             try:
-                action = command.get("action")
-                if not isinstance(action, str):
-                    raise ValueError("action 必须是字符串")
-                execute_command(action, command.get("payload", {}), caffeinate=caffeinate,
-                                clipboard_push=send_clipboard)
-                receipt["result"] = {"ok": True, "message": "已完成"}
+                if process_commands(client, config, commands, directory, caffeinate):
+                    sample_now.set()
             except FAILURES as exc:
-                receipt["result"] = {"ok": False, "message": str(exc)[:500]}
-            save_state(path, receipts)
-            report(command_id, receipt)
+                logger.warning("处理指令失败：%s", exc)
 
 
 def run_agent(config, directory, stopped):
     sampler = Sampler()
     next_heartbeat = next_reminders = monotonic()
-    commands_task = reminders_task = None
-    pending_commands = []
+    reminders_task = None
+    inbox = Queue(maxsize=64)
+    sample_now = Event()
+    listener = Thread(target=listen_commands, args=(config, stopped, inbox), name="vitals-command-stream", daemon=True)
     with (closing(Caffeinate()) as caffeinate, config.client(timeout=3) as client, config.client() as reminders_client,
           ThreadPoolExecutor(max_workers=2) as workers):
-        while not stopped.is_set():
-            for task, label in ((commands_task, "指令回报"), (reminders_task, "提醒事项")):
+        workers.submit(command_worker, config, directory, caffeinate, stopped, inbox, sample_now)
+        try:
+            while not stopped.is_set():
+                task = reminders_task
                 if task is not None and task.done():
                     try:
                         task.result()
                     except FAILURES as exc:
-                        logger.warning("%s失败：%s", label, exc)
-                    if task is commands_task:
-                        commands_task = None
-                    else:
-                        reminders_task = None
-            now = monotonic()
-            if now >= next_reminders:
-                next_reminders = now + REMINDERS_SECONDS
-                if reminders_task is None:
-                    reminders_task = workers.submit(sync_once, reminders_client, config, directory)
-            if now >= next_heartbeat:
-                next_heartbeat = now + HEARTBEAT_SECONDS
-                try:
-                    pending_commands.extend(heartbeat(client, config, sampler, caffeinate))
-                    if commands_task is None:
-                        commands_task = workers.submit(process_commands, config, pending_commands, directory, caffeinate)
-                        pending_commands = []
-                except FAILURES as exc:
-                    logger.warning("心跳失败：%s", exc)
-            stopped.wait(max(0, min(next_heartbeat, next_reminders) - monotonic()))
+                        logger.warning("提醒事项失败：%s", exc)
+                    reminders_task = None
+                now = monotonic()
+                if now >= next_reminders:
+                    next_reminders = now + REMINDERS_SECONDS
+                    if reminders_task is None:
+                        reminders_task = workers.submit(sync_once, reminders_client, config, directory)
+                if now >= next_heartbeat or sample_now.is_set():
+                    sample_now.clear()
+                    next_heartbeat = now + HEARTBEAT_SECONDS
+                    try:
+                        commands = heartbeat(client, config, sampler, caffeinate)
+                        if commands:
+                            inbox.put(commands)
+                        if listener.ident is None:
+                            listener.start()
+                    except FAILURES as exc:
+                        logger.warning("心跳失败：%s", exc)
+                sample_now.wait(max(0, min(next_heartbeat, next_reminders) - monotonic()))
+        finally:
+            stopped.set()
 
 
 def main() -> int:
