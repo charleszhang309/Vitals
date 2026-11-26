@@ -57,9 +57,20 @@ with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
         Path(output.name).unlink(missing_ok=True)
 PY
 /usr/bin/plutil -lint "$plist"
-if /bin/launchctl print "$domain/$label" >/dev/null 2>&1; then
-    /bin/launchctl bootout "$domain/$label"
+service="$domain/$label"
+if /bin/launchctl print "$service" >/dev/null 2>&1; then
+    /bin/launchctl bootout "$service"
+    # bootout returns before launchd has removed the label from the GUI domain.
+    for ((attempt = 0; attempt < 30; attempt++)); do
+        if ! /bin/launchctl print "$service" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.2
+    done
 fi
-/bin/launchctl enable "$domain/$label"
-/bin/launchctl bootstrap "$domain" "$plist"
+/bin/launchctl enable "$service"
+if ! /bin/launchctl bootstrap "$domain" "$plist"; then
+    sleep 1
+    /bin/launchctl bootstrap "$domain" "$plist"
+fi
 printf 'Vitals Mac agent 已加载。日志 %s\n' "$log"
