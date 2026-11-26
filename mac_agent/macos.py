@@ -169,6 +169,8 @@ def execute_command(action: str, params: dict, *, caffeinate=None, clipboard_pus
             javascript(MEDIA_SCRIPT, MEDIA_ACTIONS[action])
     elif action in POWER_ACTIONS:
         native(PMSET, POWER_ACTIONS[action])
+    elif action == "shutdown":
+        apple('tell application id "com.apple.systemevents" to shut down')
     elif action == "caffeinate_toggle" and caffeinate is not None:
         caffeinate.toggle()
         return {"caffeinate": caffeinate.active()}

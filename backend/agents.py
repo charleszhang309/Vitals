@@ -146,6 +146,7 @@ class Heartbeat(BaseModel):
     volume: Volume | None = None
     media: Media | None = None
     caffeinate: StrictBool | None = None
+    capabilities: list[Label] = Field(default_factory=list, max_length=16)
 
 
 class EmptyPayload(BaseModel):
@@ -182,6 +183,12 @@ class MuteCommand(EmptyPayload):
 class ButtonCommand(EmptyPayload):
     action: Literal["media_play_pause", "media_next", "media_previous", "lock", "display_sleep", "display_lock",
                     "sleep", "caffeinate_toggle", "clipboard_push"]
+    payload: EmptyPayload = Field(default_factory=EmptyPayload)
+
+
+class ConfirmedShutdownCommand(EmptyPayload):
+    # Internal only. The device command endpoint must not accept this type.
+    action: Literal["shutdown"] = "shutdown"
     payload: EmptyPayload = Field(default_factory=EmptyPayload)
 
 
@@ -315,6 +322,9 @@ class AgentRegistry:
             ]
 
     def enqueue(self, device_id, payload):
+        return self.enqueue_batch(device_id, [payload])[0]
+
+    def enqueue_batch(self, device_id, payloads):
         # 从异步 POST 路由调用，使 Event.set 在流所在的事件循环执行。
         with self.lock:
             now = monotonic()
@@ -323,21 +333,26 @@ class AgentRegistry:
                 raise HTTPException(404, "找不到该设备")
             if not device.online(now):
                 raise HTTPException(409, "设备已休眠或离线")
-            if payload.action == "audio_device_set":
-                volume = device.snapshot["volume"] or {}
-                if not any(item["id"] == payload.payload.device_id for item in volume.get("devices", [])):
-                    raise HTTPException(409, "该输出设备已不可用")
-            if len(device.commands) >= MAX_COMMANDS:
-                oldest = next((key for key, command in device.commands.items()
-                               if command.status(now) not in {"queued", "delivered"}), None)
-                if oldest is None:
+            for payload in payloads:
+                if payload.action == "audio_device_set":
+                    volume = device.snapshot["volume"] or {}
+                    if not any(item["id"] == payload.payload.device_id for item in volume.get("devices", [])):
+                        raise HTTPException(409, "该输出设备已不可用")
+            extra = len(device.commands) + len(payloads) - MAX_COMMANDS
+            if extra > 0:
+                removable = [key for key, command in device.commands.items() if command.status(now) not in {"queued", "delivered"}]
+                if len(removable) < extra:
                     raise HTTPException(429, "设备指令队列已满")
-                del device.commands[oldest]
-            identifier = uuid4()
-            device.commands[identifier] = AgentCommand(payload.action, payload.payload.model_dump(), now)
+                for key in removable[:extra]:
+                    del device.commands[key]
+            queued = []
+            for payload in payloads:
+                identifier = uuid4()
+                device.commands[identifier] = AgentCommand(payload.action, payload.payload.model_dump(), now)
+                queued.append({"id": str(identifier), "status": "queued"})
             if device.stream_wake is not None:
                 device.stream_wake.set()
-            return {"id": str(identifier), "status": "queued"}
+            return queued
 
     def require_device(self, device_id):
         with self.lock:

@@ -91,10 +91,14 @@ def normalize_sleep(stages: dict, total, in_bed, start, end, bed_start=None, bed
     awake = stages.get("awake")
     if total is None and any(stages.get(key) is not None for key in asleep_keys):
         total = measured_asleep
-    if in_bed is None and bed_start and bed_end:
-        in_bed = max(0, (datetime.fromisoformat(bed_end) - datetime.fromisoformat(bed_start)).total_seconds() / 60)
-        if in_bed == 0:
-            in_bed = None
+    if in_bed is not None and in_bed <= 0:
+        in_bed = None
+    if in_bed is None:
+        span_start, span_end = (bed_start, bed_end) if (bed_start and bed_end) else (start, end)
+        if span_start and span_end:
+            in_bed = max(0, (datetime.fromisoformat(span_end) - datetime.fromisoformat(span_start)).total_seconds() / 60)
+            if in_bed == 0:
+                in_bed = None
     adjusted = False
     if in_bed is not None and total is not None and total > max(0, in_bed - (awake or 0)):
         total = max(0, in_bed - (awake or 0))

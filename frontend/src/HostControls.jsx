@@ -40,7 +40,7 @@ export function PowerCard({ controller }) {
       {!data && error && <IconButton label="重试电源计划查询" onClick={retry}><RotateCw size={16} /></IconButton>}
     </div>
     <Segmented id={id} label="电源模式" options={options} value={data?.mode} onChange={select} disabled={busy} />
-    {(busy || (!data && !error)) && <p className="muted subtle-line" role="status">{busy ? '正在切换…' : '正在读取电源模式…'}</p>}
+    {(!data && !error) && <p className="muted subtle-line" role="status">正在读取电源模式…</p>}
     {(feedback || error) && <p className="feedback error" role="alert">{feedback || error}</p>}
   </section>;
 }

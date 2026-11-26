@@ -197,6 +197,31 @@ class PowerControl:
                 fan = dispatch_fan_profile(self.settings.fancontrol_exe, preset.fan_profile)
         return {"guid": str(preset.guid), "mode": mode, "fan_control": fan}
 
+    def confirmed_host_action(self, action: str):
+        if action not in {"lock", "display_off", "display_lock", "sleep"}:
+            raise HTTPException(422, "不支持此 Windows 桌面操作")
+        if not self.desktop_lock.acquire(blocking=False):
+            raise HTTPException(409, "有桌面操作正在执行，请稍后重试")
+        try:
+            if action == "sleep":
+                if os.name != "nt":
+                    raise HTTPException(503, "休眠控制需要 Windows")
+                powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+                script = ("Add-Type -AssemblyName System.Windows.Forms; "
+                          "if (-not [Windows.Forms.Application]::SetSuspendState('Suspend', $false, $false)) { exit 1 }")
+                try:
+                    subprocess.run([str(powershell), "-NoProfile", "-NonInteractive", "-Command", script], check=True,
+                                   timeout=15, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                except (OSError, subprocess.SubprocessError):
+                    raise HTTPException(503, "Windows 未接受睡眠请求") from None
+            else:
+                if action in {"lock", "display_lock"}:
+                    dispatch_desktop("lock")
+                if action in {"display_off", "display_lock"}:
+                    dispatch_desktop("display-off")
+        finally:
+            self.desktop_lock.release()
+
     def schedule_shutdown(self, minutes: int) -> str:
         if os.name != "nt":
             raise HTTPException(503, "定时关机需要 Windows")
@@ -249,12 +274,7 @@ def control_router(control: PowerControl) -> APIRouter:
     def desktop(payload: DesktopRequest):
         if payload.action == "lock" and not payload.confirmed:
             raise HTTPException(409, "请先确认锁屏")
-        if not control.desktop_lock.acquire(blocking=False):
-            raise HTTPException(409, "有桌面操作正在执行，请稍后重试")
-        try:
-            dispatch_desktop(payload.action)
-        finally:
-            control.desktop_lock.release()
+        control.confirmed_host_action(payload.action.replace("-", "_"))
         return {"accepted": True, "action": payload.action}
 
     @router.post("/shutdown")

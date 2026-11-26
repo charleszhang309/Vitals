@@ -100,7 +100,7 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(calls[0]["model"], "gpt-6-luna")
                 self.assertTrue(calls[0]["stream"])
                 self.assertIn("max_completion_tokens", calls[0])
-                self.assertNotIn("reasoning_effort", calls[0])
+                self.assertEqual(calls[0]["reasoning_effort"], "none")
                 self.assertNotIn("scratchpad", calls[0]["messages"][0]["content"])
                 self.assertEqual(calls[0]["messages"][-1]["content"], "hello")
                 await client.post("/api/ai/chat", json={"message": "整理中转站最新内容"})
@@ -223,10 +223,11 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
                 if request.url.host != "api.openai.com":
                     return httpx.Response(503)
                 messages = json.loads(request.content)["messages"]
-                system = messages[0]["content"]
-                self.assertIn('"cpu_percent": 42', system)
-                self.assertNotIn("secret-address", system)
-                self.assertEqual(len(messages), 14)
+                snapshot = messages[-2]
+                self.assertEqual(snapshot["role"], "user")
+                self.assertIn('"cpu_percent": 42', snapshot["content"])
+                self.assertNotIn("secret-address", snapshot["content"])
+                self.assertEqual(len(messages), 15)
                 return httpx.Response(200, content=b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n')
 
             async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as external, local_client(app) as client:

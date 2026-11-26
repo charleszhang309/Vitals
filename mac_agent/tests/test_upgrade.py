@@ -48,6 +48,14 @@ class UpgradeTests(unittest.TestCase):
         macos.execute_command("display_lock", {})
         native.assert_called_once_with(macos.PMSET, "displaysleepnow")
 
+    @patch("mac_agent.macos.apple")
+    def test_shutdown_is_a_fixed_system_event(self, apple):
+        with self.assertRaises(ValueError):
+            macos.execute_command("shutdown", {"script": "unexpected"})
+        apple.assert_not_called()
+        macos.execute_command("shutdown", {})
+        apple.assert_called_once_with('tell application id "com.apple.systemevents" to shut down')
+
     def test_sse_listener_parses_command_frames_and_ignores_keepalive(self):
         stopped = Event()
         inbox = Queue()

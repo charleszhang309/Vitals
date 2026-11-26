@@ -18,6 +18,7 @@ from websockets.exceptions import ConnectionClosed
 
 from .agents import AgentRegistry, agents_router, require_agent_token
 from .ai import AiState, DailyBriefing, ai_router
+from .ai_tools import AiTools
 from .calendar_service import CalendarService, calendar_router
 from .config import MIB, ROOT, Settings, load_settings
 from .control import PowerControl, control_router
@@ -141,6 +142,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     ai_state = AiState(settings.ai, config_path)
     briefing = DailyBriefing(store, health, weather, calendar)
     media = MediaBridge()
+    ai_tools = AiTools(life, health, calendar, rates, store, power, media, agents)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -175,6 +177,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
                 for worker in workers:
                     worker.cancel()
                 await asyncio.gather(*workers, return_exceptions=True)
+                await ai_tools.close()
                 await power.close()
 
     app = FastAPI(title="Vitals", lifespan=lifespan, redoc_url=None)
@@ -188,7 +191,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     app.include_router(agents_router(agents, agent_auth))
     app.include_router(life_router(life, agent_auth))
     app.include_router(rates_router(rates, rate_pins, rate_history))
-    app.include_router(ai_router(ai_state, store, power, briefing))
+    app.include_router(ai_router(ai_state, store, power, briefing, ai_tools))
     app.include_router(media_router(media, LyricsCache(store), agents))
 
     @app.websocket("/ws/metrics")

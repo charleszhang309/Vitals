@@ -80,7 +80,7 @@ export function RemoteHardware({ device }) {
       <section><h4>磁盘空间</h4>
         {disks.length ? <ul className="remote-disks">
           {disks.map((disk, index) => <li key={`${disk.mountpoint}-${index}`}>
-            <div className="hardware-label"><strong>{disk.name ?? disk.mountpoint}</strong>
+            <div className="hardware-label"><strong>{disk.name || (disk.mountpoint === '/' ? 'Macintosh HD' : disk.mountpoint)}</strong>
               <span className="muted numeric">剩余 {bytes(disk.free_bytes)} / {bytes(disk.total_bytes)}</span></div>
             <ProgressBar value={disk.total_bytes ? (1 - disk.free_bytes / disk.total_bytes) * 100 : null} label={`${disk.mountpoint} 使用率`} />
           </li>)}
@@ -106,7 +106,7 @@ export function RemoteHardware({ device }) {
 }
 
 const actions = {
-  lock: '锁屏', display_sleep: '熄屏', display_lock: '息屏锁屏', sleep: '休眠', volume_set: '调整音量',
+  lock: '锁屏', display_sleep: '息屏', display_lock: '息屏', sleep: '休眠', volume_set: '调整音量',
   volume_mute: '切换静音', audio_device_set: '切换输出设备', caffeinate_toggle: '保持唤醒', clipboard_push: '推送剪贴板',
   media_previous: '上一首', media_play_pause: '播放或暂停', media_next: '下一首',
 };
@@ -264,7 +264,7 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
     <section className="surface panel quick-card remote-quick" aria-labelledby="remote-quick-heading">
       <div className="panel-header"><h2 id="remote-quick-heading">主机快捷控制</h2></div>
       <div className="quick-control-row remote-quick-row" role="group" aria-label="MacBook 操作">
-        {upgraded ? <Button disabled={disabled} onClick={() => send('display_lock')}><LockKeyhole size={15} /><span>息屏锁屏</span></Button> : <>
+        {upgraded ? <Button disabled={disabled} onClick={() => send('display_lock')}><LockKeyhole size={15} /><span>息屏</span></Button> : <>
           <Button disabled={disabled} onClick={() => setConfirm('lock')} aria-haspopup="dialog"><LockKeyhole size={15} /><span>锁屏</span></Button>
           <Button disabled={disabled} onClick={() => send('display_sleep')}><MonitorOff size={15} /><span>熄屏</span></Button>
         </>}
@@ -280,7 +280,7 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
     </section>
     {children({
       media: playback, onAction: controlPlayback,
-      commandStatus: commandText, commandError: error || (commandFailed ? commandText : ''),
+      commandStatus: '', commandError: error || (commandFailed ? commandText : ''),
       sound: {
         available: device.online && Boolean(volume),
         canAdjust, canMute, switching, percent: optimistic.volume_set?.value

@@ -2,11 +2,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUp, Sparkles, Square, Trash2 } from 'lucide-react';
 import { fetchResponse, request } from './api.js';
 import { Button, IconButton, Modal } from './ui.jsx';
+import AiConfirmation, { useAiConfirmations } from './AiConfirmation.jsx';
 
 const HISTORY = '/api/ai/messages';
 const shortcuts = ['总结今日状态', '检查电脑硬件', '整理中转站最新内容'];
 
-async function streamChat(message, signal, append) {
+async function streamChat(message, signal, append, toolEvent) {
   const response = await fetchResponse('/api/ai/chat', {
     method: 'POST', signal, body: JSON.stringify({ message }),
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
@@ -30,8 +31,9 @@ async function streamChat(message, signal, append) {
         if (!data) continue;
         const payload = JSON.parse(data);
         if (type === 'delta') append(payload.text);
+        else if (type === 'tool') toolEvent(payload);
         else if (type === 'error') throw new Error(payload.message);
-        else if (type === 'done') return;
+        else if (type === 'done') return payload.message_id;
       }
       if (part.done) throw new Error('连接中断，请重试。');
     }
@@ -62,10 +64,24 @@ function MessageContent({ text }) {
   });
 }
 
+function AssistantMessage({ text, tools = [], confirmations, children }) {
+  const badges = tools.filter((event) => !event.confirmation);
+  return <div className="ai-answer">
+    {badges.length > 0 && <div className="ai-tool-badges" aria-label="工具操作状态">
+      {badges.map((event, index) => <span key={index} data-ok={event.ok}><span aria-hidden="true">{event.ok ? '✓' : '!'}</span> {event.label}</span>)}
+    </div>}
+    <div className="ai-bubble ai-assistant" aria-label="Vitals AI"><MessageContent text={text} />{children}</div>
+    {tools.filter((event) => event.confirmation).map(({ confirmation }) => <AiConfirmation key={confirmation.id}
+      confirmation={confirmation} state={confirmations.states[confirmation.id]} onResolve={confirmations.resolve} />)}
+  </div>;
+}
+
 export default function AiChat({ settings, onClose }) {
   const [messages, setMessages] = useState(null);
   const [input, setInput] = useState('');
   const [turn, setTurn] = useState(null);
+  const [toolReplies, setToolReplies] = useState({});
+  const confirmations = useAiConfirmations();
   const [running, setRunning] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -118,20 +134,31 @@ export default function AiChat({ settings, onClose }) {
     setInput('');
     setError('');
     setConfirmClear(false);
-    setTurn({ prompt, answer: '' });
+    const tools = [];
+    setTurn({ prompt, answer: '', tools });
     setRunning(true);
     stickToBottom.current = true;
     try {
-      await streamChat(prompt, controller.signal, (text) => {
+      const messageId = await streamChat(prompt, controller.signal, (text) => {
         if (!controller.signal.aborted) setTurn((previous) => ({ ...previous, answer: previous.answer + text }));
+      }, (event) => {
+        if (!controller.signal.aborted) {
+          tools.push(event);
+          setTurn((previous) => ({ ...previous, tools: [...tools] }));
+        }
       });
-      setMessages(await request(HISTORY, { signal: controller.signal }));
+      const history = await request(HISTORY, { signal: controller.signal });
+      if (tools.length && messageId && history.some(({ id }) => id === messageId)) {
+        setToolReplies((previous) => Object.fromEntries(history.flatMap(({ id }) =>
+          id === messageId ? [[id, tools]] : previous[id] ? [[id, previous[id]]] : [])));
+      }
+      setMessages(history);
       setTurn(null);
     } catch (failure) {
       if (!mounted.current) return;
       if (!controller.signal.aborted) setError(failure.message);
       setTurn((previous) => previous ? { ...previous, interrupted: true } : null);
-      if (!controller.signal.aborted) setInput(prompt);
+      if (!controller.signal.aborted && tools.length === 0) setInput(prompt);
     } finally {
       stream.current = null;
       if (mounted.current) setRunning(false);
@@ -145,6 +172,7 @@ export default function AiChat({ settings, onClose }) {
       await request(HISTORY, { method: 'DELETE' });
       setMessages([]);
       setTurn(null);
+      setToolReplies({});
       setConfirmClear(false);
     } catch (failure) {
       setError(failure.message);
@@ -171,15 +199,15 @@ export default function AiChat({ settings, onClose }) {
         {shortcuts.map((prompt) => <Button key={prompt} onClick={() => send(prompt)}>{prompt}</Button>)}
       </div>}
       {messages === null && !error && <p className="ai-empty muted" role="status">正在读取对话…</p>}
-      {messages?.map((message) => <div key={message.id} className={`ai-bubble ai-${message.role}`} aria-label={message.role === 'user' ? '你' : 'Vitals AI'}>
-        <MessageContent text={message.content} />
-      </div>)}
+      {messages?.map((message) => message.role === 'assistant'
+        ? <AssistantMessage key={message.id} text={message.content} tools={toolReplies[message.id]} confirmations={confirmations} />
+        : <div key={message.id} className="ai-bubble ai-user" aria-label="你"><MessageContent text={message.content} /></div>)}
       {turn && <>
         <div className="ai-bubble ai-user"><MessageContent text={turn.prompt} /></div>
-        <div className="ai-bubble ai-assistant"><MessageContent text={turn.answer || (running ? '正在生成…' : '回复未完成')} />
+        <AssistantMessage text={turn.answer || (running ? '正在生成…' : '回复未完成')} tools={turn.tools} confirmations={confirmations}>
           {running && <span className="ai-cursor" aria-hidden="true" />}
           {turn.interrupted && turn.answer && <small className="muted">回复未完整保存</small>}
-        </div>
+        </AssistantMessage>
       </>}
     </div>
     {error && <div className="feedback error ai-error" role="alert">{error}

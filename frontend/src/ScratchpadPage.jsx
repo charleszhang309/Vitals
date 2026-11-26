@@ -5,6 +5,7 @@ import { httpUrl, postJson, request, sendJson } from './api.js';
 import { bytes, time } from './format.js';
 import { documentType, PREVIEW_LIMIT } from './previewFormat.js';
 import { Button, IconButton, Modal } from './ui.jsx';
+import AiConfirmation, { useAiConfirmations } from './AiConfirmation.jsx';
 
 const SCRATCHPAD = '/api/scratchpad';
 const DocumentPreview = lazy(() => import('./DocumentPreview.jsx'));
@@ -107,8 +108,11 @@ function ItemCard({ item, openImage, openDocument, remove, pin, busy, aiEnabled,
   </>;
 
   return (
-    <motion.li ref={ref} layout className="surface scratch-card"
-      initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97 }}
+    <motion.li ref={ref} layout="position" className="surface scratch-card"
+      initial={{ opacity: 0, scale: 0.92 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.88, transition: { duration: 0.16, ease: [0.32, 0, 0.67, 0] } }}
+      transition={{ type: 'spring', stiffness: 420, damping: 32, mass: 0.8 }}
       transition={{ duration: 0.2 }}>
       <div className="scratch-card-header">
         <span className={`scratch-type ${picture ? 'picture-type' : ''}`}><Icon size={20} aria-hidden="true" /></span>
@@ -149,6 +153,7 @@ export default function ScratchpadPage({ aiEnabled = false }) {
   const [dragging, setDragging] = useState(false);
   const [reload, setReload] = useState(0);
   const [commands, setCommands] = useState([]);
+  const confirmations = useAiConfirmations();
   const input = useRef(null);
   const dragDepth = useRef(0);
   const changing = useRef(false);
@@ -306,6 +311,8 @@ export default function ScratchpadPage({ aiEnabled = false }) {
       </form>
       {commands.length > 0 && <ul className="command-results" aria-label="快捷控制结果">{commands.map((result) => <li key={result.id} className="surface panel">
         <strong>{result.message}</strong><p className="muted">{result.command}{result.scheduled_at && ` · ${time(result.scheduled_at, true)}`}</p>
+        {result.confirmation && <AiConfirmation confirmation={result.confirmation}
+          state={confirmations.states[result.confirmation.id]} onResolve={confirmations.resolve} />}
       </li>)}</ul>}
       {items === null ? <div className="surface empty-scratch">
         {notice?.error ? <Button onClick={() => { setNotice(null); setReload((value) => value + 1); }}><RotateCw size={16} />重试读取</Button> : <p>正在读取中转站…</p>}

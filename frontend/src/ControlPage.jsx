@@ -46,8 +46,29 @@ const emptyPlayback = {
   agent_offline: 'MacBook 已休眠或离线',
 };
 
-function PlayerCard({ media, onOpen }) {
+function PlayerCard({ media, onOpen, onAction }) {
   const { track } = media;
+  const position = usePosition(track, media.received);
+  const [pending, setPending] = useState(false);
+  const playing = track?.status === 'playing';
+  const toggleAction = track?.actions?.toggle ? 'toggle' : playing ? 'pause' : 'play';
+  const duration = track?.duration_seconds;
+  const progress = duration > 0 ? position / duration * 100 : null;
+
+  async function send(operation) {
+    if (pending || !track?.actions?.[operation]) return;
+    setPending(true);
+    try {
+      if (onAction) await onAction(operation);
+      else await postJson('/api/media/action', { action: operation, session_id: track.session_id });
+    } catch {
+      // 错误会在全局反馈中提示
+    } finally {
+      media.reload();
+      setPending(false);
+    }
+  }
+
   return <section className="surface panel detail-tile player-card" aria-labelledby="player-heading">
     <div className="panel-header"><h2 id="player-heading">正在播放</h2></div>
     <div className="player-track"><MediaCover track={track} />
@@ -59,6 +80,17 @@ function PlayerCard({ media, onOpen }) {
         </> : <p className="section-empty">{emptyPlayback[media.reason] ?? '当前未在播放媒体'}</p>}
       </div>
     </div>
+    {track && duration > 0 && <div className="player-card-progress numeric">
+      <span>{clockText(position)}</span>
+      <ProgressBar value={progress} tone="blue" label="播放进度" />
+      <span>{clockText(duration)}</span>
+    </div>}
+    {track && <div className="player-card-actions" role="group" aria-label="快捷播放控制">
+      <IconButton label="上一首" disabled={pending || !track.actions?.previous} onClick={() => send('previous')}><PlaybackGlyph kind="previous" /></IconButton>
+      <IconButton className="player-card-primary" label={playing ? '暂停' : '播放'} disabled={pending || !track.actions?.[toggleAction]}
+        onClick={() => send(toggleAction)}><PlaybackGlyph kind={playing ? 'pause' : 'play'} /></IconButton>
+      <IconButton label="下一首" disabled={pending || !track.actions?.next} onClick={() => send('next')}><PlaybackGlyph kind="next" /></IconButton>
+    </div>}
     {onOpen && <button className="detail-link" type="button" aria-label="展开正在播放" aria-haspopup="dialog" onClick={onOpen}>
       <Maximize2 size={17} aria-hidden="true" />
     </button>}
@@ -322,7 +354,7 @@ function PlaybackControls({ media, sound, open, onOpenChange, onAction, commandS
   const [lyricsPreferred, setLyricsPreferred] = useState(true);
   return <>
     <div className="media-control-grid">
-      <PlayerCard media={media} onOpen={() => onOpenChange(true)} />
+      <PlayerCard media={media} onOpen={() => onOpenChange(true)} onAction={onAction} />
       <VolumeCard sound={sound} />
     </div>
     {open ? <NowPlaying media={media} sound={sound} lyricsPreferred={lyricsPreferred} onLyrics={setLyricsPreferred}

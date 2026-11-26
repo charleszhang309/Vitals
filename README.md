@@ -39,10 +39,10 @@
 - **生活小组件**：双向日历、今日待办与微习惯、倒数日，以及支持换算和历史走势的参考汇率。在「个性化设置 → 今日概览」可分别开关状态条、简报和六张卡片。偏好保存在当前浏览器，关闭模块会暂停该模块的首页轮询。
 - **每日一句 AI 状态简报（可选）**：按本地自然日缓存，结合天气、健康与今日日程，支持 Bark 定时推送。
 
-### 2. 控制中心
-- **跨播放器媒体控制**：基于 Windows 原生 **SMTC**，支持 Apple Music、QQ 音乐、网易云音乐、Spotify 与主流浏览器，支持多会话切换与切歌/播放控制。
-- **Apple Music 风格全屏播放 + AMLL 动态歌词**：点击「正在播放」进入全屏氛围界面，支持多源智能歌词匹配（按当前播放器优先选源，覆盖 AMLL TTML / QQ 音乐 / 酷狗 / 网易云 / LRCLIB）与 `@applemusic-like-lyrics/react` 动态渲染；无歌词时自动居中并隐藏歌词按钮。
-- **系统音量与输出设备**：实时调节 Windows 主音量、一键静音及切换音频输出设备。
+### 2. 控制中心（支持 Windows & MacBook 多设备切换）
+- **MacBook 轻量探针接入（`mac_agent/`）**：通过出站 SSE 实时指令通道连接 Windows 中心，在「控制」页顶部无缝切换 `Windows | MacBook`，实时查看 Mac 电池电量/健康度/循环次数、CPU/内存/主盘与 Top 5 进程，远程毫秒级控制息屏、休眠、保持唤醒（Caffeinate）、音量/输出设备与一键推送剪贴板，并支持 **Apple 提醒事项（Reminders）与 Vitals 待办双向同步**。
+- **跨播放器媒体控制**：Windows 基于原生 **SMTC**（支持 Apple Music / QQ 音乐 / 网易云 / Spotify / 浏览器），MacBook 基于 AppleScript；卡片内直接支持快捷切歌与进度条，点击进入 **Apple Music 风格全屏播放 + AMLL 动态歌词**。
+- **系统音量与输出设备**：实时调节 Windows / MacBook 主音量、一键静音及切换音频输出设备。
 
 ### 3. 硬件监控与远程控制
 - **精准传感器数据**：优先读取本地 **LibreHardwareMonitor**（CPU / GPU / 内存 / 风扇温度、功耗、频率与转速），`psutil` 补充磁盘空间、网络速率、累计流量与**内存占用 Top 5 进程**，LHM 断开时自动兜底。
@@ -58,7 +58,7 @@
 - **Liquid Glass 液态玻璃**：支持浅色、深色及跟随系统主题、自定义跨设备共享壁纸、玻璃强度与遮罩透明度调节。
 - **全屏时钟与专注计时**：从顶栏时间进入全屏时钟，支持翻页、极简数字和模拟表盘。表盘可在个性化设置中切换，专注计时完成后计入今日统计。
 - **PWA 原生体验**：配合 Tailscale Serve HTTPS，在 iPhone / iPad Safari「添加到主屏幕」后可全屏独立运行；支持 iOS 快捷指令分享菜单一键传文字/文件。
-- **可选 AI 聊天浮窗**：支持 OpenAI 流式对话、跨设备 SQLite 对话同步、`backend/agent.md` 热加载角色人设，以及一键附带 Vitals 实时状态上下文。
+- **可选 AI 助手与技能系统**：支持 OpenAI 流式对话、跨设备 SQLite 对话同步、`backend/agent.md` 热加载人设，以及 **Function Calling 白名单技能**（查询双设备状态/健康对比/汇率、写入待办与 iCloud 日历、调节双机媒体与音量；高风险锁屏/息屏/休眠/关机需 60 秒内人工点击确认执行）。
 
 ---
 
@@ -191,6 +191,7 @@ Vitals 默认仅允许本机回环与 Tailscale 私有网络访问（内置 `Pri
 <summary>AI 助手、Bark 推送与 Windows 开机自启</summary>
 
 - **OpenAI 助手**：在 `config.json` 中配置 `ai.api_key`（默认 `gpt-6-luna`，官方端点 `https://api.openai.com/v1`），在网页右上角「个性化设置」中控制总开关与实时状态联动开关。编辑 `backend/agent.md` 可热加载自定义角色人设。
+- **AI 技能**：在聊天里直接说明希望查询或执行的操作。待办、日历、中转站和媒体等操作会显示状态标签。锁屏、熄屏、睡眠和关机需要在 60 秒内点击一次「确认执行」。MacBook 关机需要支持关机能力的 Agent 和 macOS 自动化许可。若到点时 MacBook 不在线，中心端放弃本次关机。
 - **Bark 推送**：在 `config.json` 中将 `webhook.kind` 设为 `"bark"`，将 `bark_url_template` 设为 `https://api.day.app/<YOUR_DEVICE_KEY>/{title}/{body}`，重启后可通过 `POST /api/control/webhook/test` 测试连通性。
 - **iPhone 快捷指令**：在「快捷指令」中新建共享表单指令，文本/URL `POST` JSON `{"text": ...}` 至 `/api/scratchpad/text`，图片/文件 `POST` 表单字段 `file` 至 `/api/scratchpad/file`。
 - **任务计划程序开机自启**：创建计划任务，程序填 `powershell.exe`，参数填 `-NoProfile -NonInteractive -WindowStyle Hidden -File "<项目路径>\start_vitals_autorun.ps1"`，起始于项目根目录，并启用 Tailscale 的 **Run unattended**。
