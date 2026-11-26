@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Activity, Download, ImagePlus, Inbox, LayoutGrid, Palette, RotateCcw, Sparkles, Upload } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Activity, Download, ImagePlus, Inbox, LayoutGrid, Palette, RotateCcw, ServerCog, Sparkles, Upload } from 'lucide-react';
 import { httpUrl, request, sendJson } from './api.js';
 import { Button, Modal, Segmented } from './ui.jsx';
 import { overviewModules } from './overviewCards.js';
 import { clockStyles } from './Clock.jsx';
 import { DeviceDot, HUB_DEVICE_ID } from './RemoteDevice.jsx';
+const HostSetup = lazy(() => import('./HostSetup.jsx'));
 
 const STORAGE_KEY = 'pcc-appearance';
 const defaults = { theme: 'light', material: 'glass', opacity: 46, strength: 60, clockStyle: 'flip', widgets: {}, defaultDevice: HUB_DEVICE_ID };
@@ -12,7 +13,7 @@ const level = (value, fallback) => Number.isFinite(value) ? Math.max(0, Math.min
 const themes = [{ value: 'light', label: '浅色' }, { value: 'dark', label: '深色' }, { value: 'system', label: '跟随系统' }];
 const systemColorScheme = '(prefers-color-scheme: dark)';
 const materials = [{ value: 'glass', label: '液态玻璃' }, { value: 'acrylic', label: '亚克力' }];
-const categories = [
+const baseCategories = [
   { id: 'appearance', label: '外观与壁纸', Icon: Palette },
   { id: 'overview', label: '今日概览', Icon: LayoutGrid },
   { id: 'scratchpad', label: '中转站', Icon: Inbox },
@@ -347,7 +348,18 @@ function BackupSettings() {
 export function AppearanceDialog({ appearance, onClose, ai, telemetry, deviceSettings }) {
   const input = useRef(null);
   const [category, setCategory] = useState('appearance');
+  const [hostConfig, setHostConfig] = useState(null);
+  const categories = hostConfig
+    ? [...baseCategories, { id: 'host', label: '主机配置', Icon: ServerCog }]
+    : baseCategories;
   const { preferences, busy, appearanceError, update, changeWallpaper } = appearance;
+  useEffect(() => {
+    if (!['127.0.0.1', '[::1]'].includes(window.location.hostname)) return undefined;
+    const controller = new AbortController();
+    request('/api/setup/config', { signal: controller.signal })
+      .then(setHostConfig).catch(() => {});
+    return () => controller.abort();
+  }, []);
   function changeTab(event) {
     const offset = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[event.key];
     if (!offset && event.key !== 'Home' && event.key !== 'End') return;
@@ -414,6 +426,9 @@ export function AppearanceDialog({ appearance, onClose, ai, telemetry, deviceSet
             <DeviceSettings {...deviceSettings} />
             <BackupSettings />
           </div>}
+          {category === 'host' && hostConfig && <Suspense fallback={<p className="muted" role="status">正在加载主机配置…</p>}>
+            <HostSetup config={hostConfig} onConfig={setHostConfig} />
+          </Suspense>}
           {category === 'ai' && <div className="settings-switches">
               <label className="settings-row"><span>启用 AI 助手</span>
                 <input className="toggle-switch" type="checkbox" role="switch" checked={ai.settings?.enabled ?? false}

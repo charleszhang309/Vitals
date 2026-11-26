@@ -1,7 +1,7 @@
-"""Windows 交互会话内的 SMTC / Core Audio 代理，仅监听回环地址。"""
+"""Windows 交互会话内的 SMTC / Core Audio 实现。"""
 
 import asyncio
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -21,6 +21,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from PIL import Image
+from starlette.concurrency import run_in_threadpool
 import uvicorn
 
 from .media import (EMPTY_STATE, EMPTY_VOLUME, MAX_ARTWORK, ArtworkVersion, MediaAction, SessionId,
@@ -328,6 +329,57 @@ def desktop_app(token, media, audio):
     return app
 
 
+@contextmanager
+def media_apartment():
+    # asyncio 不泵送 STA 消息，SMTC 和 comtypes 的初始公寓必须为 MTA。
+    sys.coinit_flags = 0
+    uninit = None
+    try:
+        with suppress(ImportError, OSError):
+            from winrt.runtime import ApartmentType, init_apartment, uninit_apartment
+
+            init_apartment(ApartmentType.MULTI_THREADED)
+            uninit = uninit_apartment
+        yield
+    finally:
+        if uninit is not None:
+            uninit()
+
+
+class InteractiveMediaBridge:
+    """The tray starts the hub in the signed-in desktop session."""
+
+    artwork_content_type = "image/webp"
+
+    def __init__(self):
+        self.player = WindowsMedia()
+        self.audio = None
+
+    @contextmanager
+    def session(self):
+        with media_apartment():
+            self.audio = WindowsAudio()
+            try:
+                yield
+            finally:
+                self.audio = None
+
+    async def state(self, client):
+        return await self.player.state()
+
+    async def action(self, client, change):
+        return await self.player.act(change)
+
+    async def volume(self, client):
+        return await run_in_threadpool(self.audio.volume)
+
+    async def set_volume(self, client, change):
+        return await run_in_threadpool(self.audio.volume, change)
+
+    async def artwork(self, client, session_id, version):
+        return await self.player.artwork(session_id, version)
+
+
 def main():
     from ctypes import WinDLL, get_last_error, wintypes
 
@@ -341,19 +393,11 @@ def main():
     code = get_last_error()
     if not mutex:
         raise OSError(code, "could not reserve desktop media bridge")
-    uninit = None
     try:
         if code == 183:
             return
-        # asyncio 不泵送 STA 消息，SMTC 和 comtypes 的初始公寓必须为 MTA。
-        sys.coinit_flags = 0
-        with suppress(ImportError):
-            from winrt.runtime import ApartmentType, init_apartment, uninit_apartment
-
-            init_apartment(ApartmentType.MULTI_THREADED)
-            uninit = uninit_apartment
         token = token_hex(32)
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        with media_apartment(), socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             listener.bind(("127.0.0.1", 0))
             listener.listen()
@@ -372,8 +416,6 @@ def main():
                     pending.unlink(missing_ok=True)
                 path.unlink(missing_ok=True)
     finally:
-        if uninit is not None:
-            uninit()
         kernel.CloseHandle(mutex)
 
 

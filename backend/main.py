@@ -2,13 +2,15 @@
 
 import argparse
 import asyncio
-from contextlib import ExitStack, asynccontextmanager, contextmanager, suppress
+from contextlib import ExitStack, asynccontextmanager, contextmanager, nullcontext, suppress
 import ipaddress
 import logging
+import os
 from pathlib import Path
 import re
 import socket
-from threading import Lock
+import sys
+from threading import Lock, Thread
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -33,6 +35,7 @@ from .monitor import Monitor, host_identity
 from .rates import RatePins, Rates, rates_router
 from .rate_history import RateHistory
 from .scratchpad import Scratchpad, scratchpad_router
+from .setup_api import direct_setup_request, setup_router
 from .wallpaper import wallpaper_router
 from .weather import Weather, weather_router
 
@@ -97,6 +100,19 @@ class PrivateNetwork:
         peer = scope.get("client")
         headers = Headers(scope=scope)
         host = headers.get("host", "")
+        path = scope.get("path", "")
+        root_path = scope.get("root_path", "").rstrip("/")
+        if root_path and path.startswith(f"{root_path}/"):
+            path = path.removeprefix(root_path)
+        if path == "/api/setup" or path.startswith("/api/setup/"):
+            if scope_type == "http" and direct_setup_request(scope, headers, http_origin):
+                await self.app(scope, receive, send)
+            elif scope_type == "websocket":
+                await send({"type": "websocket.close", "code": 1008})
+            else:
+                await JSONResponse({"detail": "主机配置仅允许本机直连访问"}, 403,
+                                   headers={"Cache-Control": "no-store"})(scope, receive, send)
+            return
         allowed = bool(peer and local_address(peer[0]) and trusted_host(host))
         if allowed and (scope_type == "websocket" or scope["method"] not in {"GET", "HEAD", "OPTIONS"}
                         or scope.get("path", "").rstrip("/") in {"/api/ai/briefing", "/api/media/lyrics", "/api/system/backup"}):
@@ -126,7 +142,7 @@ async def periodic(label, interval, action):
 
 
 def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data", static_dir: Path = ROOT / "backend" / "static",
-               config_path: Path | None = None) -> FastAPI:
+               config_path: Path | None = None, interactive_media: bool = False) -> FastAPI:
     if settings is None:
         config_path = config_path or ROOT / "config.json"
         settings = load_settings(config_path)
@@ -148,7 +164,14 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     weather = Weather(settings.weather)
     ai_state = AiState(settings.ai, config_path)
     briefing = DailyBriefing(store, health, weather, calendar)
-    media = MacMediaBridge() if macos else MediaBridge()
+    if interactive_media and identity["platform"] == "windows":
+        from .media_desktop import InteractiveMediaBridge
+
+        media = InteractiveMediaBridge()
+        media_session = media.session
+    else:
+        media = MacMediaBridge() if macos else MediaBridge()
+        media_session = nullcontext
     ai_tools = AiTools(life, health, calendar, rates, store, power, media, agents)
 
     def initialize_data():
@@ -162,7 +185,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        with backups.session():
+        with backups.session(), media_session():
             await asyncio.to_thread(initialize_data)
             monitor = Monitor(settings, identity)
             app.state.monitor = monitor
@@ -197,6 +220,8 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     app = FastAPI(title="Vitals", lifespan=lifespan, redoc_url=None)
     app.state.host_platform = identity["platform"]
     app.add_middleware(PrivateNetwork)
+    if config_path is not None:
+        app.include_router(setup_router(config_path, settings))
     app.include_router(control_router(power))
     app.include_router(scratchpad_router(store, settings.upload_limit_mib * MIB))
     app.include_router(wallpaper_router(data_dir, wallpaper_lock))
@@ -256,9 +281,14 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
 
 
 @contextmanager
-def bound_sockets(host: str, port: int):
+def bound_sockets(host: str, port: int, desktop: bool = False):
     # 先占用端口，再启动数据库和后台任务。Windows 需要独占绑定以阻止通配地址与指定接口重复监听。
     addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+    if desktop:
+        bound_hosts = {address[0] for *_, address in addresses}
+        for loopback, wildcard in (("127.0.0.1", "0.0.0.0"), ("::1", "::")):
+            if not {loopback, wildcard} & bound_hosts:
+                addresses.extend(socket.getaddrinfo(loopback, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP))
     with ExitStack() as resources:
         listeners = []
         for family, kind, protocol, _, address in addresses:
@@ -281,6 +311,7 @@ def main():
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data")
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
+    parser.add_argument("--desktop-stdio", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     settings = load_settings(args.config)
     if args.host is not None or args.port is not None:
@@ -290,19 +321,29 @@ def main():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     with ExitStack() as resources:
         try:
-            listeners = resources.enter_context(bound_sockets(settings.host, settings.port))
+            listeners = resources.enter_context(bound_sockets(settings.host, settings.port, desktop=args.desktop_stdio))
         except OSError as error:
             logger.error("Vitals 无法绑定 %s:%s（%s）", settings.host, settings.port, error)
             raise SystemExit(1) from None
         config = uvicorn.Config(
-            create_app(settings, data_dir=args.data_dir.resolve(), config_path=args.config.resolve()), host=settings.host, port=settings.port,
+            create_app(settings, data_dir=args.data_dir.resolve(), config_path=args.config.resolve(),
+                       interactive_media=args.desktop_stdio), host=settings.host, port=settings.port,
             workers=1, proxy_headers=False, ws_max_size=16 * 1024, ws_ping_interval=20, ws_ping_timeout=20,
+            timeout_graceful_shutdown=5 if args.desktop_stdio else None,
         )
         logger.info("Vitals 正在监听 %s:%s", settings.host, settings.port)
-        uvicorn.Server(config).run(sockets=listeners)
+        server = uvicorn.Server(config)
+        if args.desktop_stdio:
+            # The tray owns the write end. EOF also shuts down the hub if the tray crashes.
+            def wait_for_desktop():
+                os.read(sys.stdin.fileno(), 1)
+                server.should_exit = True
+
+            Thread(target=wait_for_desktop, daemon=True, name="desktop-lifetime").start()
+        server.run(sockets=listeners)
 
 
 if __name__ == "__main__":
     main()
-else:
+elif not getattr(sys, "frozen", False):
     app = create_app()

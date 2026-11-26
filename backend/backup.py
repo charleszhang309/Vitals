@@ -10,7 +10,7 @@ import sqlite3
 import stat
 from tempfile import TemporaryDirectory, TemporaryFile
 from threading import Lock
-from time import monotonic
+from time import monotonic, sleep
 from uuid import uuid4
 from zipfile import BadZipFile, ZIP_DEFLATED, ZIP_STORED, ZipFile
 from zlib import error as CompressionError
@@ -95,6 +95,19 @@ class BackupDownload(FileResponse):
             self.directory.cleanup()
 
 
+def move_restore_directory(source: Path, destination: Path):
+    deadline = monotonic() + 1
+    while True:
+        try:
+            source.rename(destination)
+            return
+        except PermissionError as error:
+            # A releasing file handle can briefly block directory renames on Windows.
+            if getattr(error, "winerror", None) not in {5, 32} or monotonic() >= deadline:
+                raise
+            sleep(.05)
+
+
 class Backups:
     def __init__(self, store, data_dir, wallpaper_lock):
         self.store = store
@@ -135,19 +148,19 @@ class Backups:
         previous = None
         if self.data_dir.exists():
             previous = self.work / f"previous-{restore_id}"
-            self.data_dir.rename(previous)
+            move_restore_directory(self.data_dir, previous)
         try:
-            self.pending.rename(self.data_dir)
+            move_restore_directory(self.pending, self.data_dir)
         except OSError:
             if previous is not None:
-                previous.rename(self.data_dir)
+                move_restore_directory(previous, self.data_dir)
             raise
         try:
             yield
         except BaseException:
-            self.data_dir.rename(self.work / f"failed-{restore_id}")
+            move_restore_directory(self.data_dir, self.work / f"failed-{restore_id}")
             if previous is not None:
-                previous.rename(self.data_dir)
+                move_restore_directory(previous, self.data_dir)
             raise
 
     def export(self):

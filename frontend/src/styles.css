@@ -341,6 +341,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .settings-panel { min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; padding: 2px 3px 8px 18px; }
 .settings-subsection { display: grid; gap: 10px; min-width: 0; padding-top: 12px; border-top: 1px solid var(--border); }
 .settings-subsection h3 { margin: 0; font-size: 15px; font-weight: 700; }
+.host-setup > :first-child:not(.feedback) { border-top: 0; padding-top: 0; }
+.host-setup-section p { margin: 0; overflow-wrap: anywhere; }
+.host-setup-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.host-setup-field { display: grid; gap: 5px; min-width: 0; }
+.host-setup-field > span { color: var(--muted); font-size: 13px; }
+.host-setup-field input, .host-setup-field select { width: 100%; min-width: 0; min-height: 38px; padding: 6px 9px;
+  border: 1px solid var(--field-border); border-radius: 9px; background: var(--surface); color: var(--text); }
+.host-setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.host-calendar-source { min-width: 0; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: 12px; }
+.host-calendar-source legend { max-width: 100%; overflow-wrap: anywhere; padding: 0 6px; font-weight: 650; }
+.host-calendar-source .host-setup-actions { margin-top: 10px; justify-content: space-between; }
+.host-setup-color { display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 460px) { .host-setup-grid { grid-template-columns: minmax(0, 1fr); } }
 .settings-device-list { display: grid; gap: 7px; }
 .settings-device-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 8px;
   align-items: center; padding: 9px; border-radius: 12px; background: var(--track); }

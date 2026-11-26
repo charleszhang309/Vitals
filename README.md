@@ -70,7 +70,27 @@
 - **Python 3.10+**
 - **Node.js 20.19+** 或 **22.12+**（首次从源码构建前端所需）
 
-### Windows 一键启动
+### Windows 桌面版
+
+使用 Windows 安装包时，安装后从开始菜单打开 **Vitals**。托盘图标左键显示窗口，关闭窗口会将其隐藏到托盘。右键菜单提供本机服务的启动、停止、重启、登录自启与退出。登录自启在该 Windows 用户登录时启动托盘程序。若需要登录前运行，继续使用现有任务计划程序方式。
+
+桌面版自带 Python 服务、网页资源和 Windows 媒体与音量控制。打包版将配置和数据保存在当前用户的 `%LOCALAPPDATA%\org.vitals.desktop\`。安装前如已用任务计划程序或脚本运行 Vitals，请先从旧实例导出 ZIP 备份，再停止旧服务并关闭其自启，以免占用 3993。桌面版可识别同端口的兼容 Vitals 服务并打开其界面，外部服务的启停仍由原启动方式管理。需要迁移时，在桌面版导入 ZIP，并重新填写集成凭据。安装程序目前未做代码签名。
+
+在本机窗口打开「个性化设置 → 主机配置」即可设置 OpenAI、天气与时区、Bark、日历和设备配对。已保存的密码与密钥在表单中仅显示掩码，留空会保留原值。修改配置后按提示从托盘重启服务。Agent Token 可以在本机查看、复制或重新生成，换发时需同步更新所有配对设备。该页面也可通过本机 `http://127.0.0.1:3993/` 或已监听的 `http://[::1]:3993/` 打开。Tailscale 远程访问不会获得这些接口。
+
+使用 Tailscale Serve 前，先安装并登录 Tailscale，并在管理后台开启 MagicDNS 与 HTTPS。随后可在主机配置中开启 Serve 并查看 HTTPS 地址。Bark 的测试按钮使用已保存的配置，可在服务重启前测试推送。日历凭据的申请步骤见下文。
+
+#### 在 Windows 构建桌面安装包
+
+准备 Node.js、已安装 `backend/requirements.txt` 的项目 `.venv`、Rust MSVC 工具链、Visual Studio 的「使用 C++ 的桌面开发」工作负载与 WebView2 Runtime。构建 MSI 还需要 Windows 的 VBScript 可选功能。
+
+```powershell
+.\desktop\scripts\build_windows.ps1
+```
+
+脚本依次构建前端、PyInstaller 后端与 Tauri 外壳。NSIS 和 MSI 安装包生成在 `desktop/src-tauri/target/release/bundle/`。Tauri 外壳可跨平台，本阶段提供 Windows 安装脚本。
+
+### Windows 命令行启动
 在项目根目录直接双击或运行：
 
 ```powershell

@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 from string import Formatter
 from tempfile import NamedTemporaryFile
+from threading import Lock
 from typing import Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -18,6 +19,7 @@ MIB = 1024**2
 GIB = 1024**3
 OPENAI_MODEL = "gpt-6-luna"
 OPENAI_HOSTS = {"api.openai.com", "us.api.openai.com", "eu.api.openai.com"}
+_config_write_lock = Lock()
 
 
 class ConfigModel(BaseModel):
@@ -253,20 +255,22 @@ def load_settings(path: Path = ROOT / "config.json") -> Settings:
     return Settings.model_validate_json(raw)
 
 
-def save_ai_preferences(path: Path, updates: dict[str, bool]) -> AiConfig:
-    preferences = {name: value for name, value in updates.items()
-                   if name in {"enabled", "include_vitals_context"}}
+def update_settings_file(path: Path, update) -> Settings:
+    with _config_write_lock:
+        return _update_settings_file(path, update)
+
+
+def _update_settings_file(path: Path, update) -> Settings:
     original = path.read_bytes() if path.exists() else None
     document = json.loads(original) if original is not None else {}
-    if not isinstance(document, dict) or not isinstance(document.get("ai", {}), dict):
-        raise ValueError("配置文件须包含有效的 ai 对象")
-    document.setdefault("ai", {}).update(preferences)
-    result = Settings.model_validate(document).ai
-    if not preferences:
+    previous = Settings.model_validate(document)
+    update(document, previous)
+    result = Settings.model_validate(document)
+    if result == previous:
         return result
     pending = None
     try:
-        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, prefix=".config-", delete=False) as stream:
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, prefix=".config-", suffix=".tmp", delete=False) as stream:
             pending = Path(stream.name)
             json.dump(document, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
@@ -278,3 +282,9 @@ def save_ai_preferences(path: Path, updates: dict[str, bool]) -> AiConfig:
         if pending is not None:
             pending.unlink(missing_ok=True)
     return result
+
+
+def save_ai_preferences(path: Path, updates: dict[str, bool]) -> AiConfig:
+    preferences = {name: value for name, value in updates.items()
+                   if name in {"enabled", "include_vitals_context"}}
+    return update_settings_file(path, lambda document, _: document.setdefault("ai", {}).update(preferences)).ai
