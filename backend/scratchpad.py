@@ -141,6 +141,9 @@ class Scratchpad:
                 )
             """)
             db.execute("INSERT OR IGNORE INTO scratchpad_settings(id) VALUES (1)")
+            db.execute("""CREATE TABLE IF NOT EXISTS agent_profiles (
+                device_id TEXT PRIMARY KEY, alias TEXT, snapshot TEXT, last_seen TEXT
+            )""")
             keys = {row[0] for row in db.execute("SELECT storage_key FROM scratchpad WHERE kind = 'file'")}
         # 恢复上次中断的删除，清理操作中断留下的临时文件。
         for path in self.uploads.iterdir():

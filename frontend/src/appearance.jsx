@@ -1,12 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Activity, ImagePlus, Inbox, LayoutGrid, Palette, RotateCcw, Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Activity, Download, ImagePlus, Inbox, LayoutGrid, Palette, RotateCcw, Sparkles, Upload } from 'lucide-react';
 import { httpUrl, request, sendJson } from './api.js';
 import { Button, Modal, Segmented } from './ui.jsx';
 import { overviewModules } from './overviewCards.js';
 import { clockStyles } from './Clock.jsx';
+import { DeviceDot, HUB_DEVICE_ID } from './RemoteDevice.jsx';
 
 const STORAGE_KEY = 'pcc-appearance';
-const defaults = { theme: 'light', material: 'glass', opacity: 46, strength: 60, clockStyle: 'flip', widgets: {} };
+const defaults = { theme: 'light', material: 'glass', opacity: 46, strength: 60, clockStyle: 'flip', widgets: {}, defaultDevice: HUB_DEVICE_ID };
 const level = (value, fallback) => Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : fallback;
 const themes = [{ value: 'light', label: '浅色' }, { value: 'dark', label: '深色' }, { value: 'system', label: '跟随系统' }];
 const systemColorScheme = '(prefers-color-scheme: dark)';
@@ -29,6 +30,8 @@ function initialPreferences() {
       strength: level(stored?.strength, defaults.strength),
       clockStyle: clockStyles.some(({ value }) => value === stored?.clockStyle) ? stored.clockStyle : defaults.clockStyle,
       widgets: Object.fromEntries(overviewModules.map(({ id }) => [id, stored?.widgets?.[id] !== false])),
+      defaultDevice: typeof stored?.defaultDevice === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(stored.defaultDevice)
+        ? stored.defaultDevice : defaults.defaultDevice,
     };
   } catch {
     return defaults;
@@ -104,9 +107,9 @@ export function useAppearance(immersiveView) {
     };
   }, []);
 
-  function update(key, value) {
+  const update = useCallback((key, value) => {
     setPreferences((previous) => ({ ...previous, [key]: value }));
-  }
+  }, []);
 
   async function changeWallpaper(file) {
     if (changing.current) return;
@@ -122,7 +125,9 @@ export function useAppearance(immersiveView) {
       } else {
         await request('/api/wallpaper', { method: 'DELETE' });
         setWallpaper(null);
-        setPreferences((current) => ({ ...defaults, widgets: current.widgets, clockStyle: current.clockStyle }));
+        setPreferences((current) => ({
+          ...defaults, widgets: current.widgets, clockStyle: current.clockStyle, defaultDevice: current.defaultDevice,
+        }));
       }
     } catch (error) {
       setAppearanceError(error.message);
@@ -203,19 +208,143 @@ function CleanupSettings() {
   </div>;
 }
 
-function SystemStatus({ telemetry }) {
+function SystemStatus({ telemetry, platform }) {
   const { connection, sample } = telemetry;
   const socket = { online: ['在线', 'on'], offline: ['已断开', 'off'], connecting: ['连接中', 'waiting'] }[connection] ?? ['等待连接', 'waiting'];
   const lhm = connection !== 'online' || !sample ? ['等待数据', 'waiting']
     : sample.lhm_connected ? ['已连接', 'on'] : ['未连接', 'off'];
+  const statuses = [['WebSocket', socket]];
+  if (platform === 'windows') statuses.push(['LHM', lhm]);
   return <dl className="settings-switches" role="status">
-    {[['WebSocket', socket], ['LHM', lhm]].map(([name, [status, tone]]) => <div className="settings-row" key={name}>
+    {statuses.map(([name, [status, tone]]) => <div className="settings-row" key={name}>
       <dt>{name}</dt><dd className={`system-badge system-${tone}`}><span className="state-dot" aria-hidden="true" />{status}</dd>
     </div>)}
   </dl>;
 }
 
-export function AppearanceDialog({ appearance, onClose, ai, telemetry }) {
+function DeviceNameRow({ device, alias, busy, onRename, onRemove }) {
+  const [draft, setDraft] = useState(alias ?? '');
+  useEffect(() => setDraft(alias ?? ''), [alias]);
+  const isHub = device.device_id === HUB_DEVICE_ID;
+  const reportedName = isHub ? device.reportedName ?? device.platform ?? '本机' : device.snapshot.name;
+  const status = device.online ? '在线' : isHub ? '连接中' : '已休眠或离线';
+  const lastSeen = !isHub && !device.online && device.last_seen
+    ? new Date(device.last_seen).toLocaleString() : null;
+  return <form className="settings-device-row" onSubmit={(event) => {
+    event.preventDefault();
+    if (!busy) onRename(device.device_id, draft.trim() || null);
+  }}>
+    <div className="settings-device-identity">
+      <strong title={device.name}>{device.name}</strong>
+      <small className="muted"><DeviceDot online={device.online} />{isHub ? `本机 · ${status}` : status}
+        {lastSeen && ` · ${lastSeen}`}
+      </small>
+    </div>
+    <div className="settings-device-actions">
+      <input aria-label={`${device.name} 的昵称`} maxLength={64} value={draft} placeholder={reportedName}
+        onChange={(event) => setDraft(event.target.value)} />
+      <Button type="submit" disabled={busy || draft.trim() === (alias ?? '')}>保存</Button>
+      {!isHub && !device.online && <Button disabled={busy} onClick={() => onRemove(device)} aria-haspopup="dialog">移除</Button>}
+    </div>
+  </form>;
+}
+
+function DeviceSettings({ hub, devices, aliases, defaultDevice, error, onDefault, onRename, onRemove }) {
+  const [pendingRemoval, setPendingRemoval] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const entries = [hub, ...devices];
+  async function mutate(action) {
+    setBusy(true);
+    setFeedback('');
+    try {
+      await action();
+      setPendingRemoval(null);
+    } catch (failure) {
+      setFeedback(failure.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <section className="settings-subsection">
+    <h3>设备管理</h3>
+    <label className="settings-row">
+      <span>默认主控设备</span>
+      <select value={entries.some(({ device_id }) => device_id === defaultDevice) ? defaultDevice : HUB_DEVICE_ID}
+        onChange={(event) => onDefault(event.target.value)}>
+        {entries.map(({ device_id, name, online }) => <option key={device_id} value={device_id}>
+          {name}{device_id !== HUB_DEVICE_ID && !online ? ' · 离线' : ''}
+        </option>)}
+      </select>
+    </label>
+    <div className="settings-device-list">
+      {entries.map((device) => <DeviceNameRow key={device.device_id} device={device} busy={busy}
+        alias={aliases[device.device_id]} onRename={(id, alias) => mutate(() => onRename(id, alias))}
+        onRemove={(item) => { setFeedback(''); setPendingRemoval(item); }} />)}
+    </div>
+    {(error || (feedback && !pendingRemoval)) && <p className="feedback error" role="alert">{feedback || error}</p>}
+    {pendingRemoval && <Modal id="remove-device" title="移除离线设备" className="detail-dialog shutdown-dialog"
+      onClose={() => !busy && setPendingRemoval(null)}>
+      <p>移除「{pendingRemoval.name}」并清除它的昵称及最后一次设备快照？</p>
+      {feedback && <p className="feedback error" role="alert">{feedback}</p>}
+      <div className="quick-confirm-actions">
+        <Button disabled={busy} onClick={() => setPendingRemoval(null)}>取消</Button>
+        <Button className="primary-button" disabled={busy} onClick={() => mutate(() => onRemove(pendingRemoval.device_id))}>确认移除</Button>
+      </div>
+    </Modal>}
+  </section>;
+}
+
+function BackupSettings() {
+  const input = useRef(null);
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState(null);
+  async function restore() {
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const result = await request('/api/system/backup/restore', { method: 'POST', body });
+      setFile(null);
+      setFeedback({ text: result.message });
+    } catch (failure) {
+      setFeedback({ text: failure.message, error: true });
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <section className="settings-subsection">
+    <h3>数据备份与迁移</h3>
+    <div className="settings-backup-actions">
+      <a className="button" href={httpUrl('/api/system/backup').href} download><Download size={16} />导出数据备份 (.zip)</a>
+      <Button disabled={busy} onClick={() => input.current?.click()}><Upload size={16} />导入备份恢复</Button>
+    </div>
+    <input type="file" ref={input} accept=".zip,application/zip" hidden onChange={(event) => {
+      const selected = event.target.files[0];
+      event.target.value = '';
+      if (!selected) return;
+      setFeedback(null);
+      if (selected.name.toLowerCase().endsWith('.zip')) setFile(selected);
+      else setFeedback({ text: '请选择 ZIP 备份文件。', error: true });
+    }} />
+    {!file && feedback && <p className={feedback.error ? 'feedback error' : 'feedback'}
+      role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p>}
+    {file && <Modal id="restore-backup" title="确认恢复备份" className="detail-dialog shutdown-dialog"
+      onClose={() => !busy && setFile(null)}>
+      <p className="backup-file-name">{file.name}</p>
+      <p>重启后将用备份替换本机数据库、中转站附件和壁纸。</p>
+      {feedback && <p className="feedback error" role="alert">{feedback.text}</p>}
+      <div className="quick-confirm-actions">
+        <Button disabled={busy} onClick={() => { setFile(null); setFeedback(null); }}>取消</Button>
+        <Button className="primary-button" disabled={busy} onClick={restore}>{busy ? '正在校验…' : '确认恢复'}</Button>
+      </div>
+    </Modal>}
+  </section>;
+}
+
+export function AppearanceDialog({ appearance, onClose, ai, telemetry, deviceSettings }) {
   const input = useRef(null);
   const [category, setCategory] = useState('appearance');
   const { preferences, busy, appearanceError, update, changeWallpaper } = appearance;
@@ -280,7 +409,11 @@ export function AppearanceDialog({ appearance, onClose, ai, telemetry }) {
               </label>)}
           </div>}
           {category === 'scratchpad' && <CleanupSettings />}
-          {category === 'system' && <SystemStatus telemetry={telemetry} />}
+          {category === 'system' && <div className="settings-fields">
+            <SystemStatus telemetry={telemetry} platform={deviceSettings.hub.platform} />
+            <DeviceSettings {...deviceSettings} />
+            <BackupSettings />
+          </div>}
           {category === 'ai' && <div className="settings-switches">
               <label className="settings-row"><span>启用 AI 助手</span>
                 <input className="toggle-switch" type="checkbox" role="switch" checked={ai.settings?.enabled ?? false}

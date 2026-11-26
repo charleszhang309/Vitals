@@ -139,7 +139,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     calendar = CalendarService(settings.calendar, health.zone)
     life = LifeStore(store.connect, health.zone)
     agent_auth = require_agent_token(settings.agents)
-    agents = AgentRegistry()
+    agents = AgentRegistry(store.connect)
     rates = Rates(settings.finance)
     rate_pins = RatePins(store.connect, settings.finance)
     rate_history = RateHistory(rates, store.connect)
@@ -158,6 +158,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
             life.initialize()
             rate_pins.initialize()
             rate_history.initialize()
+            agents.restore_profiles()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -191,6 +192,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
                     await asyncio.gather(*workers, return_exceptions=True)
                     await ai_tools.close()
                     await power.close()
+                    await asyncio.to_thread(agents.flush_profiles)
 
     app = FastAPI(title="Vitals", lifespan=lifespan, redoc_url=None)
     app.state.host_platform = identity["platform"]

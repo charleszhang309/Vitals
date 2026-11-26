@@ -4,16 +4,42 @@ import { postJson } from './api.js';
 import { bytes, measure, rateText, sleepTime, time } from './format.js';
 import { Button, DetailLink, DetailValues, Modal, ProgressBar, Segmented } from './ui.jsx';
 
-const deviceKey = (device) => `agent:${device.device_id}`;
+export const HUB_DEVICE_ID = 'hub';
+const compactPicker = '(max-width: 640px)';
 
-export function DevicePicker({ id, devices, device, onChange, platform }) {
+export function DeviceDot({ online }) {
+  return <span className="device-dot" data-online={Boolean(online)} aria-hidden="true" />;
+}
+
+export function DevicePicker({ id, hub, devices, device, onChange }) {
+  const [compact, setCompact] = useState(() => window.matchMedia(compactPicker).matches);
+  useEffect(() => {
+    const media = window.matchMedia(compactPicker);
+    const sync = () => setCompact(media.matches);
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+  const choices = [hub, ...devices];
   if (!devices.length) return null;
-  const options = [{ value: 'windows', label: platform === 'macos' ? '本机 Mac' : 'Windows' }, ...devices.map((item) => ({
-    value: deviceKey(item), label: item.name,
-  }))];
+  const selected = device ?? hub;
+  if (choices.length >= (compact ? 3 : 4)) {
+    return <div className="device-picker device-picker-select" data-offline={!selected.online}>
+      <DeviceDot online={selected.online} />
+      <select aria-label="设备" value={selected.device_id} onChange={(event) => onChange(event.target.value)}>
+        {choices.map(({ device_id: key, name, online }) => <option key={key} value={key} data-online={Boolean(online)}>
+          {online ? '●' : '○'} {name}{!online ? ' · 离线' : ''}
+        </option>)}
+      </select>
+    </div>;
+  }
+  const options = choices.map(({ device_id: key, name, online }) => ({
+    value: key, label: <span className="device-segment-label" data-offline={!online} title={name}>
+      <DeviceDot online={online} /><span>{name}</span>
+      {!online && <span className="sr-only">（离线）</span>}
+    </span>,
+  }));
   return <div className="device-picker"><Segmented id={id} label="设备" options={options}
-    value={device ? deviceKey(device) : 'windows'}
-    onChange={(value) => onChange(value === 'windows' ? null : value.slice('agent:'.length))} /></div>;
+    value={selected.device_id} onChange={onChange} /></div>;
 }
 
 const batteryStates = {
@@ -40,13 +66,14 @@ function RemoteHardwareSummary({ device, onOpen }) {
   const { battery, cpu, memory, disks, network } = device.snapshot;
   const mainDisk = disks.find((disk) => disk.mountpoint === '/');
   const readings = [
-    ['电池', measure(battery?.percent, '%', 0), batteryNote(battery)],
+    ...(battery ? [['电池', measure(battery.percent, '%', 0), batteryNote(battery)]] : []),
     ['CPU', measure(cpu?.usage_percent, '%', 0)],
     ['内存', measure(memory?.percent, '%', 0)],
     ['网络', `↓ ${rateText(network?.download_bytes_per_sec)}`, `↑ ${rateText(network?.upload_bytes_per_sec)}`],
     ['主盘剩余', bytes(mainDisk?.free_bytes)],
   ];
-  return <section className="surface panel detail-tile control-hardware remote-hardware" data-offline={!device.online}>
+  return <section className="surface panel detail-tile control-hardware remote-hardware" data-offline={!device.online}
+    style={{ '--metrics-count': readings.length }}>
     <div className="panel-header">
       <span className="metric-icon tone-blue" aria-hidden="true"><Activity size={21} /></span>
       <h2>硬件监控</h2><RemoteStatus device={device} />
@@ -65,11 +92,11 @@ export function RemoteHardware({ device }) {
     <div className="remote-detail-header"><h3>{device.name}</h3><RemoteStatus device={device} /></div>
     <RemoteLastSeen device={device} />
     <div className="remote-detail-grid">
-      <section><h4>电池</h4><DetailValues items={[
-        ['电量', measure(battery?.percent, '%')], ['供电状态', batteryNote(battery)],
-        ['电池健康度', measure(battery?.health_percent, '%')], ['循环次数', battery?.cycle_count],
-        ['温度', measure(battery?.temperature_c, '°C')],
-      ]} /></section>
+      {battery && <section><h4>电池</h4><DetailValues items={[
+        ['电量', measure(battery.percent, '%')], ['供电状态', batteryNote(battery)],
+        ['电池健康度', measure(battery.health_percent, '%')], ['循环次数', battery.cycle_count],
+        ['温度', measure(battery.temperature_c, '°C')],
+      ]} /></section>}
       <section><h4>CPU 与内存</h4><DetailValues items={[
         ['CPU 使用率', measure(cpu?.usage_percent, '%')], ['处理器', cpu?.name],
         ['核心 / 线程', cpu?.physical_cores && cpu?.logical_cores ? `${cpu.physical_cores} / ${cpu.logical_cores}` : null],
@@ -179,7 +206,8 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
     actions: { toggle: device.online && !awaiting('media_play_pause'), previous: device.online, next: device.online },
   } : null;
   const received = playingOverride?.received ?? sampledAt;
-  const playback = { track, sessions: [], received, reload: onCommand, reason: device.online ? null : 'agent_offline' };
+  const offlineLabel = device.online ? undefined : `${device.name} 已休眠或离线`;
+  const playback = { track, sessions: [], received, reload: onCommand, offlineLabel };
   const switching = !device.online || awaiting('audio_device_set');
   const canAdjust = device.online && Number.isFinite(volume?.percent);
   const canMute = device.online && typeof volume?.muted === 'boolean' && !awaiting('volume_mute');
@@ -263,7 +291,7 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
     <RemoteHardwareSummary device={device} onOpen={onMonitor} />
     <section className="surface panel quick-card remote-quick" aria-labelledby="remote-quick-heading">
       <div className="panel-header"><h2 id="remote-quick-heading">主机快捷控制</h2></div>
-      <div className="quick-control-row remote-quick-row" role="group" aria-label="MacBook 操作">
+      <div className="quick-control-row remote-quick-row" role="group" aria-label={`${device.name} 操作`}>
         {upgraded ? <Button disabled={disabled} onClick={() => send('display_lock')}><LockKeyhole size={15} /><span>息屏</span></Button> : <>
           <Button disabled={disabled} onClick={() => setConfirm('lock')} aria-haspopup="dialog"><LockKeyhole size={15} /><span>锁屏</span></Button>
           <Button disabled={disabled} onClick={() => send('display_sleep')}><MonitorOff size={15} /><span>熄屏</span></Button>
@@ -287,7 +315,7 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
           ?? (Number.isFinite(volume?.percent) ? Math.round(volume.percent) : null),
         muted: optimistic.volume_mute?.value ?? volume?.muted,
         devices: volume?.devices ?? [], output: optimistic.audio_device_set?.value ?? volume?.device_id ?? '',
-        unavailableLabel: device.online ? '当前输出设备未提供音量' : 'MacBook 已休眠或离线',
+        unavailableLabel: offlineLabel ?? '当前输出设备未提供音量',
         queue: queueVolume, flush: flushVolume,
       },
     })}

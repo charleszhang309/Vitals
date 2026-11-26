@@ -45,37 +45,41 @@ function DailyBriefing() {
   </section>;
 }
 
-function HostSummary({ telemetry, onOpen }) {
-  const sample = telemetry.sample;
-  const mac = sample?.platform === 'macos';
-  const loads = sample?.gpus.map((gpu) => gpu.usage_percent).filter(Number.isFinite) ?? [];
+function HostSummary({ telemetry, hub, device, waiting, onOpen }) {
+  const sample = device ? device.snapshot : telemetry.sample;
+  const mac = (device?.os ?? hub.platform) === 'macos';
+  const loads = sample?.gpus?.map((gpu) => gpu.usage_percent).filter(Number.isFinite) ?? [];
   const alerts = sample?.last_alerts?.length ?? 0;
   const power = sample?.power;
   const mode = power ? modeLabels[power.mode] ?? (power.mode || '自定义') : '—';
   const task = taskLabels[sample?.task?.state] ?? '—';
   return (
-    <motion.button className="surface host-strip" type="button" onClick={onOpen} whileTap={{ scale: 0.97 }}>
-      <span className="host-title"><span className="metric-icon tone-blue"><Activity size={20} aria-hidden="true" /></span><strong>主机状态</strong></span>
+    <motion.button className="surface host-strip" type="button" disabled={waiting} onClick={onOpen} whileTap={{ scale: 0.97 }}>
+      <span className="host-title"><span className="metric-icon tone-blue"><Activity size={20} aria-hidden="true" /></span>
+        <strong title={device?.name ?? hub.name}>{waiting ? '正在读取设备…' : device?.name ?? hub.name}</strong>
+      </span>
       <span className="host-stats">
-        {!mac && <span><small>电源模式</small><strong>{mode}</strong></span>}
-        <span><small>CPU</small><strong className="numeric">{measure(sample?.cpu.usage_percent, '%', 0)}</strong></span>
-        {mac
-          ? <span><small>电池</small><strong className="numeric">{measure(sample.battery?.percent, '%', 0)}</strong></span>
-          : <span><small>GPU</small><strong className="numeric">{measure(loads.length ? Math.max(...loads) : null, '%', 0)}</strong></span>}
-        <span><small>任务与告警</small><strong className={alerts ? 'host-warning' : ''}>{task}{alerts > 0 && ` · ${alerts} 项告警`}</strong></span>
+        {!device && hub.platform === 'windows' && <span><small>电源模式</small><strong>{mode}</strong></span>}
+        <span><small>CPU</small><strong className="numeric">{measure(sample?.cpu?.usage_percent, '%', 0)}</strong></span>
+        {(mac || device) ? <>
+          {sample?.battery && <span><small>电池</small><strong className="numeric">{measure(sample.battery.percent, '%', 0)}</strong></span>}
+          <span><small>内存</small><strong className="numeric">{measure(sample?.memory?.percent, '%', 0)}</strong></span>
+        </> : <span><small>GPU</small><strong className="numeric">{measure(loads.length ? Math.max(...loads) : null, '%', 0)}</strong></span>}
+        {device ? <span><small>状态</small><strong className={device.online ? '' : 'muted'}>{device.online ? '在线' : '已休眠或离线'}</strong></span>
+          : <span><small>任务与告警</small><strong className={alerts ? 'host-warning' : ''}>{task}{alerts > 0 && ` · ${alerts} 项告警`}</strong></span>}
       </span>
       <span className="host-link">硬件监控<ArrowUpRight size={17} aria-hidden="true" /></span>
     </motion.button>
   );
 }
 
-function MediaSummary({ track, onOpen }) {
+function MediaSummary({ track, deviceName, onOpen }) {
   return <motion.button className="surface host-strip music-strip" type="button"
     onClick={onOpen} whileTap={{ scale: 0.97 }}>
     <MediaCover track={track} compact />
     <span className="music-strip-text">
       <strong>{track.title || '未命名媒体'}</strong>
-      <small className="muted">{[track.artist, track.player, playbackLabels[track.status]].filter(Boolean).join(' · ')}</small>
+      <small className="muted">{[track.artist, track.player, playbackLabels[track.status], deviceName].filter(Boolean).join(' · ')}</small>
     </span>
     <span className="host-link">控制<ArrowUpRight size={17} aria-hidden="true" /></span>
   </motion.button>;
@@ -349,7 +353,7 @@ function Health({ resource, dark }) {
   );
 }
 
-export default function TodayPage({ telemetry, media, dark, openMonitor, openControl, briefingEnabled, widgets }) {
+export default function TodayPage({ telemetry, media, hub, primaryDevice, waitingForPrimary, dark, openMonitor, openControl, briefingEnabled, widgets }) {
   const [open, setOpen] = useState(null);
   const visible = (id) => widgets[id] !== false;
   const weather = useResource('/api/weather', 60_000, visible('weather'));
@@ -372,11 +376,15 @@ export default function TodayPage({ telemetry, media, dark, openMonitor, openCon
   };
   const selected = overviewCards.find(({ id }) => id === open && visible(id));
   const shown = overviewCards.filter(({ id }) => visible(id));
-  const track = media.current;
+  const remoteTrack = primaryDevice?.online && primaryDevice.snapshot.media;
+  const track = primaryDevice || waitingForPrimary
+    ? remoteTrack && { ...remoteTrack, agent_id: primaryDevice.device_id }
+    : media.current;
   return <>
     <div className="page-heading"><h1>今日概览</h1></div>
-    {visible('host') && <HostSummary telemetry={telemetry} onOpen={openMonitor} />}
-    {visible('media') && (track?.status === 'playing' || track?.status === 'paused') && <MediaSummary track={track} onOpen={openControl} />}
+    {visible('host') && <HostSummary telemetry={telemetry} hub={hub} device={primaryDevice} waiting={waitingForPrimary} onOpen={openMonitor} />}
+    {visible('media') && (track?.status === 'playing' || track?.status === 'paused') &&
+      <MediaSummary track={track} deviceName={primaryDevice?.name ?? hub.name} onOpen={openControl} />}
     {visible('briefing') && briefingEnabled && <DailyBriefing />}
     {shown.length > 0 && <div className="overview-grid">
       {shown.map(({ id, title, Icon, tone }) => (

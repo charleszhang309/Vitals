@@ -44,21 +44,22 @@ export function PowerCard({ controller }) {
     {(feedback || error) && <p className="feedback error" role="alert">{feedback || error}</p>}
   </section>;
 }
-export function HardwareSummary({ sample, power, onOpen }) {
+export function HardwareSummary({ sample, platform, power, onOpen }) {
   const gpu = sample?.gpus[0];
   const network = sample?.network;
   const plan = power ?? sample?.power;
   const mode = powerModes.find(({ value }) => value === plan?.mode)?.label ?? plan?.name ?? (plan ? '自定义' : '—');
-  const mac = sample?.platform === "macos";
+  const mac = platform === 'macos';
+  const battery = sample?.battery;
   const readings = [
     ['CPU', measure(sample?.cpu.usage_percent, '%', 0), measure(sample?.cpu.temperature_c, '°C', 0)],
-    mac ? ['电池', measure(sample?.battery?.percent, '%', 0)]
-      : ['GPU', measure(gpu?.usage_percent, '%', 0), measure(gpu?.temperature_c, '°C', 0)],
+    ...(mac && battery ? [['电池', measure(battery.percent, '%', 0)]] : []),
+    ...(platform === 'windows' ? [['GPU', measure(gpu?.usage_percent, '%', 0), measure(gpu?.temperature_c, '°C', 0)]] : []),
     ['内存', measure(sample?.memory.percent, '%', 0)],
     ['网络', `↓ ${rateText(network?.download_bytes_per_sec)}`, `↑ ${rateText(network?.upload_bytes_per_sec)}`],
-    ...(!mac ? [['电源模式', mode]] : []),
+    ...(platform === 'windows' ? [['电源模式', mode]] : []),
   ];
-  return <section className="surface panel detail-tile control-hardware">
+  return <section className="surface panel detail-tile control-hardware" style={{ '--metrics-count': readings.length }}>
     <div className="panel-header"><span className="metric-icon tone-blue" aria-hidden="true"><Activity size={21} /></span><h2>硬件监控</h2></div>
     <dl>{readings.map(([label, value, secondary]) => <div key={label}>
       <dt>{label}</dt><dd className="numeric">{value}{secondary && <small>{secondary}</small>}</dd>
@@ -198,7 +199,7 @@ export function MacQuickControlCard() {
 
   return <section className="surface panel quick-card" aria-labelledby="quick-control-heading">
     <div className="panel-header"><h2 id="quick-control-heading">主机快捷控制</h2></div>
-    <div className="quick-control-row" role="group" aria-label="主机操作">
+    <div className="quick-control-row mac-quick-row" role="group" aria-label="主机操作">
       <Button onClick={() => send('display-off')} disabled={busy}><MonitorOff size={15} />息屏</Button>
       <Button onClick={() => setConfirmSleep(true)} disabled={busy} aria-haspopup="dialog"><Moon size={15} />休眠</Button>
       <Button onClick={() => send('caffeinate-toggle')} disabled={busy || !quick.data} aria-pressed={quick.data?.caffeinate ?? false}>

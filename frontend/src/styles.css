@@ -339,6 +339,24 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .settings-nav .settings-category { justify-content: flex-start; border-color: transparent; white-space: nowrap; }
 .settings-nav .settings-category[aria-selected="true"] { background: var(--track); color: var(--link); box-shadow: var(--glass-sheen); }
 .settings-panel { min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; padding: 2px 3px 8px 18px; }
+.settings-subsection { display: grid; gap: 10px; min-width: 0; padding-top: 12px; border-top: 1px solid var(--border); }
+.settings-subsection h3 { margin: 0; font-size: 15px; font-weight: 700; }
+.settings-device-list { display: grid; gap: 7px; }
+.settings-device-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 8px;
+  align-items: center; padding: 9px; border-radius: 12px; background: var(--track); }
+.settings-device-identity { min-width: 0; }
+.settings-device-identity strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.settings-device-identity small { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+.settings-device-actions, .settings-backup-actions { display: flex; align-items: center; gap: 6px; }
+.settings-device-actions input { flex: 1; width: 0; min-width: 0; padding: 7px 8px; border: 1px solid var(--field-border);
+  border-radius: 8px; background: var(--surface); color: var(--text); font-size: 14px; }
+.settings-device-actions .button { min-height: 34px; padding: 5px 8px; white-space: nowrap; font-size: 13px; }
+.settings-subsection .settings-row select { min-width: 0; max-width: 60%; }
+.settings-backup-actions { flex-wrap: wrap; }
+.backup-file-name { overflow-wrap: anywhere; font-weight: 650; }
+@media (max-width: 700px) {
+  .settings-device-row { grid-template-columns: minmax(0, 1fr); }
+}
 .settings-switches { display: grid; gap: 12px; font-size: 14px; }
 .settings-switches > p { font-size: 13px; }
 @media (width < 680px) {
@@ -663,6 +681,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .daily-briefing .icon-button { width: 38px; min-height: 38px; border-color: transparent; border-radius: 50%; }
 .briefing-feedback { font-size: 12px; }
 .host-title { display: flex; align-items: center; gap: 9px; font-size: 14px; white-space: nowrap; }
+.host-title strong { min-width: 0; max-width: min(32vw, 11rem); overflow: hidden; text-overflow: ellipsis; }
 .host-title .metric-icon { width: 33px; height: 33px; border-radius: 10px; }
 .host-stats { display: grid; grid-template-columns: repeat(3, minmax(50px, .6fr)) minmax(110px, 1.3fr); gap: 7px 12px; min-width: 0; }
 .host-stats > span { display: grid; gap: 2px; min-width: 0; }
@@ -817,7 +836,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .weekly-down { color: color-mix(in srgb, var(--purple) 70%, var(--text)); }
 .control-hardware .panel-header { justify-content: flex-start; gap: 10px; }
 .control-hardware .detail-link svg { top: 23px; }
-.control-hardware dl { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.control-hardware dl { display: grid; grid-template-columns: repeat(var(--metrics-count, 5), minmax(0, 1fr)); gap: 10px; }
 .control-hardware dl > div { min-width: 0; padding-top: 7px; border-top: 1px solid var(--border); }
 .control-hardware dt, .control-hardware dd small { color: var(--muted); font-size: 12px; }
 .control-hardware dd { font-size: clamp(14px, 2vw, 21px); font-weight: 700; overflow-wrap: anywhere; }
@@ -828,6 +847,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .device-picker .segments { width: max-content; }
 .device-picker .segment { flex: 0 0 auto; max-width: min(38vw, 180px); }
 .device-picker .segment-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.device-dot[data-online="true"] { background: var(--green); }
+.device-segment-label { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.device-segment-label > span:not(.device-dot):not(.sr-only) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.device-segment-label[data-offline="true"], .device-picker-select[data-offline="true"] { color: var(--muted); }
+.device-picker-select { display: flex; align-items: center; gap: 7px; padding: 5px 10px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--glass-sheen), var(--track); }
+.device-picker-select select { min-width: 0; max-width: min(50vw, 230px); padding: 3px; background: transparent;
+  color: inherit; font-weight: 650; text-overflow: ellipsis; }
+.device-picker-select option { color: var(--text); background: var(--surface); }
+.device-picker-select option[data-online="false"] { color: var(--muted); }
 .monitor-content > .device-picker { margin-bottom: 14px; }
 .remote-hardware.detail-tile .panel-header { padding-inline-end: 24px; }
 .remote-detail-header h3, .remote-disks strong, .remote-processes span { overflow-wrap: anywhere; }
@@ -1132,12 +1162,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   background: color-mix(in srgb, var(--red) 16%, transparent);
 }
 .quick-control-row.remote-quick-row { grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)); }
-.remote-quick-row .button[aria-pressed="true"] {
+.quick-control-row.mac-quick-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+:is(.remote-quick-row, .mac-quick-row) .button[aria-pressed="true"] {
   border-radius: 999px;
   color: var(--link);
   background: color-mix(in srgb, var(--blue) 20%, var(--track));
 }
-.remote-quick-row .button[aria-pressed="true"]:not(:disabled):hover {
+:is(.remote-quick-row, .mac-quick-row) .button[aria-pressed="true"]:not(:disabled):hover {
   background: color-mix(in srgb, var(--blue) 27%, var(--track));
 }
 @media (max-width: 720px) {

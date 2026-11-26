@@ -42,6 +42,66 @@ def client_for(tmp_path, token="fixture-agent-token"):
     return client_for_app(agent_app(tmp_path, token))
 
 
+def test_device_aliases_and_last_snapshot_survive_restart(tmp_path):
+    async def verify():
+        app = agent_app(tmp_path)
+        async with app.router.lifespan_context(app), client_for_app(app) as api:
+            route = "/api/agents/aliases"
+            assert (await api.get(route)).json() == {"aliases": {}}
+            for device_id, alias in (("hub", " 主机 "), ("macbook", " 笔记本 ")):
+                response = await api.patch(route, json={"device_id": device_id, "alias": alias})
+                assert response.json()["aliases"][device_id] == alias.strip()
+            assert (await api.patch(route, json={"device_id": "hub", "alias": " "})).status_code == 422
+            assert (await api.patch(route, json={"device_id": "hub", "alias": "坏的请求"},
+                                    headers={"Origin": "https://outside.example"})).status_code == 403
+            assert (await api.post("/api/agents/hub/heartbeat", json=SNAPSHOT, headers=AUTH)).status_code == 422
+            (await api.post(AGENT + "/heartbeat", json=SNAPSHOT, headers=AUTH)).raise_for_status()
+            before = (await api.get("/api/agents")).json()["devices"][0]
+            assert before["name"] == "笔记本" and before["snapshot"]["name"] == "MacBook"
+            assert before["online"]
+
+        restarted = agent_app(tmp_path)
+        async with restarted.router.lifespan_context(restarted), client_for_app(restarted) as api:
+            assert (await api.get(route)).json() == {"aliases": {"hub": "主机", "macbook": "笔记本"}}
+            restored = (await api.get("/api/agents")).json()["devices"][0]
+            assert not restored["online"] and restored["last_seen"] == before["last_seen"]
+            assert restored["snapshot"] == before["snapshot"] and restored["commands"] == []
+            assert (await api.patch(route, json={"device_id": "macbook", "alias": None})).status_code == 200
+            assert (await api.get("/api/agents")).json()["devices"][0]["name"] == "MacBook"
+
+    asyncio.run(verify())
+
+
+def test_delete_only_offline_devices_and_clear_profile(tmp_path, monkeypatch):
+    now = 100
+    monkeypatch.setattr("backend.agents.monotonic", lambda: now)
+
+    async def verify():
+        nonlocal now
+        app = agent_app(tmp_path)
+        async with app.router.lifespan_context(app), client_for_app(app) as api:
+            (await api.post(AGENT + "/heartbeat", json=SNAPSHOT, headers=AUTH)).raise_for_status()
+            (await api.patch("/api/agents/aliases", json={"device_id": "macbook", "alias": "笔记本"})).raise_for_status()
+            assert (await api.post(AGENT + "/command", json={"action": "media_next"})).status_code == 202
+            assert (await api.delete("/api/agents/hub")).status_code == 409
+            assert (await api.delete(AGENT)).status_code == 409
+            now += 16
+            assert (await api.delete(AGENT, headers={"Origin": "https://outside.example"})).status_code == 403
+            assert (await api.delete(AGENT)).status_code == 204
+            assert (await api.delete(AGENT)).status_code == 404
+            assert (await api.get(AGENT + "/artwork")).status_code == 404
+            assert (await api.get("/api/agents/aliases")).json() == {"aliases": {}}
+
+        restarted = agent_app(tmp_path)
+        async with restarted.router.lifespan_context(restarted), client_for_app(restarted) as api:
+            assert (await api.get("/api/agents")).json() == {"devices": []}
+            assert (await api.post(AGENT + "/heartbeat", json=SNAPSHOT, headers=AUTH)).json() == {"commands": []}
+            device = (await api.get("/api/agents")).json()["devices"][0]
+            assert device["name"] == "MacBook" and device["online"]
+
+    asyncio.run(verify())
+
+
 def test_heartbeat_authorization_and_server_offline_clock(tmp_path, monkeypatch):
     now = 100
     monkeypatch.setattr("backend.agents.monotonic", lambda: now)

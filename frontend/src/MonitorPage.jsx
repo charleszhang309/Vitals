@@ -94,12 +94,12 @@ function Fans({ items, peaks, ready }) {
   );
 }
 
-function HostMonitor({ telemetry, dark, power }) {
+function HostMonitor({ telemetry, platform, dark, power }) {
   const { sample, history, fanPeaks, connection } = telemetry;
   const [selectedGpu, setSelectedGpu] = useState('');
   const [detail, setDetail] = useState(null);
   const [trendMode, setTrendMode] = useState('usage');
-  const mac = sample?.platform === 'macos';
+  const mac = platform === 'macos';
   const battery = sample?.battery;
   const gpus = sample?.gpus ?? [];
   const gpu = gpus.find((item) => item.id === selectedGpu) ?? gpus[0];
@@ -114,7 +114,7 @@ function HostMonitor({ telemetry, dark, power }) {
         <div className="metrics-grid">
           <Metric title="CPU" tone="red" icon={Cpu} onOpen={() => setDetail('cpu')} display={number(sample?.cpu.usage_percent)} unit={Number.isFinite(sample?.cpu.usage_percent) ? '%' : ''}
             lines={[["温度", measure(sample?.cpu.temperature_c, '°C')], ['功耗', measure(sample?.cpu.power_w, 'W')]]} />
-          {mac ? <section className="surface metric" aria-label="电池">
+          {mac && battery && <section className="surface metric" aria-label="电池">
             <div className="metric-header flex items-center gap-3"><Battery size={23} aria-hidden="true" /><h2>电池</h2></div>
             <div className="metric-reading numeric">{measure(battery?.percent, '%')}</div>
             <p className="muted">{batteryNote(battery)}</p>
@@ -122,7 +122,8 @@ function HostMonitor({ telemetry, dark, power }) {
               <div><dt>健康度</dt><dd>{measure(battery?.health_percent, '%')}</dd></div>
               <div><dt>循环次数</dt><dd>{number(battery?.cycle_count, 0)}</dd></div>
             </dl>
-          </section> : <Metric title="GPU" tone="orange" icon={Gpu} onOpen={() => setDetail('gpu')} display={number(gpu?.usage_percent)} unit={Number.isFinite(gpu?.usage_percent) ? '%' : ''}
+          </section>}
+          {platform === 'windows' && <Metric title="GPU" tone="orange" icon={Gpu} onOpen={() => setDetail('gpu')} display={number(gpu?.usage_percent)} unit={Number.isFinite(gpu?.usage_percent) ? '%' : ''}
             lines={[["温度", measure(gpu?.temperature_c, '°C')], ['功耗', measure(gpu?.power_w, 'W')], ['显存', gpu ? `${bytes(gpu.vram_used_bytes)} / ${bytes(gpu.vram_total_bytes)}` : '—']]}
             choice={gpus.length > 1 ? <select className="gpu-choice" aria-label="选择 GPU" value={gpu.id} onChange={(event) => setSelectedGpu(event.target.value)}>
               {gpus.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
@@ -138,13 +139,13 @@ function HostMonitor({ telemetry, dark, power }) {
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1"><h2 id="trend-heading">实时曲线</h2><span className="muted panel-note">最近 2 分钟</span></div>
               <Segmented id="trend" label="实时曲线显示指标" options={trendModes} value={trendMode} onChange={setTrendMode} />
             </div>
-            <ul className="legend trend-legend"><li className="tone-red">CPU</li><li className="tone-orange">GPU</li>
+            <ul className="legend trend-legend"><li className="tone-red">CPU</li>{!mac && <li className="tone-orange">GPU</li>}
               {trendMode === 'usage' && <li className="tone-purple">内存</li>}</ul>
             <Suspense fallback={<div className="trend-plot chart-loading muted">正在加载图表…</div>}>
               <TrendChart history={history} gpuId={chartGpu} dark={dark} mode={trendMode} />
             </Suspense>
           </section>
-          <div className="side-stack">{!mac && <PowerCard controller={power} />}<TaskCard sample={sample} /></div>
+          <div className="side-stack">{platform === 'windows' && <PowerCard controller={power} />}<TaskCard sample={sample} /></div>
           <Disks items={sample?.disks ?? []} ready={Boolean(sample)} />
           {!mac && <Fans items={sample?.fan_summary ?? []} peaks={fanPeaks} ready={Boolean(sample)} />}
         </div>
@@ -153,11 +154,11 @@ function HostMonitor({ telemetry, dark, power }) {
   );
 }
 
-export default function MonitorPage({ telemetry, dark, power, onClose, devices, device, onDevice }) {
+export default function MonitorPage({ telemetry, dark, power, onClose, hub, devices, device, onDevice }) {
   return <Modal id="full-monitor" title="硬件监控" className={device ? 'detail-dialog remote-monitor-dialog' : 'monitor-dialog'} onClose={onClose}>
     <div className="monitor-content">
-      <DevicePicker id="monitor-device" platform={telemetry.sample?.platform} devices={devices} device={device} onChange={onDevice} />
-      {device ? <RemoteHardware device={device} /> : <HostMonitor telemetry={telemetry} dark={dark} power={power} />}
+      <DevicePicker id="monitor-device" hub={hub} devices={devices} device={device} onChange={onDevice} />
+      {device ? <RemoteHardware device={device} /> : <HostMonitor telemetry={telemetry} platform={hub.platform} dark={dark} power={power} />}
     </div>
   </Modal>;
 }

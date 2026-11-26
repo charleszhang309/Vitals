@@ -43,7 +43,7 @@ function usePosition(track, received) {
 const emptyPlayback = {
   desktop_unavailable: '等待 Windows 桌面会话',
   media_unavailable: 'Windows 媒体会话暂不可用',
-  agent_offline: 'MacBook 已休眠或离线',
+  mac_media_unavailable: 'macOS 媒体会话暂不可用',
 };
 
 function PlayerCard({ media, onOpen, onAction }) {
@@ -77,7 +77,7 @@ function PlayerCard({ media, onOpen, onAction }) {
           <h3>{track.title || '未命名媒体'}</h3>
           {track.artist && <p>{track.artist}</p>}
           <span className="muted media-playback-status">{[track.player, playbackLabels[track.status]].filter(Boolean).join(' · ')}</span>
-        </> : <p className="section-empty">{emptyPlayback[media.reason] ?? '当前未在播放媒体'}</p>}
+        </> : <p className="section-empty">{media.offlineLabel ?? emptyPlayback[media.reason] ?? '当前未在播放媒体'}</p>}
       </div>
     </div>
     {track && duration > 0 && <div className="player-card-progress numeric">
@@ -366,28 +366,29 @@ function PlaybackControls({ media, sound, open, onOpenChange, onAction, commandS
   </>;
 }
 
-function HostControl({ sample, power, onMonitor, ...player }) {
-  const sound = useSystemVolume(sample?.platform);
-  const mac = sample?.platform === 'macos';
+function HostControl({ sample, platform, power, onMonitor, media, ...player }) {
+  const sound = useSystemVolume(platform);
+  const reason = platform === 'macos' && emptyPlayback[media.reason] ? 'mac_media_unavailable' : media.reason;
   return <>
-    <HardwareSummary sample={sample} power={power.data} onOpen={onMonitor} />
-    {mac ? <MacQuickControlCard /> : <div className="host-control-grid">
+    <HardwareSummary sample={sample} platform={platform} power={power.data} onOpen={onMonitor} />
+    {platform === 'macos' && <MacQuickControlCard />}
+    {platform === 'windows' && <div className="host-control-grid">
       <PowerCard controller={power} />
       <QuickControlCard />
     </div>}
-    <PlaybackControls sound={sound} {...player} />
+    <PlaybackControls sound={sound} media={{ ...media, reason }} {...player} />
   </>;
 }
 
-export default function ControlPage({ devices, device, onDevice, onAgentCommand, onAgentActivity, ...props }) {
+export default function ControlPage({ hub, devices, device, onDevice, onAgentCommand, onAgentActivity, ...props }) {
   return <>
     <div className="page-heading control-heading"><h1>控制</h1>
-      <DevicePicker id="control-device" platform={props.sample?.platform} devices={devices} device={device} onChange={onDevice} />
+      <DevicePicker id="control-device" hub={hub} devices={devices} device={device} onChange={onDevice} />
     </div>
     {device ? <RemoteControl key={device.device_id} device={device} onMonitor={props.onMonitor}
       onCommand={onAgentCommand} onActivity={onAgentActivity}>
       {(playback) => <PlaybackControls {...playback} open={props.open} onOpenChange={props.onOpenChange} />}
     </RemoteControl>
-      : <HostControl {...props} />}
+      : <HostControl platform={hub.platform} {...props} />}
   </>;
 }

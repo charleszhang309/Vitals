@@ -125,7 +125,7 @@ class Caffeinate:
                 self._stop()
             else:
                 self.process = subprocess.Popen(
-                    ["/usr/bin/caffeinate", "-di", "-w", str(os.getpid())],
+                    ["/usr/bin/caffeinate", "-dimsu", "-w", str(os.getpid())],
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
 

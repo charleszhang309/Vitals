@@ -8,6 +8,9 @@ from hashlib import sha256
 from hmac import compare_digest
 from io import BytesIO
 import json
+import logging
+import re
+import sqlite3
 from threading import Lock
 from time import monotonic
 from typing import Annotated, Literal
@@ -16,13 +19,15 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from PIL import Image
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, IPvAnyAddress, StrictBool, StringConstraints
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, IPvAnyAddress, StrictBool, StringConstraints, ValidationError
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
 from .lyrics import metadata_track_id
 
 
 OFFLINE_AFTER = 15
+PROFILE_INTERVAL = 15
 RESULT_TIMEOUT = 60
 KEEPALIVE_SECONDS = 20
 STREAM_FALLBACK_DELAY = 0.75
@@ -31,6 +36,8 @@ MAX_COMMANDS = 32
 DEVICE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 HASH_PATTERN = r"^[a-f0-9]{64}$"
 MAX_ARTWORK = 512 * 1024
+HUB_DEVICE_ID = "hub"
+logger = logging.getLogger(__name__)
 DeviceId = Annotated[str, Path(pattern=DEVICE_PATTERN)]
 Digest = Annotated[str, StringConstraints(pattern=HASH_PATTERN)]
 DeviceUID = Annotated[str, StringConstraints(min_length=1, max_length=256)]
@@ -200,6 +207,11 @@ class CommandResult(EmptyPayload):
     message: str = Field(default="", max_length=500)
 
 
+class AliasChange(EmptyPayload):
+    device_id: str = Field(pattern=DEVICE_PATTERN)
+    alias: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)] | None
+
+
 @dataclass
 class AgentCommand:
     action: str
@@ -225,6 +237,7 @@ class Device:
     commands: dict[UUID, AgentCommand] = field(default_factory=dict)
     artwork: tuple[str, bytes] | None = None
     stream_wake: asyncio.Event | None = None
+    persisted_at: float | None = None
 
     def online(self, now):
         return now - self.heartbeat_at <= OFFLINE_AFTER
@@ -239,11 +252,85 @@ class Device:
 
 
 class AgentRegistry:
-    def __init__(self):
+    def __init__(self, connect=None):
         self.devices: dict[str, Device] = {}
+        self._aliases: dict[str, str] = {}
+        self.connect = connect
+        self.profiles_ready = False
         self.lock = Lock()
 
+    def restore_profiles(self):
+        with self.connect() as db:
+            rows = db.execute("SELECT device_id, alias, snapshot, last_seen FROM agent_profiles ORDER BY last_seen DESC").fetchall()
+        with self.lock:
+            self._aliases = {row["device_id"]: row["alias"] for row in rows if row["alias"]}
+            for row in rows:
+                device_id = row["device_id"]
+                if device_id == HUB_DEVICE_ID or not row["snapshot"] or not re.fullmatch(DEVICE_PATTERN, device_id):
+                    continue
+                try:
+                    snapshot = Heartbeat.model_validate_json(row["snapshot"]).model_dump(mode="json")
+                    seen = datetime.fromisoformat(row["last_seen"])
+                    if seen.utcoffset() is None:
+                        continue
+                except (ValidationError, ValueError, TypeError):
+                    continue
+                self.devices[device_id] = Device(snapshot, seen, float("-inf"))
+                if len(self.devices) >= MAX_DEVICES:
+                    break
+            self.profiles_ready = True
+
+    @staticmethod
+    def save_profile(db, device_id, device):
+        db.execute("""INSERT INTO agent_profiles(device_id,snapshot,last_seen) VALUES(?,?,?)
+                      ON CONFLICT(device_id) DO UPDATE SET snapshot=excluded.snapshot,last_seen=excluded.last_seen""",
+                   (device_id, json.dumps(device.snapshot, ensure_ascii=False), device.last_seen.isoformat()))
+
+    def flush_profiles(self):
+        with self.lock, self.connect() as db:
+            for device_id, device in self.devices.items():
+                if device.persisted_at is not None:
+                    self.save_profile(db, device_id, device)
+
+    def aliases(self):
+        with self.lock:
+            return dict(self._aliases)
+
+    def rename(self, payload):
+        with self.lock:
+            with self.connect() as db:
+                if payload.alias is None:
+                    db.execute("UPDATE agent_profiles SET alias=NULL WHERE device_id=?", (payload.device_id,))
+                    db.execute("DELETE FROM agent_profiles WHERE device_id=? AND snapshot IS NULL", (payload.device_id,))
+                else:
+                    db.execute("""INSERT INTO agent_profiles(device_id,alias) VALUES(?,?)
+                                  ON CONFLICT(device_id) DO UPDATE SET alias=excluded.alias""",
+                               (payload.device_id, payload.alias))
+            if payload.alias is None:
+                self._aliases.pop(payload.device_id, None)
+            else:
+                self._aliases[payload.device_id] = payload.alias
+            return dict(self._aliases)
+
+    def remove(self, device_id):
+        if device_id == HUB_DEVICE_ID:
+            raise HTTPException(409, "不能移除本机 Hub")
+        with self.lock:
+            device = self.devices.get(device_id)
+            if device is None:
+                raise HTTPException(404, "找不到该设备")
+            if device.online(monotonic()):
+                raise HTTPException(409, "只能移除离线设备")
+            with self.connect() as db:
+                db.execute("DELETE FROM agent_profiles WHERE device_id=?", (device_id,))
+            self._aliases.pop(device_id, None)
+            del self.devices[device_id]
+            wake, device.stream_wake = device.stream_wake, None
+            return wake
+
     def heartbeat(self, device_id, snapshot):
+        if device_id == HUB_DEVICE_ID:
+            raise HTTPException(422, "设备 ID hub 保留给本机")
         network_info = snapshot.network_info
         snapshot = snapshot.model_dump(mode="json")
         if network_info and network_info.interfaces:
@@ -267,6 +354,13 @@ class AgentRegistry:
                     raise HTTPException(409, "Agent 设备数量已达上限")
                 device = self.devices[device_id] = Device(snapshot, seen, now)
             device.snapshot, device.last_seen, device.heartbeat_at = snapshot, seen, now
+            if self.profiles_ready and (device.persisted_at is None or now - device.persisted_at >= PROFILE_INTERVAL):
+                device.persisted_at = now
+                try:
+                    with self.connect() as db:
+                        self.save_profile(db, device_id, device)
+                except sqlite3.Error:
+                    logger.warning("无法持久化 Agent 快照")
             minimum_age = STREAM_FALLBACK_DELAY if device.stream_wake is not None else 0
             commands = list(device.claim(now, minimum_age))
             media = snapshot["media"] or {}
@@ -312,7 +406,7 @@ class AgentRegistry:
         with self.lock:
             now = monotonic()
             return [
-                {"device_id": device_id, "name": device.snapshot["name"], "os": device.snapshot["os"],
+                {"device_id": device_id, "name": self._aliases.get(device_id, device.snapshot["name"]), "os": device.snapshot["os"],
                  "snapshot": self.public_snapshot(device), "last_seen": device.last_seen.isoformat(), "online": device.online(now),
                  "commands": [{"id": str(identifier), "action": command.action, "status": command.status(now),
                                **(command.result.model_dump() if command.result else {}),
@@ -362,7 +456,9 @@ class AgentRegistry:
     async def stream(self, device_id):
         wake = asyncio.Event()
         with self.lock:
-            device = self.devices[device_id]
+            device = self.devices.get(device_id)
+            if device is None:
+                return
             if device.stream_wake is not None:
                 device.stream_wake.set()
             device.stream_wake = wake
@@ -421,6 +517,21 @@ def agents_router(registry, authenticate):
     def list_agents(response: Response):
         response.headers["Cache-Control"] = "no-store"
         return {"devices": registry.list()}
+
+    @router.get("/aliases")
+    def aliases(response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return {"aliases": registry.aliases()}
+
+    @router.patch("/aliases")
+    def rename(payload: AliasChange):
+        return {"aliases": registry.rename(payload)}
+
+    @router.delete("/{device_id}", status_code=204)
+    async def remove(device_id: DeviceId):
+        wake = await run_in_threadpool(registry.remove, device_id)
+        if wake is not None:
+            wake.set()
 
     @router.post("/{device_id}/heartbeat", dependencies=[Depends(authenticate)])
     def heartbeat(device_id: DeviceId, payload: Heartbeat):

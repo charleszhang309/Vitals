@@ -2,7 +2,8 @@
 
 # Vitals
 
-**轻量级 Windows 个人状态台与跨设备控制台**  
+**轻量级 Windows / macOS 个人状态台与跨设备控制台**
+
 集「今日概览」「媒体与音量控制」「Windows 实时硬件监控」「跨设备图文/文件中转站」「可选 AI 助手」于一体，采用极简卡片与 Liquid Glass（液态玻璃）设计。
 
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6?style=flat-square&logo=windows)
@@ -40,7 +41,7 @@
 - **每日一句 AI 状态简报（可选）**：按本地自然日缓存，结合天气、健康与今日日程，支持 Bark 定时推送。
 
 ### 2. 控制中心（支持 Windows & MacBook 多设备切换）
-- **MacBook 轻量探针接入（`mac_agent/`）**：通过出站 SSE 实时指令通道连接 Windows 中心，在「控制」页顶部无缝切换 `Windows | MacBook`，实时查看 Mac 电池电量/健康度/循环次数、CPU/内存/主盘与 Top 5 进程，远程毫秒级控制息屏、休眠、保持唤醒（Caffeinate）、音量/输出设备与一键推送剪贴板，并支持 **Apple 提醒事项（Reminders）与 Vitals 待办双向同步**。
+- **Mac 轻量探针接入（`mac_agent/`）**：通过出站 SSE 实时指令通道接入 Hub。在「控制」中切换设备，查看 CPU、内存、主盘空间、内存占用前 5 进程和可用的电池数据，也可远程控制息屏、休眠、保持唤醒、音量与输出设备，或一键推送剪贴板。支持 **Apple 提醒事项与 Vitals 待办双向同步**。
 - **跨播放器媒体控制**：Windows 基于原生 **SMTC**（支持 Apple Music / QQ 音乐 / 网易云 / Spotify / 浏览器），MacBook 基于 AppleScript；卡片内直接支持快捷切歌与进度条，点击进入 **Apple Music 风格全屏播放 + AMLL 动态歌词**。
 - **系统音量与输出设备**：实时调节 Windows / MacBook 主音量、一键静音及切换音频输出设备。
 
@@ -108,7 +109,9 @@ Pop-Location
 ./start_service.sh
 ```
 
-打开 `http://127.0.0.1:3993/`。脚本会创建 `.venv`、安装后端依赖、初始化 `config.json` 并按需构建前端。需要隔离测试或迁移时，可以指定 `--host`、`--port`、`--data-dir`、`--config`。原生媒体使用已运行的 Apple Music 或 Spotify。macOS 弹出自动化授权时，允许 Vitals 使用的终端或 Python 控制播放器。安装可选的 `SwitchAudioSource` 后，控制页会提供音频输出设备切换。
+打开 `http://127.0.0.1:3993/`。脚本会创建 `.venv`、安装后端依赖、初始化 `config.json` 并按需构建前端。需要隔离测试或迁移时，可以指定 `--host`、`--port`、`--data-dir`、`--config`。通过 Tailscale Serve 访问时，请将代理指向本机 3993 端口。
+
+macOS 作为 Hub 时，控制页提供息屏、休眠和保持唤醒。电池信息仅在检测到电池时显示，Mac mini、Mac Studio 和 iMac 会自动省略此项。保持唤醒使用系统自带的 `caffeinate -dimsu`。原生媒体支持已运行的 Apple Music 或 Spotify，使用时请允许 Vitals 的终端或 Python 获得 macOS 自动化授权。安装可选的 `SwitchAudioSource` 后，控制页会提供音频输出设备切换。
 
 以当前登录用户安装 LaunchAgent，无需 `sudo`。
 
@@ -120,12 +123,23 @@ Pop-Location
 
 ### 备份与迁移
 
+1. 在来源主机打开「个性化设置 → 系统状态 → 数据备份与迁移」，点击「导出数据备份 (.zip)」。
+2. 在目标主机安装 Vitals，按 `config.example.json` 单独配置 Tailscale 地址、密钥与集成。打开同一个设置区块，点击「导入备份恢复」，选择 ZIP 并确认。
+3. 页面提示校验通过后，重启目标主机上的 Vitals 服务。恢复会替换目标的数据库、中转站附件和壁纸。
+
+也可从命令行导出或导入：
 ```bash
 curl --fail -OJ http://127.0.0.1:3993/api/system/backup
 curl --fail -F 'file=@vitals-backup-YYYYMMDD.zip' http://127.0.0.1:3993/api/system/backup/restore
 ```
 
-备份包含 SQLite 快照、中转站附件和壁纸。需在新主机单独配置 `config.json`。归档与解压数据总大小各限 4 GiB，单文件限 2 GiB，壁纸限 10 MiB。恢复接口返回 HTTP 202 后，重启 Vitals 生效。默认数据目录的旧版本保存在 `backups/data/previous-*`，可在停机后用于回退。
+备份包含 SQLite 快照（包括设备昵称和最近快照）、中转站附件和壁纸。`config.json` 单独维护，默认主控设备等浏览器偏好存于浏览器本地。归档与解压数据总大小各限 4 GiB，单文件限 2 GiB，壁纸限 10 MiB。恢复接口返回 HTTP 202 后，重启 Vitals 生效。默认数据目录的旧版本保存在 `backups/data/previous-*`，可在停机后用于回退。
+
+### 多设备与默认主控设备
+
+选择一台 Windows 或 macOS 主机充当 Hub。其余设备安装 Agent，使用各自稳定的设备 ID，连接同一 Hub 地址并配置相同的 `agents.token`。网页在「控制」和硬件详情内提供设备切换。
+
+在「个性化设置 → 系统状态 → 设备管理」可保存昵称（清空后保存即恢复原名），也可移除离线设备。昵称与最近设备快照跨浏览器、跨 Hub 重启保留，设备重新心跳后会自动显示在线。「默认主控设备」是当前浏览器的偏好，应用于今日概览的主机和正在播放状态，以及进入控制页时的默认选择。默认设备被移除后自动回到当前 Hub。
 
 ---
 
@@ -226,12 +240,12 @@ Vitals 默认仅允许本机回环与 Tailscale 私有网络访问（内置 `Pri
 <details>
 <summary>远程设备 Agent 与 Apple 提醒事项</summary>
 
-在 Windows 中心端的本机 `config.json` 中设置 `agents.token`，并在 Agent 端配置同一密钥。通过 Tailscale 私有 HTTPS 访问中心端。心跳、执行结果与提醒事项同步都要求 `Authorization: Bearer <token>`。密钥为空时，三个入口返回 HTTP 503。网页查询和入队继续使用 Vitals 的私有网络访问规则。
+在 Hub 的本机 `config.json` 中设置 `agents.token`，并在 Agent 端配置同一密钥。通过 Tailscale 私有 HTTPS 访问中心端。心跳、执行结果与提醒事项同步都要求 `Authorization: Bearer <token>`。密钥为空时，三个入口返回 HTTP 503。网页查询和入队继续使用 Vitals 的私有网络访问规则。
 
 - Agent 可每 5 秒向 `POST /api/agents/{device_id}/heartbeat` 上报一次。设备 ID 使用稳定的字母、数字、短横线、下划线或点。快照必填 `name`、`os` 和带时区的 `timestamp`，其余指标可按设备支持情况上报。
 - `battery` 支持 `percent`、`charging`、`state`、`minutes_left`、`cycle_count`、`health_percent` 和 `temperature_c`。CPU 使用 `usage_percent`，内存使用 `used_bytes`、`total_bytes` 和 `percent`。磁盘条目使用 `mountpoint`、`free_bytes`、`total_bytes`，可加 `name`。进程条目使用 `name`、`rss_bytes` 和可选的 `pid`。网速使用 `download_bytes_per_sec` 和 `upload_bytes_per_sec`，网卡 IP 使用 `network.interfaces` 或 `network_info.interfaces`。保持唤醒状态通过 `caffeinate` 上报。
 - 音量支持 `percent`、`muted`、`device_id` 和 `devices: [{id, name}]`。全屏播放器读取媒体的 `title`、`artist`、`album`、`status`、`player`、`position_seconds`、`duration_seconds`、`track_id` 和 `artwork_version`，用与 Windows 相同的歌词服务。若心跳返回 `artwork_needed: true`，Agent 使用 `POST /api/agents/{device_id}/artwork?version=…` 上传最长边不超过 512 像素、最大 512 KiB 的 JPEG 封面。
-- 心跳响应为 `{"commands":[{"id":"…","action":"volume_set","payload":{"percent":40}}]}`。已下发的指令不会重复发送。Agent 完成后向 `POST /api/agents/{device_id}/commands/{cmd_id}/result` 回报 `{"ok":true,"message":"已完成"}`。心跳超过 15 秒未到达时，网页将设备标为离线并禁用操作。设备状态和指令队列保存在中心端内存中。
+- 心跳响应为 `{"commands":[{"id":"…","action":"volume_set","payload":{"percent":40}}]}`。已下发的指令不会重复发送。Agent 完成后向 `POST /api/agents/{device_id}/commands/{cmd_id}/result` 回报 `{"ok":true,"message":"已完成"}`。心跳超过 15 秒未到达时，网页保留最近快照、标为离线并禁用操作。指令队列存于中心端内存，最近快照定期写入 SQLite。
 - 已注册的 Agent 可通过带 Bearer 密钥的 `GET /api/agents/{device_id}/commands/stream` 接收 SSE 指令。中心端发送 `command` 事件与 20 秒保活注释。指令流断开或迟滞时，心跳可领取仍在队列中的指令。同一条指令最多下发一次，执行结果由 Agent 单独回报。
 - 浏览器通过 `GET /api/agents` 查看 `devices`，通过 `POST /api/agents/{device_id}/command` 入队。音量指令 `volume_set` 接收 `{"percent":40}`，`volume_mute` 接收 `{"muted":true}`，`audio_device_set` 接收已上报设备的 `{"device_id":"…"}`。播放、息屏锁屏、休眠和保持唤醒操作使用空载荷。点击「推剪贴板」会将 Mac 剪贴板的图片或文字发送到中转站。
 
@@ -252,6 +266,8 @@ Apple 提醒事项 Agent 通过 `POST /api/todos/sync/reminders` 同步。请求
 | `GET / POST /api/media/...` | 读取/控制 Windows SMTC 媒体会话、多源歌词与系统音量 |
 | `GET /api/agents` & `POST /api/agents/{device_id}/{heartbeat,command}` | 远程设备快照、心跳与白名单指令 |
 | `POST /api/agents/{device_id}/commands/{cmd_id}/result` | 回报远程指令执行结果 |
+| `GET / PATCH /api/agents/aliases` & `DELETE /api/agents/{device_id}` | 查询和修改昵称，移除离线远程设备 |
+| `GET /api/system/info` & `GET /api/system/backup` & `POST /api/system/backup/restore` | 本机平台、ZIP 备份与重启恢复 |
 | `GET / POST / DELETE /api/scratchpad...` | 中转站文本/文件存取、固定、预览与清理设置 |
 | `GET /api/weather` | 获取天气、未来预报与 US AQI |
 | `POST /api/health/ingest` & `GET /api/health/...` | 导入 Apple / Android 健康 JSON 与查询健康摘要/详情 |

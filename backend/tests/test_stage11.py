@@ -38,6 +38,7 @@ def test_backup_online_round_trip_applies_on_restart(tmp_path):
         async with live_client(data, config) as api:
             note = (await api.post("/api/scratchpad/text", json={"text": "before backup"})).raise_for_status().json()
             blob = (await api.post("/api/scratchpad/file", files={"file": ("sample.bin", b"payload")})).raise_for_status().json()
+            (await api.patch("/api/agents/aliases", json={"device_id": "hub", "alias": "Test Hub"})).raise_for_status()
             (data / "config.json").write_text("secret", encoding="utf-8")
             response = await api.get("/api/system/backup")
             assert response.status_code == 200
@@ -47,6 +48,7 @@ def test_backup_online_round_trip_applies_on_restart(tmp_path):
                 assert "app.db" in file.namelist()
                 assert not any("config" in name for name in file.namelist())
             assert (await api.delete(f"/api/scratchpad/{note['id']}")).status_code == 204
+            (await api.patch("/api/agents/aliases", json={"device_id": "hub", "alias": None})).raise_for_status()
             staged = await api.post(
                 "/api/system/backup/restore", files={"file": ("backup.zip", response.content, "application/zip")}
             )
@@ -56,6 +58,7 @@ def test_backup_online_round_trip_applies_on_restart(tmp_path):
         async with live_client(data, config) as api:
             assert len((await api.get("/api/scratchpad")).json()) == 2
             assert (await api.get(f"/api/scratchpad/files/{blob['id']}")).content == b"payload"
+            assert (await api.get("/api/agents/aliases")).json() == {"aliases": {"hub": "Test Hub"}}
         assert "not-in-backup" in config.read_text()
 
     asyncio.run(verify())
