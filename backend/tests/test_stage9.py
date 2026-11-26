@@ -195,3 +195,68 @@ def test_reminders_newest_wins_and_stale_data_cannot_resurrect_tombstone(tmp_pat
             assert (await client.get("/api/todos")).json()["items"] == []
 
     asyncio.run(verify())
+
+
+def test_remote_media_artwork_and_upgrade_commands(tmp_path, monkeypatch):
+    from hashlib import sha256
+    from io import BytesIO
+
+    from PIL import Image
+    from backend.lyrics import LyricsCache
+
+    artwork = BytesIO()
+    Image.new("RGB", (64, 32), "blue").save(artwork, "JPEG")
+    contents = artwork.getvalue()
+    track_id = "a" * 64
+    version = sha256(track_id.encode() + contents).hexdigest()
+    snapshot = {**SNAPSHOT, "caffeinate": False,
+                "media": {**SNAPSHOT["media"], "album": "Sample album", "track_id": track_id,
+                          "artwork_version": version, "position_seconds": 6, "duration_seconds": 200,
+                          "updated_at": SNAPSHOT["timestamp"]}}
+
+    async def mock_lyrics(self, client, track, *, refresh):
+        return {"status": "synced", "album": track["album"]}
+
+    monkeypatch.setattr(LyricsCache, "get", mock_lyrics)
+
+    async def verify():
+        app = create_app(Settings(agents={"token": "fixture-agent-token"}), tmp_path, static_dir=tmp_path / "no-static")
+        app.state.external_client = object()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as client:
+            async def heart(data):
+                response = await client.post(AGENT + "/heartbeat", json=data, headers=AUTH)
+                assert response.status_code == 200, response.text
+                return response.json()
+
+            async def read():
+                return (await client.get("/api/agents")).json()["devices"][0]
+
+            art_path = AGENT + "/artwork"
+            query = {"version": version}
+            upload_headers = {**AUTH, "Content-Type": "image/jpeg"}
+            assert (await heart(snapshot))["artwork_needed"] is True
+            assert (await read())["snapshot"]["media"]["artwork_version"] is None
+            assert (await client.post(art_path, params=query, content=contents)).status_code == 401
+            assert (await client.post(art_path, params=query, content=b"fake", headers=upload_headers)).status_code == 422
+            assert (await client.post(art_path, params=query, content=contents, headers=upload_headers)).status_code == 204
+            assert (await heart(snapshot))["artwork_needed"] is False
+            assert (await read())["snapshot"]["media"]["artwork_version"] == version
+            cover = await client.get(art_path, params=query)
+            assert cover.content == contents and cover.headers["Content-Type"] == "image/jpeg"
+            assert (await client.get(art_path, params=query, headers={"If-None-Match": cover.headers["etag"]})).status_code == 304
+
+            params = {"agent_id": "macbook", "track_id": track_id}
+            assert (await client.get("/api/media/lyrics", params=params)).json() == {"status": "synced", "album": "Sample album"}
+            assert (await client.get("/api/media/lyrics", params={**params, "track_id": "b" * 64})).json()["status"] == "missing"
+
+            changes = {"display_lock": {}, "caffeinate_toggle": {}, "clipboard_push": {},
+                       "audio_device_set": {"device_id": "BuiltInSpeakerDevice"}}
+            for action, payload in changes.items():
+                reply = await client.post(AGENT + "/command", json={"action": action, "payload": payload})
+                assert reply.status_code == 202
+            assert (await client.post(AGENT + "/command", json={"action": "audio_device_set", "payload": {}})).status_code == 422
+            assert {cmd["action"]: cmd["payload"] for cmd in (await heart(snapshot))["commands"]} == changes
+            await heart({**snapshot, "media": None})
+            assert (await client.get(art_path, params=query)).status_code == 404
+
+    asyncio.run(verify())

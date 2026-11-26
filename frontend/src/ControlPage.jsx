@@ -35,6 +35,7 @@ function usePosition(track, received) {
     return () => window.clearInterval(timer);
   }, [playing]);
   if (!track) return 0;
+  if (!Number.isFinite(track.position_seconds)) return null;
   const elapsed = playing ? Math.max(0, now - received) / 1000 * (track.playback_rate || 1) : 0;
   return Math.max(0, Math.min(track.duration_seconds ?? Infinity, track.position_seconds + elapsed));
 }
@@ -44,7 +45,7 @@ const emptyPlayback = {
   media_unavailable: 'Windows 媒体会话暂不可用',
 };
 
-function PlayerCard({ media, onOpen }) {
+function PlayerCard({ media, onOpen, children }) {
   const { track } = media;
   return <section className="surface panel detail-tile player-card" aria-labelledby="player-heading">
     <div className="panel-header"><h2 id="player-heading">正在播放</h2></div>
@@ -57,29 +58,32 @@ function PlayerCard({ media, onOpen }) {
         </> : <p className="section-empty">{emptyPlayback[media.reason] ?? '当前未在播放媒体'}</p>}
       </div>
     </div>
-    <button className="detail-link" type="button" aria-label="展开正在播放" aria-haspopup="dialog" onClick={onOpen}>
+    {children}
+    {onOpen && <button className="detail-link" type="button" aria-label="展开正在播放" aria-haspopup="dialog" onClick={onOpen}>
       <Maximize2 size={17} aria-hidden="true" />
-    </button>
+    </button>}
   </section>;
 }
 
 function useTrackLyrics(track) {
   const [reply, setReply] = useState(null);
   const sessionId = track?.session_id;
+  const agentId = track?.agent_id;
   const trackId = track?.track_id;
   const lookupKey = sessionId && trackId && track.title?.trim() && track.artist?.trim() ? `${sessionId}:${trackId}` : '';
 
   useEffect(() => {
     if (!lookupKey) return undefined;
     const controller = new AbortController();
-    const params = new URLSearchParams({ session_id: sessionId, track_id: trackId });
+    const params = new URLSearchParams({ track_id: trackId,
+      ...(agentId ? { agent_id: agentId } : { session_id: sessionId }) });
     request(`/api/media/lyrics?${params}`, { signal: controller.signal }).then((data) => {
       if (!controller.signal.aborted) setReply({ key: lookupKey, data });
     }).catch(() => {
       if (!controller.signal.aborted) setReply({ key: lookupKey, data: null });
     });
     return () => controller.abort();
-  }, [lookupKey, sessionId, trackId]);
+  }, [agentId, lookupKey, sessionId, trackId]);
 
   return reply?.key === lookupKey ? reply.data : null;
 }
@@ -229,7 +233,7 @@ function VolumeCard({ sound }) {
   </section>;
 }
 
-function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose }) {
+function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose, onAction }) {
   const { track, sessions } = media;
   const lyrics = useTrackLyrics(track);
   const hasLyrics = Boolean(lyrics?.amll_lines?.length || lyrics?.lines?.some((line) => line.text) || lyrics?.plain?.trim());
@@ -240,14 +244,15 @@ function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose }) {
   const playing = track?.status === 'playing';
   const action = track?.actions.toggle ? 'toggle' : playing ? 'pause' : 'play';
   const duration = track?.duration_seconds;
-  const progress = duration > 0 ? position / duration * 100 : null;
+  const progress = duration > 0 && position != null ? position / duration * 100 : null;
 
   async function send(operation) {
     if (pending || !track?.actions[operation]) return;
     setPending(true);
     setFeedback('');
     try {
-      await postJson('/api/media/action', { action: operation, session_id: track.session_id });
+      if (onAction) await onAction(operation);
+      else await postJson('/api/media/action', { action: operation, session_id: track.session_id });
     } catch (error) {
       setFeedback(error.message);
     } finally {
@@ -277,6 +282,7 @@ function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose }) {
           <div className="now-track">
             <h3>{track ? track.title || '未命名媒体' : emptyPlayback[media.reason] ?? '当前未在播放媒体'}</h3>
             {track?.artist && <p>{track.artist}</p>}
+            {track?.album && <p className="muted">{track.album}</p>}
           </div>
         </div>
         {track && <div className="now-progress">
@@ -331,7 +337,8 @@ export default function ControlPage({ devices, device, onDevice, onAgentCommand,
     <div className="page-heading control-heading"><h1>控制</h1>
       <DevicePicker id="control-device" devices={devices} device={device} onChange={onDevice} />
     </div>
-    {device ? <RemoteControl key={device.device_id} device={device} onMonitor={props.onMonitor} onCommand={onAgentCommand} />
+    {device ? <RemoteControl key={device.device_id} device={device} onMonitor={props.onMonitor} onCommand={onAgentCommand}
+      PlayerCard={PlayerCard} NowPlaying={NowPlaying} />
       : <WindowsControl {...props} />}
   </>;
 }

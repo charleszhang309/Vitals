@@ -2,22 +2,30 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from hashlib import sha256
 from hmac import compare_digest
+from io import BytesIO
 from threading import Lock
 from time import monotonic
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool, StringConstraints
+from PIL import Image
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, IPvAnyAddress, StrictBool, StringConstraints
 
 
 OFFLINE_AFTER = 15
 RESULT_TIMEOUT = 60
 MAX_DEVICES = 32
 MAX_COMMANDS = 32
-DeviceId = Annotated[str, Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")]
+DEVICE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+HASH_PATTERN = r"^[a-f0-9]{64}$"
+MAX_ARTWORK = 512 * 1024
+DeviceId = Annotated[str, Path(pattern=DEVICE_PATTERN)]
+Digest = Annotated[str, StringConstraints(pattern=HASH_PATTERN)]
+DeviceUID = Annotated[str, StringConstraints(min_length=1, max_length=256)]
 Label = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 Percent = Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)]
 Bytes = Annotated[int, Field(ge=0, strict=True)]
@@ -42,6 +50,9 @@ class Battery(BaseModel):
     charging: StrictBool
     state: Literal["charging", "charged", "discharging", "not_charging", "unknown"] | None = None
     minutes_left: Annotated[int, Field(ge=0, strict=True)] | None = None
+    cycle_count: Bytes | None = None
+    health_percent: Percent | None = None
+    temperature_c: Annotated[float, Field(ge=-50, le=100, allow_inf_nan=False)] | None = None
 
 
 class CPU(BaseModel):
@@ -56,11 +67,19 @@ class Memory(BaseModel):
 
 class Disk(BaseModel):
     mountpoint: Label
+    name: Label | None = None
     free_bytes: Bytes
     total_bytes: Bytes
 
 
+class NetworkInterface(BaseModel):
+    name: Label
+    addresses: list[IPvAnyAddress] = Field(max_length=16)
+    tailscale: StrictBool = False
+
+
 class Network(BaseModel):
+    interfaces: list[NetworkInterface] = Field(default_factory=list, max_length=32)
     upload_bytes_per_sec: Speed | None = None
     download_bytes_per_sec: Speed | None = None
 
@@ -71,9 +90,16 @@ class Process(BaseModel):
     pid: Annotated[int, Field(ge=0, strict=True)] | None = None
 
 
+class AudioDevice(BaseModel):
+    id: DeviceUID
+    name: Label
+
+
 class Volume(BaseModel):
-    percent: Percent
-    muted: StrictBool
+    percent: Percent | None
+    muted: StrictBool | None
+    device_id: DeviceUID | None = None
+    devices: list[AudioDevice] = Field(default_factory=list, max_length=64)
 
 
 class Media(BaseModel):
@@ -81,6 +107,12 @@ class Media(BaseModel):
     artist: str = Field(default="", max_length=300)
     status: Literal["playing", "paused", "stopped", "unknown"] = "unknown"
     player: str = Field(default="", max_length=200)
+    album: str = Field(default="", max_length=300)
+    position_seconds: Speed | None = None
+    duration_seconds: Speed | None = None
+    updated_at: AwareDatetime | None = None
+    track_id: Digest | None = None
+    artwork_version: Digest | None = None
 
 
 class Heartbeat(BaseModel):
@@ -95,6 +127,7 @@ class Heartbeat(BaseModel):
     top_processes: list[Process] = Field(default_factory=list, max_length=64)
     volume: Volume | None = None
     media: Media | None = None
+    caffeinate: StrictBool | None = None
 
 
 class EmptyPayload(BaseModel):
@@ -109,6 +142,15 @@ class SetMute(EmptyPayload):
     muted: StrictBool
 
 
+class SetAudioDevice(EmptyPayload):
+    device_id: DeviceUID
+
+
+class AudioDeviceCommand(EmptyPayload):
+    action: Literal["audio_device_set"]
+    payload: SetAudioDevice
+
+
 class VolumeCommand(EmptyPayload):
     action: Literal["volume_set"]
     payload: SetVolume
@@ -120,11 +162,12 @@ class MuteCommand(EmptyPayload):
 
 
 class ButtonCommand(EmptyPayload):
-    action: Literal["media_play_pause", "media_next", "media_previous", "lock", "display_sleep", "sleep"]
+    action: Literal["media_play_pause", "media_next", "media_previous", "lock", "display_sleep", "display_lock",
+                    "sleep", "caffeinate_toggle", "clipboard_push"]
     payload: EmptyPayload = Field(default_factory=EmptyPayload)
 
 
-Command = Annotated[VolumeCommand | MuteCommand | ButtonCommand, Field(discriminator="action")]
+Command = Annotated[VolumeCommand | MuteCommand | AudioDeviceCommand | ButtonCommand, Field(discriminator="action")]
 
 
 class CommandResult(EmptyPayload):
@@ -154,6 +197,7 @@ class Device:
     last_seen: datetime
     heartbeat_at: float
     commands: dict[UUID, AgentCommand] = field(default_factory=dict)
+    artwork: tuple[str, bytes] | None = None
 
     def online(self, now):
         return now - self.heartbeat_at <= OFFLINE_AFTER
@@ -174,22 +218,58 @@ class AgentRegistry:
             if device is None:
                 if len(self.devices) >= MAX_DEVICES:
                     raise HTTPException(409, "Agent 设备数量已达上限")
-                self.devices[device_id] = Device(snapshot, seen, now)
-                return []
+                device = self.devices[device_id] = Device(snapshot, seen, now)
             device.snapshot, device.last_seen, device.heartbeat_at = snapshot, seen, now
             commands = []
             for identifier, command in device.commands.items():
                 if command.status(now) == "queued":
                     command.sent_at = now
                     commands.append({"id": str(identifier), "action": command.action, "payload": command.payload})
-            return commands
+            media = snapshot["media"] or {}
+            version = media.get("artwork_version") if media.get("track_id") else None
+            if device.artwork and device.artwork[0] != version:
+                device.artwork = None
+            response = {"commands": commands}
+            if version is not None:
+                response["artwork_needed"] = device.artwork is None
+            return response
+
+    @staticmethod
+    def public_snapshot(device):
+        snapshot = device.snapshot
+        media = snapshot["media"]
+        if media and media["artwork_version"] and not device.artwork:
+            return {**snapshot, "media": {**media, "artwork_version": None}}
+        return snapshot
+
+    def current_media(self, device_id):
+        with self.lock:
+            device = self.devices.get(device_id)
+            return device.snapshot["media"] if device and device.online(monotonic()) else None
+
+    def set_artwork(self, device_id, version, contents):
+        with self.lock:
+            device = self.devices.get(device_id)
+            media = device.snapshot["media"] if device else None
+            if not media or media["artwork_version"] != version or not media["track_id"]:
+                raise HTTPException(409, "封面与当前曲目不匹配")
+            if sha256(media["track_id"].encode() + contents).hexdigest() != version:
+                raise HTTPException(422, "封面版本无效")
+            device.artwork = version, contents
+
+    def get_artwork(self, device_id, version):
+        with self.lock:
+            device = self.devices.get(device_id)
+            if device and device.artwork and device.artwork[0] == version:
+                return device.artwork[1]
+        raise HTTPException(404, "该曲目暂无封面")
 
     def list(self):
         with self.lock:
             now = monotonic()
             return [
                 {"device_id": device_id, "name": device.snapshot["name"], "os": device.snapshot["os"],
-                 "snapshot": device.snapshot, "last_seen": device.last_seen.isoformat(), "online": device.online(now),
+                 "snapshot": self.public_snapshot(device), "last_seen": device.last_seen.isoformat(), "online": device.online(now),
                  "commands": [{"id": str(identifier), "action": command.action, "status": command.status(now),
                                **(command.result.model_dump() if command.result else {})}
                               for identifier, command in device.commands.items()]}
@@ -235,7 +315,35 @@ def agents_router(registry, authenticate):
 
     @router.post("/{device_id}/heartbeat", dependencies=[Depends(authenticate)])
     def heartbeat(device_id: DeviceId, payload: Heartbeat):
-        return {"commands": registry.heartbeat(device_id, payload)}
+        return registry.heartbeat(device_id, payload)
+
+    @router.post("/{device_id}/artwork", status_code=204, dependencies=[Depends(authenticate)])
+    async def upload_artwork(device_id: DeviceId, request: Request, version: Annotated[str, Query(pattern=HASH_PATTERN)]):
+        if request.headers.get("content-type", "").split(";", 1)[0].lower() != "image/jpeg":
+            raise HTTPException(415, "封面必须使用 image/jpeg")
+        data = bytearray()
+        async for chunk in request.stream():
+            if len(data) + len(chunk) > MAX_ARTWORK:
+                raise HTTPException(413, "封面过大")
+            data.extend(chunk)
+        try:
+            with Image.open(BytesIO(data), formats=["JPEG"]) as image:
+                if max(image.size) > 512:
+                    raise ValueError("oversize")
+                image.load()
+        except (OSError, ValueError, Image.DecompressionBombError):
+            raise HTTPException(422, "封面必须是最长边不超过 512 像素的有效 JPEG") from None
+        registry.set_artwork(device_id, version, bytes(data))
+
+    @router.get("/{device_id}/artwork")
+    def artwork(device_id: DeviceId, request: Request, version: Annotated[str, Query(pattern=HASH_PATTERN)]):
+        contents = registry.get_artwork(device_id, version)
+        etag = f'"{version}"'
+        headers = {"ETag": etag, "Cache-Control": "private, max-age=86400, immutable",
+                   "X-Content-Type-Options": "nosniff"}
+        if any(tag.strip() in {etag, "*"} for tag in request.headers.get("if-none-match", "").split(",")):
+            return Response(status_code=304, headers=headers)
+        return Response(contents, media_type="image/jpeg", headers=headers)
 
     @router.post("/{device_id}/command", status_code=202)
     def command(device_id: DeviceId, payload: Command):

@@ -189,7 +189,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     app.include_router(life_router(life, agent_auth))
     app.include_router(rates_router(rates, rate_pins, rate_history))
     app.include_router(ai_router(ai_state, store, power, briefing))
-    app.include_router(media_router(media, LyricsCache(store)))
+    app.include_router(media_router(media, LyricsCache(store), agents))
 
     @app.websocket("/ws/metrics")
     async def metrics(websocket: WebSocket):

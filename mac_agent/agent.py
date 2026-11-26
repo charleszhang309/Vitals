@@ -2,6 +2,7 @@
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from datetime import datetime, timezone
 import json
 import logging
@@ -20,7 +21,8 @@ if __package__ in ("", None):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mac_agent.api import CONFIG_PATH, Config
-from mac_agent.macos import Sampler, execute_command
+from mac_agent.clipboard import notify, push
+from mac_agent.macos import Caffeinate, Sampler, execute_command
 from mac_agent.reminders import sync_once
 from mac_agent.state import load_state, save_state, single_instance, state_directory
 
@@ -33,24 +35,40 @@ FAILURES = (httpx.HTTPError, OSError, RuntimeError, ValueError, TypeError, KeyEr
 logger = logging.getLogger(__name__)
 
 
-def heartbeat(client, config, sampler):
+def heartbeat(client, config, sampler, caffeinate):
     path = f"/api/agents/{config.device_id}/heartbeat"
+    snapshot = sampler.sample()
     response = client.post(path, json={
         "name": config.device_name, "os": "macos", "timestamp": datetime.now(timezone.utc).isoformat(),
-        **sampler.sample(),
+        "caffeinate": caffeinate.active(), **snapshot,
     })
     response.raise_for_status()
-    commands = response.json()["commands"]
+    data = response.json()
+    commands = data["commands"]
     if not isinstance(commands, list):
         raise ValueError("心跳响应中的 commands 必须是数组")
+    if data.get("artwork_needed") is True and snapshot["media"]:
+        version = snapshot["media"]["artwork_version"]
+        contents = sampler.playback.bytes_for(version)
+        if contents:
+            try:
+                upload = client.post(f"/api/agents/{config.device_id}/artwork", params={"version": version},
+                                     headers={"Content-Type": "image/jpeg"}, content=contents)
+                upload.raise_for_status()
+            except httpx.HTTPError as exc:
+                logger.warning("封面上传失败：%s", exc)
     return commands
 
 
-def process_commands(config, commands, directory):
+def process_commands(config, commands, directory, caffeinate):
     path = directory / "command-receipts.json"
     now = time()
     receipts = {key: value for key, value in load_state(path, {}).items() if now - value["time"] < RECEIPT_TTL}
     with config.client() as client:
+        def send_clipboard():
+            push(client)
+            notify("push")
+
         def report(command_id, receipt):
             route = f"/api/agents/{config.device_id}/commands/{command_id}/result"
             try:
@@ -83,7 +101,8 @@ def process_commands(config, commands, directory):
                 action = command.get("action")
                 if not isinstance(action, str):
                     raise ValueError("action 必须是字符串")
-                execute_command(action, command.get("payload", {}))
+                execute_command(action, command.get("payload", {}), caffeinate=caffeinate,
+                                clipboard_push=send_clipboard)
                 receipt["result"] = {"ok": True, "message": "已完成"}
             except FAILURES as exc:
                 receipt["result"] = {"ok": False, "message": str(exc)[:500]}
@@ -96,7 +115,7 @@ def run_agent(config, directory, stopped):
     next_heartbeat = next_reminders = monotonic()
     commands_task = reminders_task = None
     pending_commands = []
-    with (config.client(timeout=3) as client, config.client() as reminders_client,
+    with (closing(Caffeinate()) as caffeinate, config.client(timeout=3) as client, config.client() as reminders_client,
           ThreadPoolExecutor(max_workers=2) as workers):
         while not stopped.is_set():
             for task, label in ((commands_task, "指令回报"), (reminders_task, "提醒事项")):
@@ -117,9 +136,9 @@ def run_agent(config, directory, stopped):
             if now >= next_heartbeat:
                 next_heartbeat = now + HEARTBEAT_SECONDS
                 try:
-                    pending_commands.extend(heartbeat(client, config, sampler))
+                    pending_commands.extend(heartbeat(client, config, sampler, caffeinate))
                     if commands_task is None:
-                        commands_task = workers.submit(process_commands, config, pending_commands, directory)
+                        commands_task = workers.submit(process_commands, config, pending_commands, directory, caffeinate)
                         pending_commands = []
                 except FAILURES as exc:
                     logger.warning("心跳失败：%s", exc)
@@ -144,7 +163,7 @@ def main() -> int:
         parser.exit(1, "Vitals Mac agent 需要 macOS\n")
     try:
         if args.sample:
-            print(json.dumps(Sampler().sample(), ensure_ascii=False, indent=2))
+            print(json.dumps({"caffeinate": False, **Sampler(allow_artwork_download=False).sample()}, ensure_ascii=False, indent=2))
             return 0
         config = Config.load(args.config)
         if args.check_config:

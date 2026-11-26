@@ -41,6 +41,10 @@ export function useMedia(enabled) {
 }
 
 export function artworkUrl(track) {
+  if (track.agent_id) {
+    const query = new URLSearchParams({ version: track.artwork_version });
+    return httpUrl('/api/agents/' + encodeURIComponent(track.agent_id) + '/artwork?' + query).href;
+  }
   const query = new URLSearchParams({ session_id: track.session_id, version: track.artwork_version });
   return httpUrl(`/api/media/artwork?${query}`).href;
 }

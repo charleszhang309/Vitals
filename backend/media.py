@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
+from .agents import DEVICE_PATTERN
 from .config import ROOT
 from .lyrics import EMPTY_LYRICS, LyricsCache
 
@@ -125,7 +126,7 @@ class MediaBridge:
         return None
 
 
-def media_router(bridge, lyrics: LyricsCache):
+def media_router(bridge, lyrics: LyricsCache, agents=None):
     router = APIRouter(prefix="/api/media", tags=["media"])
 
     def local(request):
@@ -175,9 +176,10 @@ def media_router(bridge, lyrics: LyricsCache):
     async def track_lyrics(request: Request, response: Response,
                            session_id: Annotated[str | None, Query(pattern=ID_PATTERN)] = None,
                            track_id: Annotated[str | None, Query(pattern=ART_PATTERN)] = None,
-                           refresh: bool = False):
+                           refresh: bool = False,
+                           agent_id: Annotated[str | None, Query(pattern=DEVICE_PATTERN)] = None):
         response.headers["Cache-Control"] = "no-store"
-        track = await selected(request, session_id)
+        track = (agents.current_media(agent_id) if agents else None) if agent_id else await selected(request, session_id)
         if not track or (track_id and track["track_id"] != track_id):
             return EMPTY_LYRICS.copy()
         client = getattr(request.app.state, "external_client", None)
