@@ -65,11 +65,11 @@
 ## 快速开始
 
 ### 环境要求
-- **Windows 10 / 11**
+- **Windows 10 / 11** 或 **macOS**
 - **Python 3.10+**
 - **Node.js 20.19+** 或 **22.12+**（首次从源码构建前端所需）
 
-### 一键启动
+### Windows 一键启动
 在项目根目录直接双击或运行：
 
 ```powershell
@@ -101,6 +101,31 @@ Pop-Location
 ```
 
 </details>
+
+### macOS 一键启动与登录自启
+
+```bash
+./start_service.sh
+```
+
+打开 `http://127.0.0.1:3993/`。脚本会创建 `.venv`、安装后端依赖、初始化 `config.json` 并按需构建前端。需要隔离测试或迁移时，可以指定 `--host`、`--port`、`--data-dir`、`--config`。原生媒体使用已运行的 Apple Music 或 Spotify。macOS 弹出自动化授权时，允许 Vitals 使用的终端或 Python 控制播放器。安装可选的 `SwitchAudioSource` 后，控制页会提供音频输出设备切换。
+
+以当前登录用户安装 LaunchAgent，无需 `sudo`。
+
+```bash
+./macos/install_vitals_hub_launchd.sh
+```
+
+启动日志位于 `~/Library/Logs/vitals-hub.log`。需要重启 LaunchAgent 时，运行 `launchctl kickstart -k "gui/$(id -u)/com.vitals.hub"`。
+
+### 备份与迁移
+
+```bash
+curl --fail -OJ http://127.0.0.1:3993/api/system/backup
+curl --fail -F 'file=@vitals-backup-YYYYMMDD.zip' http://127.0.0.1:3993/api/system/backup/restore
+```
+
+备份包含 SQLite 快照、中转站附件和壁纸。需在新主机单独配置 `config.json`。归档与解压数据总大小各限 4 GiB，单文件限 2 GiB，壁纸限 10 MiB。恢复接口返回 HTTP 202 后，重启 Vitals 生效。默认数据目录的旧版本保存在 `backups/data/previous-*`，可在停机后用于回退。
 
 ---
 

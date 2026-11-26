@@ -10,6 +10,7 @@ from pathlib import Path
 import platform
 import re
 import socket
+import sys
 from time import monotonic
 from typing import Any
 from urllib.parse import quote
@@ -107,6 +108,30 @@ class SystemSampler:
             "network": {**rates, "interfaces": self.interfaces, "total_upload_bytes": net.bytes_sent if net else None,
                         "total_download_bytes": net.bytes_recv if net else None},
         }
+
+
+class MacSystemSampler:
+    def __init__(self):
+        from mac_agent.macos import Sampler
+
+        self.native = Sampler()
+
+    def sample(self) -> Snapshot:
+        sample = self.native.sample_hardware()
+        swap = psutil.swap_memory()
+        sample["cpu"].update(temperature_c=None, power_w=None)
+        sample["memory"].update(top_processes=sample.pop("top_processes"), virtual={
+            "used_bytes": swap.used, "available_bytes": swap.free, "total_bytes": swap.total, "percent": swap.percent,
+        })
+        for disk in sample["disks"]:
+            total = disk["total_bytes"]
+            disk["percent"] = round(100 * (total - disk["free_bytes"]) / total, 1) if total else 0
+        return sample
+
+
+def host_identity():
+    platform_name = {"darwin": "macos", "win32": "windows"}.get(sys.platform, sys.platform)
+    return {"platform": platform_name, "name": socket.gethostname()}
 
 
 def system_cpu_name() -> str | None:
@@ -499,9 +524,10 @@ class Rules:
 
 
 class Monitor:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, identity=None):
         self.settings = settings
-        self.system = SystemSampler()
+        self.identity = identity if identity is not None else host_identity()
+        self.system = MacSystemSampler() if self.identity["platform"] == "macos" else SystemSampler()
         self.rules = Rules(settings)
         self.latest: Snapshot | None = None
         self.subscribers: set[asyncio.Queue[Snapshot]] = set()
@@ -517,6 +543,8 @@ class Monitor:
             mailbox.put_nowait(snapshot)
 
     async def read_lhm(self, client: httpx.AsyncClient) -> Snapshot | None:
+        if self.identity["platform"] == "macos":
+            return None
         if self.lhm_retry_at is not None and monotonic() < self.lhm_retry_at:
             return None
 
@@ -547,7 +575,7 @@ class Monitor:
                     raise sample
                 if isinstance(hardware, BaseException):
                     raise hardware
-                sample["timestamp"] = utc_now()
+                sample.update(self.identity, timestamp=utc_now())
                 temperatures = merge_hardware(sample, hardware)
                 if power_snapshot is not None:
                     sample["power"] = power_snapshot()

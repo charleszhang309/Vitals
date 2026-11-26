@@ -3,7 +3,7 @@ import { Maximize2, MessageSquareQuote, Music2, Volume2, VolumeX } from 'lucide-
 import { postJson, request } from './api.js';
 import { IconButton, Modal, ProgressBar } from './ui.jsx';
 import { artworkUrl } from './useMedia.js';
-import { HardwareSummary, PowerCard, QuickControlCard } from './HostControls.jsx';
+import { HardwareSummary, MacQuickControlCard, PowerCard, QuickControlCard } from './HostControls.jsx';
 import { DevicePicker, RemoteControl } from './RemoteDevice.jsx';
 
 export const playbackLabels = { playing: '播放中', paused: '已暂停', stopped: '已停止', offline: '设备离线' };
@@ -143,7 +143,7 @@ function LyricsPanel({ lyrics, track, received }) {
   </section>;
 }
 
-function useSystemVolume() {
+function useSystemVolume(platform) {
   const [volume, setVolume] = useState(null);
   const [draft, setDraft] = useState(null);
   const [feedback, setFeedback] = useState('');
@@ -211,12 +211,14 @@ function useSystemVolume() {
     else if (!timer.current && !writing.current) timer.current = window.setTimeout(flush, 140);
   }
 
-  const percent = draft?.percent ?? volume?.percent ?? 0;
+  const percent = draft?.percent ?? volume?.percent ?? null;
   const muted = draft?.muted ?? volume?.muted ?? false;
   const output = draft?.device_id ?? volume?.device_id ?? '';
   const switching = draft?.device_id != null;
   const devices = volume?.devices ?? [];
-  return { available: volume?.available, percent, muted, output, switching, devices, feedback, queue, flush };
+  return { available: volume?.available, percent, muted, output, switching, devices, feedback, queue, flush,
+    canAdjust: Number.isFinite(volume?.percent), canMute: typeof volume?.muted === 'boolean',
+    unavailableLabel: platform === 'macos' ? '等待 macOS 音频设备' : undefined };
 }
 
 function PlaybackGlyph({ kind }) {
@@ -364,14 +366,15 @@ function PlaybackControls({ media, sound, open, onOpenChange, onAction, commandS
   </>;
 }
 
-function WindowsControl({ sample, power, onMonitor, ...player }) {
-  const sound = useSystemVolume();
+function HostControl({ sample, power, onMonitor, ...player }) {
+  const sound = useSystemVolume(sample?.platform);
+  const mac = sample?.platform === 'macos';
   return <>
     <HardwareSummary sample={sample} power={power.data} onOpen={onMonitor} />
-    <div className="host-control-grid">
+    {mac ? <MacQuickControlCard /> : <div className="host-control-grid">
       <PowerCard controller={power} />
       <QuickControlCard />
-    </div>
+    </div>}
     <PlaybackControls sound={sound} {...player} />
   </>;
 }
@@ -379,12 +382,12 @@ function WindowsControl({ sample, power, onMonitor, ...player }) {
 export default function ControlPage({ devices, device, onDevice, onAgentCommand, onAgentActivity, ...props }) {
   return <>
     <div className="page-heading control-heading"><h1>控制</h1>
-      <DevicePicker id="control-device" devices={devices} device={device} onChange={onDevice} />
+      <DevicePicker id="control-device" platform={props.sample?.platform} devices={devices} device={device} onChange={onDevice} />
     </div>
     {device ? <RemoteControl key={device.device_id} device={device} onMonitor={props.onMonitor}
       onCommand={onAgentCommand} onActivity={onAgentActivity}>
       {(playback) => <PlaybackControls {...playback} open={props.open} onOpenChange={props.onOpenChange} />}
     </RemoteControl>
-      : <WindowsControl {...props} />}
+      : <HostControl {...props} />}
   </>;
 }

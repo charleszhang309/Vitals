@@ -33,7 +33,7 @@ class ModeRequest(BaseModel):
 
 class DesktopRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    action: Literal["lock", "display-off"]
+    action: Literal["lock", "display-off", "display-lock", "sleep", "caffeinate-toggle"]
     confirmed: StrictBool = False
 
 
@@ -257,6 +257,43 @@ class PowerControl:
             await asyncio.gather(task, return_exceptions=True)
 
 
+class MacPowerControl(PowerControl):
+    def __init__(self, settings):
+        from mac_agent.macos import Caffeinate
+
+        super().__init__(settings)
+        self.awake = Caffeinate()
+        self.latest = {"guid": None, "name": None, "mode": None, "modes": []}
+
+    def active_power(self):
+        return self.latest
+
+    def set_power(self, mode):
+        raise HTTPException(409, "macOS 不提供 Windows 电源模式")
+
+    def confirmed_host_action(self, action):
+        from mac_agent.macos import execute_command
+
+        command = {"lock": "display_lock", "display_off": "display_lock", "display_lock": "display_lock",
+                   "sleep": "sleep", "caffeinate_toggle": "caffeinate_toggle"}.get(action)
+        if command is None:
+            raise HTTPException(422, "不支持此 macOS 桌面操作")
+        if not self.desktop_lock.acquire(blocking=False):
+            raise HTTPException(409, "有桌面操作正在执行，请稍后重试")
+        try:
+            execute_command(command, {}, caffeinate=self.awake)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            raise HTTPException(503, "macOS 未接受桌面操作") from error
+        finally:
+            self.desktop_lock.release()
+
+    def schedule_shutdown(self, minutes):
+        raise HTTPException(503, "本机不支持定时关机")
+
+    async def close(self):
+        await asyncio.to_thread(self.awake.close)
+
+
 def control_router(control: PowerControl) -> APIRouter:
     router = APIRouter(prefix="/api/control", tags=["control"])
     router.add_api_route("/power", control.active_power, methods=["GET"])
@@ -268,14 +305,20 @@ def control_router(control: PowerControl) -> APIRouter:
     @router.get("/quick")
     async def quick_status():
         when = control.shutdown_at
-        return {"shutdown_at": when.isoformat(timespec="seconds") if when else None}
+        status = {"shutdown_at": when.isoformat(timespec="seconds") if when else None}
+        if isinstance(control, MacPowerControl):
+            status["caffeinate"] = control.awake.active()
+        return status
 
     @router.post("/desktop")
     def desktop(payload: DesktopRequest):
-        if payload.action == "lock" and not payload.confirmed:
-            raise HTTPException(409, "请先确认锁屏")
+        if payload.action in {"lock", "sleep"} and not payload.confirmed:
+            raise HTTPException(409, "请先确认桌面操作")
         control.confirmed_host_action(payload.action.replace("-", "_"))
-        return {"accepted": True, "action": payload.action}
+        result = {"accepted": True, "action": payload.action}
+        if isinstance(control, MacPowerControl):
+            result["caffeinate"] = control.awake.active()
+        return result
 
     @router.post("/shutdown")
     async def shutdown(payload: ShutdownRequest):

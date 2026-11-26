@@ -142,7 +142,8 @@ class BriefingTests(IsolatedAsyncioTestCase):
 class QuickControlTests(IsolatedAsyncioTestCase):
     async def test_whitelist_confirmation_schedule_and_cancel(self):
         with TemporaryDirectory() as directory:
-            app = create_app(Settings(), Path(directory))
+            with patch("backend.main.host_identity", return_value={"platform": "windows", "name": "Fixture"}):
+                app = create_app(Settings(), Path(directory))
             async with client_for(app) as client:
                 with patch("backend.control.dispatch_desktop") as dispatch:
                     for payload in ({"action": "probe"}, {"action": "cmd.exe"}, {"action": "lock", "confirmed": 1},

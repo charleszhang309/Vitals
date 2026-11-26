@@ -201,7 +201,7 @@ class Scratchpad:
         try:
             with temporary.open("xb") as target:
                 shutil.copyfileobj(source, target, CHUNK)
-            with self.connect() as db:
+            with self.files_lock, self.connect() as db:
                 cursor = db.execute("""
                     INSERT INTO scratchpad (kind, filename, size_bytes, mime_type, storage_key, created_at)
                     VALUES ('file', ?, ?, ?, ?, ?)

@@ -34,10 +34,10 @@ def encode_wallpaper(data: bytearray) -> bytes:
         raise HTTPException(415, "请选择有效的 PNG、JPEG 或 WebP 图片") from error
 
 
-def wallpaper_router(data_dir: Path) -> APIRouter:
+def wallpaper_router(data_dir: Path, lock=None) -> APIRouter:
     router = APIRouter(prefix="/api/wallpaper", tags=["wallpaper"])
     path = data_dir / "wallpaper.webp"
-    lock = Lock()
+    lock = lock if lock is not None else Lock()
     encode_lock = Lock()
 
     def version() -> str | None:

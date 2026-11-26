@@ -35,12 +35,20 @@ function run(args) {
         if (status === "unknown") return [];
         return [{app, player, source, status}];
     });
-    const target = players.find(p => p.status === "playing") ||
-        players.find(p => p.status === "paused") || players[0];
+    const target = args[1] ? players.find(p => p.source === args[1]) :
+        players.find(p => p.status === "playing") || players.find(p => p.status === "paused") || players[0];
     if (args.length) {
         if (!target || !target.app.running()) throw new Error("Music / Spotify is not available");
         switch (args[0]) {
+            case "play": target.app.play(); break;
+            case "pause": target.app.pause(); break;
             case "playpause": target.app.playpause(); break;
+            case "seek": {
+                const position = Number(args[2]);
+                if (!Number.isFinite(position) || position < 0) throw new Error("Invalid position");
+                target.app.playerPosition = position;
+                break;
+            }
             case "nextTrack": target.app.nextTrack(); break;
             case "previousTrack": target.app.previousTrack(); break;
             default: throw new Error("Unknown media action");

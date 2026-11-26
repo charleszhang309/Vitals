@@ -119,6 +119,7 @@ def test_chat_executes_fragmented_tools_and_persists_final_answer(tmp_path):
 def test_scratchpad_injection_does_not_grant_write_or_confirm(tmp_path, monkeypatch):
     shutdown = Mock()
     monkeypatch.setattr("backend.control.PowerControl.schedule_shutdown", shutdown)
+    monkeypatch.setattr("backend.main.host_identity", lambda: {"platform": "windows", "name": "Fixture"})
     requests = []
 
     def provider(request):
@@ -150,6 +151,7 @@ def test_high_risk_confirmations_are_separate_one_time_and_expire(tmp_path, monk
     monkeypatch.setattr("backend.ai_tools.monotonic", lambda: started)
     shutdown = Mock(return_value="fixture-time")
     monkeypatch.setattr("backend.control.PowerControl.schedule_shutdown", shutdown)
+    monkeypatch.setattr("backend.main.host_identity", lambda: {"platform": "windows", "name": "Fixture"})
 
     def provider(request):
         payload = json.loads(request.content)

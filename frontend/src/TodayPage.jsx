@@ -47,6 +47,7 @@ function DailyBriefing() {
 
 function HostSummary({ telemetry, onOpen }) {
   const sample = telemetry.sample;
+  const mac = sample?.platform === 'macos';
   const loads = sample?.gpus.map((gpu) => gpu.usage_percent).filter(Number.isFinite) ?? [];
   const alerts = sample?.last_alerts?.length ?? 0;
   const power = sample?.power;
@@ -56,9 +57,11 @@ function HostSummary({ telemetry, onOpen }) {
     <motion.button className="surface host-strip" type="button" onClick={onOpen} whileTap={{ scale: 0.97 }}>
       <span className="host-title"><span className="metric-icon tone-blue"><Activity size={20} aria-hidden="true" /></span><strong>主机状态</strong></span>
       <span className="host-stats">
-        <span><small>电源模式</small><strong>{mode}</strong></span>
+        {!mac && <span><small>电源模式</small><strong>{mode}</strong></span>}
         <span><small>CPU</small><strong className="numeric">{measure(sample?.cpu.usage_percent, '%', 0)}</strong></span>
-        <span><small>GPU</small><strong className="numeric">{measure(loads.length ? Math.max(...loads) : null, '%', 0)}</strong></span>
+        {mac
+          ? <span><small>电池</small><strong className="numeric">{measure(sample.battery?.percent, '%', 0)}</strong></span>
+          : <span><small>GPU</small><strong className="numeric">{measure(loads.length ? Math.max(...loads) : null, '%', 0)}</strong></span>}
         <span><small>任务与告警</small><strong className={alerts ? 'host-warning' : ''}>{task}{alerts > 0 && ` · ${alerts} 项告警`}</strong></span>
       </span>
       <span className="host-link">硬件监控<ArrowUpRight size={17} aria-hidden="true" /></span>

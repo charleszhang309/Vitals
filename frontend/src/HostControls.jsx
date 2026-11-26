@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { Activity, Lock, MonitorOff, Power, RotateCw, Timer, XCircle } from 'lucide-react';
+import { Activity, Coffee, Lock, MonitorOff, Moon, Power, RotateCw, Timer, XCircle } from 'lucide-react';
 import { postJson, request } from './api.js';
 import { measure, rateText, time } from './format.js';
 import { Button, DetailLink, IconButton, Modal, Segmented } from './ui.jsx';
@@ -49,12 +49,14 @@ export function HardwareSummary({ sample, power, onOpen }) {
   const network = sample?.network;
   const plan = power ?? sample?.power;
   const mode = powerModes.find(({ value }) => value === plan?.mode)?.label ?? plan?.name ?? (plan ? '自定义' : '—');
+  const mac = sample?.platform === "macos";
   const readings = [
     ['CPU', measure(sample?.cpu.usage_percent, '%', 0), measure(sample?.cpu.temperature_c, '°C', 0)],
-    ['GPU', measure(gpu?.usage_percent, '%', 0), measure(gpu?.temperature_c, '°C', 0)],
+    mac ? ['电池', measure(sample?.battery?.percent, '%', 0)]
+      : ['GPU', measure(gpu?.usage_percent, '%', 0), measure(gpu?.temperature_c, '°C', 0)],
     ['内存', measure(sample?.memory.percent, '%', 0)],
     ['网络', `↓ ${rateText(network?.download_bytes_per_sec)}`, `↑ ${rateText(network?.upload_bytes_per_sec)}`],
-    ['电源模式', mode],
+    ...(!mac ? [['电源模式', mode]] : []),
   ];
   return <section className="surface panel detail-tile control-hardware">
     <div className="panel-header"><span className="metric-icon tone-blue" aria-hidden="true"><Activity size={21} /></span><h2>硬件监控</h2></div>
@@ -167,6 +169,50 @@ export function QuickControlCard() {
       <div className="quick-confirm-actions">
         <Button onClick={close}>取消</Button>
         <Button onClick={() => run(locked ? 'lock' : 1)} disabled={locked ? busy : unavailable}>{locked ? '确认锁屏' : '确认关机'}</Button>
+      </div>
+    </Modal>}
+  </section>;
+}
+
+
+export function MacQuickControlCard() {
+  const quick = useResource('/api/control/quick', 15_000);
+  const [busy, setBusy] = useState(false);
+  const [confirmSleep, setConfirmSleep] = useState(false);
+  const [feedback, setFeedback] = useState(null);
+
+  async function send(action) {
+    setBusy(true);
+    setConfirmSleep(false);
+    setFeedback(null);
+    try {
+      const result = await postJson('/api/control/desktop', { action, confirmed: action === 'sleep' });
+      quick.replace({ caffeinate: result.caffeinate });
+      setFeedback({ text: 'macOS 已接受操作' });
+    } catch (error) {
+      setFeedback({ text: error.message, error: true });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="surface panel quick-card" aria-labelledby="quick-control-heading">
+    <div className="panel-header"><h2 id="quick-control-heading">主机快捷控制</h2></div>
+    <div className="quick-control-row" role="group" aria-label="主机操作">
+      <Button onClick={() => send('display-off')} disabled={busy}><MonitorOff size={15} />息屏</Button>
+      <Button onClick={() => setConfirmSleep(true)} disabled={busy} aria-haspopup="dialog"><Moon size={15} />休眠</Button>
+      <Button onClick={() => send('caffeinate-toggle')} disabled={busy || !quick.data} aria-pressed={quick.data?.caffeinate ?? false}>
+        <Coffee size={15} />保持唤醒
+      </Button>
+    </div>
+    {feedback && <p className={feedback.error ? 'feedback error' : 'feedback'} role={feedback.error ? 'alert' : 'status'}>
+      {feedback.text}
+    </p>}
+    {confirmSleep && <Modal id="confirm-mac-sleep" className="detail-dialog" title="确认休眠" onClose={() => setConfirmSleep(false)}>
+      <p>Mac 休眠期间，Vitals 网页可能无法连接。</p>
+      <div className="quick-confirm-actions">
+        <Button onClick={() => setConfirmSleep(false)}>取消</Button>
+        <Button onClick={() => send('sleep')}>确认休眠</Button>
       </div>
     </Modal>}
   </section>;

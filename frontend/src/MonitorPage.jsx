@@ -1,11 +1,11 @@
 import { lazy, Suspense, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Activity, Cpu, Gpu, MemoryStick, Wifi, HardDrive, Fan, ArrowDown, ArrowUp, TriangleAlert } from 'lucide-react';
+import { Activity, Battery, Cpu, Gpu, MemoryStick, Wifi, HardDrive, Fan, ArrowDown, ArrowUp, TriangleAlert } from 'lucide-react';
 import { bytes, duration, measure, number, rate, rateText, time } from './format.js';
 import { DetailLink, Modal, ProgressBar, Segmented } from './ui.jsx';
 import HardwareDetails from './HardwareDetails.jsx';
 import { PowerCard } from './HostControls.jsx';
-import { DevicePicker, RemoteHardware } from './RemoteDevice.jsx';
+import { batteryNote, DevicePicker, RemoteHardware } from './RemoteDevice.jsx';
 
 const TrendChart = lazy(() => import('./TrendChart.jsx'));
 const trendModes = [{ value: 'usage', label: '占用' }, { value: 'temperature', label: '温度' }];
@@ -67,7 +67,7 @@ function Disks({ items, ready }) {
       {items.length ? <ul className="hardware-list">
         {items.map((disk) => <li className="hardware-row disk-row" key={disk.mountpoint}>
           <span className="hardware-icon"><HardDrive size={19} aria-hidden="true" /></span>
-          <div className="hardware-label"><strong>{disk.mountpoint}</strong><span className="muted numeric">{measure(disk.percent, '%')}</span></div>
+          <div className="hardware-label"><strong>{disk.name ?? disk.mountpoint}</strong><span className="muted numeric">{measure(disk.percent, '%')}</span></div>
           <ProgressBar value={disk.percent} label={`${disk.mountpoint} 使用率`} />
           <div className="hardware-caption muted numeric">剩余 {bytes(disk.free_bytes)} <span>/ {bytes(disk.total_bytes)}</span></div>
         </li>)}
@@ -94,11 +94,13 @@ function Fans({ items, peaks, ready }) {
   );
 }
 
-function WindowsMonitor({ telemetry, dark, power }) {
+function HostMonitor({ telemetry, dark, power }) {
   const { sample, history, fanPeaks, connection } = telemetry;
   const [selectedGpu, setSelectedGpu] = useState('');
   const [detail, setDetail] = useState(null);
   const [trendMode, setTrendMode] = useState('usage');
+  const mac = sample?.platform === 'macos';
+  const battery = sample?.battery;
   const gpus = sample?.gpus ?? [];
   const gpu = gpus.find((item) => item.id === selectedGpu) ?? gpus[0];
   const remembered = history.findLast((item) => item.gpus.length > 0)?.gpus ?? [];
@@ -112,11 +114,19 @@ function WindowsMonitor({ telemetry, dark, power }) {
         <div className="metrics-grid">
           <Metric title="CPU" tone="red" icon={Cpu} onOpen={() => setDetail('cpu')} display={number(sample?.cpu.usage_percent)} unit={Number.isFinite(sample?.cpu.usage_percent) ? '%' : ''}
             lines={[["温度", measure(sample?.cpu.temperature_c, '°C')], ['功耗', measure(sample?.cpu.power_w, 'W')]]} />
-          <Metric title="GPU" tone="orange" icon={Gpu} onOpen={() => setDetail('gpu')} display={number(gpu?.usage_percent)} unit={Number.isFinite(gpu?.usage_percent) ? '%' : ''}
+          {mac ? <section className="surface metric" aria-label="电池">
+            <div className="metric-header flex items-center gap-3"><Battery size={23} aria-hidden="true" /><h2>电池</h2></div>
+            <div className="metric-reading numeric">{measure(battery?.percent, '%')}</div>
+            <p className="muted">{batteryNote(battery)}</p>
+            <dl className="metric-details">
+              <div><dt>健康度</dt><dd>{measure(battery?.health_percent, '%')}</dd></div>
+              <div><dt>循环次数</dt><dd>{number(battery?.cycle_count, 0)}</dd></div>
+            </dl>
+          </section> : <Metric title="GPU" tone="orange" icon={Gpu} onOpen={() => setDetail('gpu')} display={number(gpu?.usage_percent)} unit={Number.isFinite(gpu?.usage_percent) ? '%' : ''}
             lines={[["温度", measure(gpu?.temperature_c, '°C')], ['功耗', measure(gpu?.power_w, 'W')], ['显存', gpu ? `${bytes(gpu.vram_used_bytes)} / ${bytes(gpu.vram_total_bytes)}` : '—']]}
             choice={gpus.length > 1 ? <select className="gpu-choice" aria-label="选择 GPU" value={gpu.id} onChange={(event) => setSelectedGpu(event.target.value)}>
               {gpus.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select> : gpu?.name && <p className="metric-device muted" title={gpu.name}>{gpu.name}</p>} />
+            </select> : gpu?.name && <p className="metric-device muted" title={gpu.name}>{gpu.name}</p>} />}
           <Metric title="内存" tone="purple" icon={MemoryStick} onOpen={() => setDetail('memory')} display={number(sample?.memory.percent)} unit={Number.isFinite(sample?.memory.percent) ? '%' : ''}
             lines={[["已用", bytes(sample?.memory.used_bytes)], ['总量', bytes(sample?.memory.total_bytes)]]} />
           <Metric title="网络" tone="blue" icon={Wifi} onOpen={() => setDetail('network')} display={network.value} unit={network.unit}
@@ -134,9 +144,9 @@ function WindowsMonitor({ telemetry, dark, power }) {
               <TrendChart history={history} gpuId={chartGpu} dark={dark} mode={trendMode} />
             </Suspense>
           </section>
-          <div className="side-stack"><PowerCard controller={power} /><TaskCard sample={sample} /></div>
+          <div className="side-stack">{!mac && <PowerCard controller={power} />}<TaskCard sample={sample} /></div>
           <Disks items={sample?.disks ?? []} ready={Boolean(sample)} />
-          <Fans items={sample?.fan_summary ?? []} peaks={fanPeaks} ready={Boolean(sample)} />
+          {!mac && <Fans items={sample?.fan_summary ?? []} peaks={fanPeaks} ready={Boolean(sample)} />}
         </div>
         {detail && <HardwareDetails category={detail} sample={sample} gpu={gpu} onClose={() => setDetail(null)} />}
     </>
@@ -146,8 +156,8 @@ function WindowsMonitor({ telemetry, dark, power }) {
 export default function MonitorPage({ telemetry, dark, power, onClose, devices, device, onDevice }) {
   return <Modal id="full-monitor" title="硬件监控" className={device ? 'detail-dialog remote-monitor-dialog' : 'monitor-dialog'} onClose={onClose}>
     <div className="monitor-content">
-      <DevicePicker id="monitor-device" devices={devices} device={device} onChange={onDevice} />
-      {device ? <RemoteHardware device={device} /> : <WindowsMonitor telemetry={telemetry} dark={dark} power={power} />}
+      <DevicePicker id="monitor-device" platform={telemetry.sample?.platform} devices={devices} device={device} onChange={onDevice} />
+      {device ? <RemoteHardware device={device} /> : <HostMonitor telemetry={telemetry} dark={dark} power={power} />}
     </div>
   </Modal>;
 }

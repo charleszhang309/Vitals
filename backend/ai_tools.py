@@ -207,6 +207,8 @@ class AiTools:
             return {"ok": False, "error": "请在聊天中明确请求读取这类资料"}, None
         try:
             args = skill.schema.model_validate_json(raw)
+            if getattr(args, "device", None) == "windows" and getattr(request.app.state, "host_platform", None) == "macos":
+                return {"ok": False, "error": "当前中心端是 macOS，无法向 Windows 主机执行该操作"}, None
             if skill.writes and not may_execute(name, args, prompt):
                 return {"ok": False, "error": "操作与用户明确指定的设备、动作或数值不一致"}, None
         except ValidationError:

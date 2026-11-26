@@ -300,7 +300,8 @@ async def test_lyrics_retry_endpoint_keeps_identity_and_origin_guard(tmp_path):
     bridge = MediaBridge()
     bridge.state = AsyncMock(return_value={"current_session_id": session_id, "sessions": [track]})
     cache = Mock(get=AsyncMock(return_value={"status": "missing", "lines": [], "plain": None}))
-    with patch("backend.main.MediaBridge", return_value=bridge), patch("backend.main.LyricsCache", return_value=cache):
+    with (patch("backend.main.host_identity", return_value={"platform": "windows", "name": "Fixture"}),
+          patch("backend.main.MediaBridge", return_value=bridge), patch("backend.main.LyricsCache", return_value=cache)):
         app = create_app(Settings(), tmp_path)
     external = object()
     app.state.external_client = external
@@ -328,7 +329,8 @@ async def test_public_media_endpoints_cover_cache_and_volume_contract(tmp_path):
         httpx.Response(200, json={"available": True, "percent": 40, "muted": True, "device_id": output_id}),
         httpx.Response(200, json={"accepted": True}),
     ])
-    with patch("backend.main.MediaBridge", return_value=bridge):
+    with (patch("backend.main.host_identity", return_value={"platform": "windows", "name": "Fixture"}),
+          patch("backend.main.MediaBridge", return_value=bridge)):
         app = create_app(Settings(), tmp_path)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://localhost") as client:
         assert (await client.get("/api/media/state")).json()["active"]
@@ -352,7 +354,10 @@ async def test_public_media_endpoints_cover_cache_and_volume_contract(tmp_path):
 
 @async_test
 async def test_media_idle_when_interactive_bridge_is_unavailable(tmp_path):
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(create_app(Settings(), tmp_path)),
+    with (patch("backend.main.host_identity", return_value={"platform": "windows", "name": "Fixture"}),
+          patch("backend.main.MediaBridge", return_value=MediaBridge())):
+        app = create_app(Settings(), tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app),
                                  base_url="http://localhost") as client:
         assert (await client.get("/api/media/state")).json() == {
             "available": True, "active": False, "current_session_id": None, "sessions": [], "reason": "desktop_unavailable",

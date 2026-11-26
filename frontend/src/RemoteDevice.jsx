@@ -6,9 +6,9 @@ import { Button, DetailLink, DetailValues, Modal, ProgressBar, Segmented } from 
 
 const deviceKey = (device) => `agent:${device.device_id}`;
 
-export function DevicePicker({ id, devices, device, onChange }) {
+export function DevicePicker({ id, devices, device, onChange, platform }) {
   if (!devices.length) return null;
-  const options = [{ value: 'windows', label: 'Windows' }, ...devices.map((item) => ({
+  const options = [{ value: 'windows', label: platform === 'macos' ? '本机 Mac' : 'Windows' }, ...devices.map((item) => ({
     value: deviceKey(item), label: item.name,
   }))];
   return <div className="device-picker"><Segmented id={id} label="设备" options={options}
@@ -20,7 +20,7 @@ const batteryStates = {
   charging: '充电中', charged: '已充满', discharging: '使用电池', not_charging: '未充电', unknown: '状态未知',
 };
 
-function batteryNote(battery) {
+export function batteryNote(battery) {
   return battery && [
     batteryStates[battery.state] ?? (battery.charging ? '充电中' : '使用电池'),
     battery.minutes_left != null && `${battery.charging ? '距充满' : '剩余'} ${sleepTime(battery.minutes_left)}`,

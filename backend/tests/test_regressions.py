@@ -5,6 +5,7 @@ from io import BytesIO
 import os
 from pathlib import Path
 import subprocess
+import sys
 from tempfile import TemporaryDirectory
 from threading import Event
 from time import monotonic
@@ -132,7 +133,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any(kind in line and error in line for line in logs.output))
 
     async def test_lhm_failure_backoff_recovers_without_spam(self):
-        monitor = Monitor(Settings())
+        monitor = Monitor(Settings(), {"platform": "windows", "name": "Fixture"})
         response = Mock()
         response.json.return_value = {"Children": []}
         client = SimpleNamespace(get=AsyncMock(side_effect=[response, response, response, response]))
@@ -285,6 +286,7 @@ class NetworkTests(unittest.IsolatedAsyncioTestCase):
                         else:
                             self.assertEqual(response, {"type": "websocket.close", "code": 1008})
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows SO_EXCLUSIVEADDRUSE")
     def test_wildcard_listener_excludes_another_instance(self):
         with bound_sockets("0.0.0.0", 0) as listeners:
             port = listeners[0].getsockname()[1]
@@ -440,7 +442,7 @@ class ControlTests(unittest.TestCase):
                 self.assertEqual(dispatch_fan_profile(exe, profile)["status"], "dispatched")
                 flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS if os.name == "nt" else 0
                 popen.assert_called_once_with(
-                    [str(exe), "-c", str(profile)], cwd=exe.parent, creationflags=flags,
+                    [str(exe.resolve()), "-c", str(profile.resolve())], cwd=exe.parent.resolve(), creationflags=flags,
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
                 )
                 self.assertEqual(thread.call_args.kwargs["target"], process.wait)

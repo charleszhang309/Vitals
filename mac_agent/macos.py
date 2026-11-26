@@ -293,7 +293,7 @@ class Sampler:
         self.cpu_name = read_optional("CPU name", lambda: native("/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string").strip())
         psutil.cpu_percent()
 
-    def sample(self):
+    def sample_hardware(self):
         net = psutil.net_io_counters()
         now = monotonic()
         sent_rate = received_rate = None
@@ -322,6 +322,8 @@ class Sampler:
                         "upload_bytes_per_sec": sent_rate, "download_bytes_per_sec": received_rate,
                         "interfaces": active_interfaces()},
             "battery": battery,
-            "volume": read_optional("volume", volume),
-            "media": read_optional("media", self.playback.sample),
         }
+
+    def sample(self):
+        return {**self.sample_hardware(), "volume": read_optional("volume", volume),
+                "media": read_optional("media", self.playback.sample)}

@@ -93,7 +93,8 @@ def test_24_hours_uses_recent_daily_quote_then_local_snapshots(tmp_path, monkeyp
 
 
 def test_immediate_and_custom_shutdown_require_confirmation_and_can_be_cancelled(tmp_path):
-    app = create_app(Settings(), tmp_path)
+    with patch("backend.main.host_identity", return_value={"platform": "windows", "name": "Fixture"}):
+        app = create_app(Settings(), tmp_path)
 
     async def verify():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as client:
