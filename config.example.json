@@ -12,6 +12,13 @@
     "timezone": "UTC",
     "ingest_token": null
   },
+  "calendar": {
+    "sources": []
+  },
+  "finance": {
+    "base_currency": "CAD",
+    "target_currencies": ["CNY", "USD"]
+  },
   "ai": {
     "enabled": false,
     "base_url": "https://api.openai.com/v1",

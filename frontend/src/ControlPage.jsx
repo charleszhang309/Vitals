@@ -3,6 +3,7 @@ import { Maximize2, MessageSquareQuote, Music2, Volume2, VolumeX } from 'lucide-
 import { postJson, request } from './api.js';
 import { IconButton, Modal, ProgressBar } from './ui.jsx';
 import { artworkUrl } from './useMedia.js';
+import { HardwareSummary, PowerCard, QuickControlCard } from './HostControls.jsx';
 
 export const playbackLabels = { playing: '播放中', paused: '已暂停', stopped: '已停止' };
 const volumePath = '/api/media/volume';
@@ -307,11 +308,16 @@ function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose }) {
   </Modal>;
 }
 
-export default function ControlPage({ media, open, onOpenChange }) {
+export default function ControlPage({ media, open, onOpenChange, sample, power, onMonitor }) {
   const sound = useSystemVolume();
   const [lyricsPreferred, setLyricsPreferred] = useState(true);
   return <>
     <div className="page-heading"><h1>控制</h1></div>
+    <HardwareSummary sample={sample} power={power.data} onOpen={onMonitor} />
+    <div className="host-control-grid">
+      <PowerCard controller={power} />
+      <QuickControlCard />
+    </div>
     <div className="media-control-grid">
       <PlayerCard media={media} onOpen={() => onOpenChange(true)} />
       <VolumeCard sound={sound} />

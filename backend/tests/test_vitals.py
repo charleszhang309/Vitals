@@ -85,9 +85,10 @@ class TransitTests(unittest.IsolatedAsyncioTestCase):
 def forecast_fixture():
     day = int(datetime(2026, 1, 3, 5, tzinfo=timezone.utc).timestamp())
     hours = [day + i * 3600 for i in range(48)]
-    return {"timezone": "America/Toronto", "current": {"time": hours[3] + 900, "temperature_2m": -3},
+    return {"timezone": "America/Toronto", "current": {"time": hours[3] + 900, "temperature_2m": -3, "uv_index": 2.1},
             "hourly": {"time": hours, "temperature_2m": [2] * 48, "precipitation_probability": list(range(48))},
-            "daily": {"time": [day], "weather_code": [0], "temperature_2m_max": [5], "temperature_2m_min": [-4]}}
+            "daily": {"time": [day], "weather_code": [0], "temperature_2m_max": [5], "temperature_2m_min": [-4],
+                      "sunrise": [hours[7]], "sunset": [hours[17]]}}
 
 
 class WeatherTests(unittest.IsolatedAsyncioTestCase):
@@ -111,9 +112,13 @@ class WeatherTests(unittest.IsolatedAsyncioTestCase):
                 data = result["data"]
                 self.assertEqual(data["hourly_start"], data["current"]["time"] - 900)
                 self.assertEqual(data["hourly"][0]["time"], data["hourly_start"])
+                self.assertEqual(data["hourly"][0]["precipitation_percent"], 3)
                 self.assertEqual(data["hourly"][-1]["time"] + 3600, data["hourly_end"])
                 self.assertEqual(result["data"]["current"]["precipitation_percent"], 3)
                 self.assertEqual(result["data"]["current"]["high_c"], 5)
+                self.assertEqual(result["data"]["current"]["uv_index"], 2.1)
+                self.assertEqual(data["current"]["sunrise"], data["daily"][0]["sunrise"])
+                self.assertEqual(data["current"]["sunset"] - data["current"]["sunrise"], 10 * 3600)
                 await service.summary(client)
                 self.assertEqual(len(calls), 2)
                 fail = True

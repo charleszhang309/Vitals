@@ -4,12 +4,13 @@ import { metricsUrl } from './api.js';
 const WINDOW_MS = 120_000;
 const STALE_MS = 9000;
 
-export function useTelemetry() {
+export function useTelemetry(enabled = true) {
   const [connection, setConnection] = useState('connecting');
   const [history, setHistory] = useState([]);
   const [fanPeaks, setFanPeaks] = useState({});
 
   useEffect(() => {
+    if (!enabled) return undefined;
     let socket;
     let retry;
     let startedAt;
@@ -85,7 +86,7 @@ export function useTelemetry() {
       document.removeEventListener('visibilitychange', checkFreshness);
       socket?.close();
     };
-  }, []);
+  }, [enabled]);
 
   return { connection, sample: history.at(-1), history, fanPeaks };
 }

@@ -60,11 +60,15 @@ def normalize_forecast(raw: dict) -> dict:
     index = bisect_right(times, observed) - 1
     start = times[index] if index >= 0 else next(iter(times), observed)
     end = start + 24 * 3600
-    precipitation = hours["precipitation_probability"][index] if index >= 0 else None
-    hourly = [{"time": at, "temperature_c": temperature}
+    probabilities = dict(zip(times, hours.get("precipitation_probability", ())))
+    precipitation = probabilities.get(times[index]) if index >= 0 else None
+    hourly = [{"time": at, "temperature_c": temperature, "precipitation_percent": probabilities.get(at)}
               for at, temperature in zip(times, hours["temperature_2m"]) if start <= at < end]
+    sunrises = dict(zip(days["time"], days.get("sunrise", ())))
+    sunsets = dict(zip(days["time"], days.get("sunset", ())))
     daily = [
-        {"date": datetime.fromtimestamp(at, zone).date().isoformat(), "code": code, "high_c": high, "low_c": low}
+        {"date": datetime.fromtimestamp(at, zone).date().isoformat(), "code": code, "high_c": high, "low_c": low,
+         "sunrise": sunrises.get(at), "sunset": sunsets.get(at)}
         for at, code, high, low in zip(days["time"], days["weather_code"], days["temperature_2m_max"], days["temperature_2m_min"])
     ][:7]
     today_values = next((item for item in daily if item["date"] == today), {})
@@ -74,7 +78,9 @@ def normalize_forecast(raw: dict) -> dict:
             "time": observed, "temperature_c": current.get("temperature_2m"), "code": current.get("weather_code"),
             "feels_like_c": current.get("apparent_temperature"), "humidity_percent": current.get("relative_humidity_2m"),
             "wind_kmh": current.get("wind_speed_10m"), "precipitation_percent": precipitation,
+            "uv_index": current.get("uv_index"),
             "high_c": today_values.get("high_c"), "low_c": today_values.get("low_c"),
+            "sunrise": today_values.get("sunrise"), "sunset": today_values.get("sunset"),
         },
     }
 
@@ -91,9 +97,9 @@ class Weather:
         async def forecast():
             response = await client.get(FORECAST_URL, params={
                 **params, "forecast_days": 7,
-                "current": "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m",
+                "current": "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,uv_index",
                 "hourly": "temperature_2m,precipitation_probability",
-                "daily": "temperature_2m_max,temperature_2m_min,weather_code",
+                "daily": "temperature_2m_max,temperature_2m_min,weather_code,sunrise,sunset",
             })
             response.raise_for_status()
             return normalize_forecast(response.json())

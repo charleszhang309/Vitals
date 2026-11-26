@@ -1,18 +1,21 @@
-"""合并 Health Auto Export 的直推和本地文件数据，生成本地时区的健康概览。"""
+"""合并 Apple 与 Android 健康数据，生成本地时区的健康概览。"""
 
 from collections import defaultdict
+import csv
 from datetime import datetime, time, timedelta, timezone
 from hmac import compare_digest
 import json
 import logging
 from math import isfinite
 from pathlib import Path
+import re
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
 from .config import HealthConfig, MIB, ROOT
+from . import health_android as android
 from .monitor import utc_now
 
 
@@ -22,7 +25,7 @@ TOTALS = ("step_count", "active_energy", "apple_exercise_time", "walking_running
 LATEST = ("resting_heart_rate", "heart_rate_variability", "blood_oxygen_saturation", "respiratory_rate")
 DETAIL_METRICS = {
     "heart": ("heart_rate", "resting_heart_rate", "walking_heart_rate_average", "heart_rate_variability"),
-    "activity": ("active_energy", "basal_energy_burned", "apple_exercise_time", "apple_stand_hour", "apple_stand_time"),
+    "activity": ("active_energy", "basal_energy_burned", "apple_exercise_time", "apple_stand_hour", "apple_stand_time", "total_energy_burned"),
     "steps": ("step_count", "walking_running_distance", "flights_climbed", "walking_speed", "walking_step_length"),
     "sleep": ("sleep_analysis", "sleep_segment"),
 }
@@ -66,10 +69,10 @@ def quantity(value) -> float | None:
 def scalar(name: str, value: float, unit: str) -> float:
     if name == "walking_running_distance":
         return value * 1.609344 if unit in {"mi", "mile", "miles"} else value / 1000 if unit == "m" else value
-    if name in {"active_energy", "basal_energy_burned"} and unit == "kj":
-        return value / 4.184
+    if name in {"active_energy", "basal_energy_burned", "total_energy_burned"}:
+        return value / {"kj": 4.184, "j": 4184, "cal": 1000}.get(unit, 1)
     if name in {"apple_exercise_time", "apple_stand_time"}:
-        return value * {"s": 1 / 60, "sec": 1 / 60, "seconds": 1 / 60, "h": 60, "hr": 60, "hours": 60}.get(unit, 1)
+        return value * {"ms": 1 / 60000, "s": 1 / 60, "sec": 1 / 60, "seconds": 1 / 60, "h": 60, "hr": 60, "hours": 60}.get(unit, 1)
     if name == "walking_speed":
         return value * {"m/s": 3.6, "m/sec": 3.6, "mph": 1.609344, "mi/h": 1.609344,
                         "mi/hr": 1.609344, "ft/s": 1.09728}.get(unit, 1)
@@ -108,12 +111,9 @@ def normalize_sleep(stages: dict, total, in_bed, start, end, bed_start=None, bed
             "in_bed_minutes": in_bed, "total_minutes": total, "stages": stages, "adjusted": adjusted}
 
 
-def parse_export(document, zone: ZoneInfo) -> dict[tuple[str, str], dict]:
-    data = document.get("data") if isinstance(document, dict) else None
-    if not isinstance(data, dict) or not isinstance(data.get("metrics"), list):
-        raise ValueError("预期 Health Auto Export JSON v2 的 data.metrics 列表")
+def parse_apple(metrics, zone: ZoneInfo) -> dict[tuple[str, str], dict]:
     samples = {}
-    for metric in data["metrics"]:
+    for metric in metrics:
         if not isinstance(metric, dict) or not isinstance(metric.get("data"), list):
             continue
         raw_name = str(metric.get("name", "")).strip().lower()
@@ -163,6 +163,190 @@ def parse_export(document, zone: ZoneInfo) -> dict[tuple[str, str], dict]:
                 if value is not None:
                     samples[(name, mark)] = {"qty": scalar(name, value, unit)}
     return samples
+
+
+ANDROID_VALUES = {
+    "step_count": ("count", "steps", "totalsteps", "stepcount", "total", "sum", "步数"),
+    "resting_heart_rate": ("beatsperminute", "restingheartratebpm", "bpm"),
+    "heart_rate_variability": ("heartratevariabilitymillis", "rmssd", "hrvms", "millis"),
+    "blood_oxygen_saturation": ("percentage", "percent", "spo2", "oxygenpercent"),
+    "respiratory_rate": ("rate", "breathsperminute", "respiratoryrate"),
+    "active_energy": ("energy", "activekcal", "activecalories", "activecaloriesburned", "calories"),
+    "total_energy_burned": ("energy", "totalkcal", "totalcalories", "calories"),
+    "basal_energy_burned": ("energy", "basalkcal", "basalcalories"),
+    "walking_running_distance": ("distance", "totalkm", "distancekm", "distanceinmeters"),
+    "apple_exercise_time": ("durationminutes", "totaldurationminutes", "minutes", "duration"),
+    "flights_climbed": ("floors", "count", "total"),
+}
+UNIT_VALUES = {"inkilocalories": "kcal", "kilocalories": "kcal", "kcal": "kcal", "inkilojoules": "kj", "kilojoules": "kj", "kj": "kj",
+               "injoules": "j", "joules": "j", "inmeters": "m", "meters": "m", "inkilometers": "km", "kilometers": "km",
+               "inmiles": "mi", "miles": "mi", "percent": "%"}
+
+
+def android_number(raw):
+    if isinstance(raw, str):
+        raw = raw.strip().replace("\u00a0", "").replace("\u202f", "")
+        if re.fullmatch(r"[+-]?\d{1,3}(,\d{3})+", raw):
+            raw = raw.replace(",", "")
+        elif re.fullmatch(r"[+-]?\d+,\d+", raw):
+            raw = raw.replace(",", ".")
+    return quantity(raw)
+
+
+def android_duration(raw, unit="min"):
+    if isinstance(raw, str) and (clock := re.fullmatch(r"(\d{1,3}):([0-5]\d)(?::([0-5]\d))?", raw.strip())):
+        return int(clock[1]) * 60 + int(clock[2]) + int(clock[3] or 0) / 60
+    value = android_number(raw)
+    return scalar("apple_exercise_time", value, unit) if value is not None else None
+
+
+def android_mark(value, zone, day=None, offset=None):
+    text = android.parse_time(value, day)
+    if text and isinstance(offset, str) and re.fullmatch(r"[+-]\d{2}:?\d{2}", offset) and not re.search(r"[+-]\d{2}:?\d{2}$", text[10:]):
+        if len(text) > 10 and not text.endswith("Z"):
+            text += offset
+    return timestamp(text, zone)
+
+
+def android_times(row, zone):
+    pick = android.first
+    source_day = android.parse_time(pick(row, android.DAY_FIELDS))
+    start_day = android.parse_time(pick(row, ("startdate", "开始日期"))) or source_day
+    end_day = android.parse_time(pick(row, ("enddate", "结束日期"))) or source_day
+    start = android_mark(pick(row, android.START_FIELDS), zone, start_day, row.get("startzoneoffset"))
+    end = android_mark(pick(row, android.END_FIELDS), zone, end_day, row.get("endzoneoffset"))
+    point = android_mark(pick(row, android.TIME_FIELDS), zone, source_day, row.get("zoneoffset"))
+    return start, end, point or start or end or android_mark(source_day, zone)
+
+
+def add_android_sleep(samples, row, zone, start, end, mark):
+    def segment(stage, first, last):
+        if stage and first and last and first < last:
+            existing = samples.setdefault(("sleep_segment", first), {})
+            existing[stage] = max(existing.get(stage, last), last)
+            return True
+        return False
+
+    pick = android.first
+    day = android.parse_time(pick(row, android.DAY_FIELDS))
+    explicit = pick(row, ("stage", "sleepstage", "stagetype", "睡眠阶段"))
+    if explicit is not None:
+        segment(android.stage_name(explicit), start, end)
+        return
+    phases = pick(row, ("stages", "sleepstages", "segments"))
+    if isinstance(phases, list):
+        found = False
+        for part in phases:
+            if isinstance(part, dict):
+                details = android.fields(part)
+                if day:
+                    details.setdefault("date", day)
+                first, last, _ = android_times(details, zone)
+                if first and last and (start is None or start <= first) and (end is None or last <= end):
+                    label = pick(details, ("stage", "stagetype", "sleepstage", "type", "value"))
+                    found = segment(android.stage_name(label), first, last) or found
+        if found:
+            return
+    stages = {}
+    phase_values = android.fields(phases) if isinstance(phases, dict) else row
+    for label, value in phase_values.items():
+        for suffix, unit in (("minutes", "min"), ("min", "min"), ("seconds", "s"), ("hours", "h"), ("", "min")):
+            phase = label.removesuffix(suffix).removesuffix("duration")
+            if phase_values is row and phase == "sleep":
+                break
+            if label.endswith(suffix) and (stage := android.stage_name(phase)):
+                if (minutes := android_duration(value, unit)) is not None:
+                    stages[stage] = minutes
+                break
+    explicit_minutes = pick(row, ("totalsleepminutes", "totalsleepdurationminutes", "sleepdurationminutes", "totaldurationminutes", "totalminutes", "durationminutes"))
+    total = android_duration(explicit_minutes)
+    if total is None:
+        raw = pick(row, ("totalsleep", "sleepduration", "duration", "value", "total"))
+        total = android_duration(raw, str(pick(row, ("unit", "units")) or "min").lower())
+    if start and end and start < end:
+        length = (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds() / 60
+        if total is None and not stages and not phases:
+            segment("asleep", start, end)
+            return
+    else:
+        length = None
+    if (end or mark) and (total is not None or stages):
+        in_bed = stages.pop("in_bed", None)
+        classified = sum(stages.get(stage, 0) for stage in ("deep", "rem", "core", "asleep"))
+        if total is not None and total > classified:
+            stages["asleep"] = stages.get("asleep", 0) + total - classified
+        samples[("sleep_analysis", end or mark)] = normalize_sleep(stages, total, in_bed if in_bed is not None else length,
+                                                                  start, end, start, end)
+
+
+def parse_android(records, zone: ZoneInfo):
+    samples = {}
+    pick = android.first
+    for name, row in records:
+        start, end, mark = android_times(row, zone)
+        if name == "sleep_analysis":
+            add_android_sleep(samples, row, zone, start, end, mark)
+        elif name == "heart_rate":
+            readings = pick(row, ("samples", "readings"))
+            points = []
+            if isinstance(readings, list):
+                for item in readings:
+                    if isinstance(item, dict):
+                        record = android.fields(item)
+                        _, _, at = android_times(record, zone)
+                        bpm = android_number(pick(record, ("beatsperminute", "bpm", "heartrate", "value", "qty")))
+                        if at and bpm is not None:
+                            points.append((at, bpm))
+            if points:
+                samples.update(((name, at), {"avg": bpm, "min": bpm, "max": bpm, "count": 1}) for at, bpm in points)
+                continue
+            avg = android_number(pick(row, ("avg", "average", "avgbpm", "averagebpm", "averageheartrate", "beatsperminute", "bpm", "heartrate", "value", "qty")))
+            low = android_number(pick(row, ("min", "minbpm", "minimumheartrate")))
+            high = android_number(pick(row, ("max", "maxbpm", "maximumheartrate")))
+            if mark and avg is not None:
+                samples[(name, mark)] = {"avg": avg, "min": min(avg, low if low is not None else avg),
+                                         "max": max(avg, high if high is not None else avg),
+                                         "count": android_number(pick(row, ("recordscount", "samplecount", "count"))) or 1}
+        elif mark:
+            raw = pick(row, ("value", "qty", *ANDROID_VALUES.get(name, ())))
+            unit = str(pick(row, ("unit", "units")) or "").lower()
+            if isinstance(raw, dict):
+                measures = android.fields(raw)
+                field = next((field for field in UNIT_VALUES if field in measures), None)
+                raw, unit = (measures[field], UNIT_VALUES[field]) if field else (pick(measures, ("value", "qty")), str(measures.get("unit", unit)).lower())
+            if "distanceinmeters" in row and not unit:
+                unit = "m"
+            if isinstance(raw, str) and (entry := re.fullmatch(r"([\d.,]+)\s+([a-zA-Z/%]+)", raw.strip())):
+                raw, unit = entry[1], entry[2].lower()
+            value = android_number(raw)
+            if name == "apple_exercise_time" and value is None and start and end and start < end:
+                value = (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds() / 60
+                unit = "min"
+            if value is not None:
+                normalized = android.UNITS.get(android.key(unit), unit)
+                samples[(name, mark)] = {"qty": scalar(name, value, normalized)}
+    return samples
+
+
+def parse_export(document, zone: ZoneInfo, hint=None) -> dict[tuple[str, str], dict]:
+    data = document.get("data") if isinstance(document, dict) else None
+    metrics = data.get("metrics") if isinstance(data, dict) else None
+    samples = {}
+    apple_envelope = isinstance(metrics, list)
+    if isinstance(metrics, list):
+        remaining = []
+        for item in metrics:
+            shaped = isinstance(item, dict) and isinstance(item.get("name"), str) and isinstance(item.get("data"), list)
+            apple_envelope = apple_envelope and shaped
+            if shaped and (parsed := parse_apple([item], zone)):
+                samples.update(parsed)
+            else:
+                remaining.append(item)
+        document = remaining
+    samples.update(parse_android(android.records(document, hint), zone))
+    if samples or apple_envelope or document == {"metrics": []} or document == []:
+        return samples
+    raise ValueError("无法识别健康 JSON 或有效测量值")
 
 
 def sleep_segments(rows):
@@ -292,7 +476,9 @@ class HealthStore:
             )""")
 
     def ingest(self, document, priority: int, file_signature=None) -> int:
-        samples = parse_export(document, self.zone)
+        return self.write_samples(parse_export(document, self.zone), priority, file_signature)
+
+    def write_samples(self, samples, priority, file_signature=None):
         with self.connect() as db:
             # 先取得 SQLite 写锁，按实际写入顺序处理直推和文件。
             db.execute("BEGIN IMMEDIATE")
@@ -309,7 +495,9 @@ class HealthStore:
                                    THEN json_patch(health_samples.payload, excluded.payload)
                                    ELSE excluded.payload END,
                     priority = excluded.priority, updated_at = excluded.updated_at
-                WHERE excluded.payload <> health_samples.payload OR excluded.priority <> health_samples.priority
+                WHERE (CASE WHEN excluded.metric = 'sleep_segment'
+                            THEN json_patch(health_samples.payload, excluded.payload)
+                            ELSE json(excluded.payload) END) <> json(health_samples.payload)
             """, ((metric, at, json.dumps(value, sort_keys=True), priority, now) for (metric, at), value in samples.items()))
             if file_signature is not None:
                 db.execute("INSERT OR REPLACE INTO health_file_imports VALUES (?, ?, ?)", file_signature)
@@ -318,16 +506,23 @@ class HealthStore:
     def scan(self):
         if self.export_dir is None:
             return
-        files = []
-        for path in self.export_dir.glob("HealthAutoExport-*.json"):
+        root = self.export_dir.resolve()
+        apple, android_files = [], []
+        for path in root.rglob("*"):
+            if path.suffix.lower() not in {".json", ".csv"}:
+                continue
             try:
                 stat = path.stat()
-                if path.is_file():
-                    files.append((stat.st_mtime_ns, stat.st_size, path))
+                if path.is_file() and path.resolve().is_relative_to(root):
+                    group = apple if path.name.casefold().startswith("healthautoexport-") else android_files
+                    group.append((stat.st_mtime_ns, stat.st_size, path))
             except OSError:
                 continue
-        newest = sorted(files, key=lambda item: (item[0], item[2].name))[-2:]
-        for modified, size, path in newest:
+        ordered = sorted(apple)[-2:] + sorted(android_files)
+        remaining = 24
+        for modified, size, path in ordered:
+            if not remaining:
+                break
             signature = (modified, size)
             if size > MAX_EXPORT:
                 continue
@@ -342,8 +537,14 @@ class HealthStore:
                 current = path.stat()
                 if len(content) > MAX_EXPORT or (current.st_mtime_ns, current.st_size) != signature:
                     continue
-                self.ingest(json.loads(content), priority=1, file_signature=(path_key, *signature))
-            except (OSError, ValueError, RecursionError) as error:
+                hint = android.filename_metric(path.stem) or android.filename_metric(path.parent.name)
+                if path.suffix.lower() == ".csv":
+                    samples = parse_android(android.csv_records(content, hint), self.zone)
+                else:
+                    samples = parse_export(json.loads(content), self.zone, hint)
+                self.write_samples(samples, priority=1, file_signature=(path_key, *signature))
+                remaining -= 1
+            except (OSError, ValueError, RecursionError, csv.Error) as error:
                 logger.info("健康导出文件暂未导入（%s）", type(error).__name__)
 
     def summary(self, now: datetime | None = None) -> dict:
@@ -586,7 +787,8 @@ def health_router(health: HealthStore) -> APIRouter:
         return health.trend(metric, period)
 
     @router.post("/ingest", openapi_extra={"requestBody": {"required": True, "content": {"application/json": {
-        "schema": {"type": "object", "example": {"data": {"metrics": []}}},
+        "schema": {"oneOf": [{"type": "object"}, {"type": "array", "items": {"type": "object"}}],
+                   "example": {"metrics": [{"type": "steps", "value": 8500, "start": "2026-11-25T08:00:00Z"}]}},
     }}}})
     async def ingest(request: Request):
         token = health.config.ingest_token
@@ -606,6 +808,6 @@ def health_router(health: HealthStore) -> APIRouter:
         try:
             return {"imported": await run_in_threadpool(decode)}
         except (ValueError, RecursionError) as error:
-            raise HTTPException(422, "需要包含 data.metrics 的 Health Auto Export JSON v2") from error
+            raise HTTPException(422, "需要可识别的 Health Auto Export、Health Connect 或 Tasker 健康 JSON") from error
 
     return router

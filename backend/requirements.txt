@@ -10,3 +10,6 @@ tzdata>=2025.2
 winrt-Windows.Media.Control>=3.2; sys_platform == "win32"
 winrt-Windows.Storage.Streams>=3.2; sys_platform == "win32"
 pycaw>=20260927; sys_platform == "win32"
+caldav>=3.3,<4
+icalendar>=6.3,<8
+recurring-ical-events>=3.5,<4

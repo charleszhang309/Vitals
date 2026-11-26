@@ -171,7 +171,7 @@ async def stream_completion(client, config, messages):
     raise ValueError("incomplete chat stream")
 
 
-async def vitals_context(request, health, weather, control):
+async def vitals_context(request, health, weather, control, calendar=None):
     health_data = {}
     if health is not None:
         summary = await run_in_threadpool(health.summary)
@@ -192,9 +192,12 @@ async def vitals_context(request, health, weather, control):
         forecast = {"city": result.get("city_name"), "status": result.get("status"),
                     "current": (result.get("data") or {}).get("current"),
                     "us_aqi": ((result.get("air_quality") or {}).get("data") or {}).get("us_aqi")}
-    return {"current_time": datetime.now(health.zone if health else None).astimezone(
-        health.zone if health else None).isoformat(timespec="minutes"),
-        "weather": forecast, "health": health_data, "hardware": hardware}
+    now = datetime.now(timezone.utc)
+    context = {"current_time": now.astimezone(health.zone if health else None).isoformat(timespec="minutes"),
+               "weather": forecast, "health": health_data, "hardware": hardware}
+    if calendar and calendar.sources:
+        context["agenda_today"] = calendar.agenda(now)
+    return context
 
 
 async def complete_text(client: httpx.AsyncClient, config: AiConfig, system: str, text: str, max_tokens: int) -> str:
@@ -226,10 +229,11 @@ async def analyze_text(client: httpx.AsyncClient, config: AiConfig, text: str, s
 
 
 class DailyBriefing:
-    def __init__(self, store: Scratchpad, health, weather):
+    def __init__(self, store: Scratchpad, health, weather, calendar=None):
         self.store = store
         self.health = health
         self.weather = weather
+        self.calendar = calendar
         self.lock = asyncio.Lock()
         self.retry = None
 
@@ -265,6 +269,8 @@ class DailyBriefing:
                 sleep_minutes = await run_in_threadpool(self.health.last_night_minutes, requested)
                 context = {"date": day, "weather": weather_data, "sleep_minutes": sleep_minutes,
                            "health_today": summary["totals"], "heart_rate_today": summary["heart_rate"]["today"]}
+                if self.calendar and self.calendar.sources:
+                    context["agenda_today"] = self.calendar.agenda(requested)
                 system = await run_in_threadpool(load_system_prompt)
                 result = await complete_text(client, config, f"{system}\n\n{BRIEFING_SYSTEM}", json.dumps(context, ensure_ascii=False), 240)
                 content = " ".join(result.split())[:180]
@@ -385,7 +391,7 @@ def ai_router(state: AiState, store: Scratchpad, control: PowerControl, briefing
                 yield ": connected\n\n"
                 try:
                     config = state.require()
-                    context = await vitals_context(request, health, weather, control) if config.include_vitals_context else {}
+                    context = await vitals_context(request, health, weather, control, briefing.calendar) if config.include_vitals_context else {}
                     previous = await run_in_threadpool(history.messages, 12)
                     system = await run_in_threadpool(load_system_prompt)
                     if context:

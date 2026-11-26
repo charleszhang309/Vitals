@@ -60,12 +60,16 @@ export function Modal({ id, title, onClose, className = '', headerActions, style
 
   return (
     <dialog ref={ref} className={`modal ${className}`} style={style} aria-labelledby={`${id}-title`}
-      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      onCancel={(event) => {
+        if (event.target !== event.currentTarget) return;
+        event.preventDefault();
+        onClose();
+      }}
       onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="modal-body surface">
         <div className="modal-header flex items-center justify-between gap-4">
           <h2 id={`${id}-title`}>{title}</h2>
-          <div className="modal-controls">{headerActions}<IconButton label="关闭" onClick={onClose}><X size={19} /></IconButton></div>
+          <div className="modal-controls">{headerActions}<IconButton className="modal-close" label="关闭" onClick={onClose}><X size={19} aria-hidden="true" /></IconButton></div>
         </div>
         {children}
       </div>

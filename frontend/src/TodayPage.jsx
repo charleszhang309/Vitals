@@ -1,11 +1,15 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Cloud, CloudDrizzle, CloudFog, CloudLightning, CloudRain, CloudSun, Flame, Footprints, HeartPulse, MoonStar, RotateCw, Snowflake, Sparkles, Sun } from 'lucide-react';
 import { MediaCover, playbackLabels } from './ControlPage.jsx';
 import { request } from './api.js';
 import { measure, number, sleepTime, time } from './format.js';
-import { DetailLink, IconButton } from './ui.jsx';
+import { DetailLink, IconButton, Modal, Segmented } from './ui.jsx';
 import HealthTrend from './HealthTrend.jsx';
+import useResource from './useOverviewResource.js';
+import { overviewCards } from './overviewCards.js';
+import { CalendarDetails, CalendarPreview } from './CalendarWidget.jsx';
+import { CountdownDetails, CountdownPreview, RateDetails, RatePreview, TasksDetails, TasksPreview } from './LifeWidgets.jsx';
 
 const OverviewChart = lazy(() => import('./OverviewChart.jsx'));
 const HealthDetails = lazy(() => import('./HealthDetails.jsx'));
@@ -14,37 +18,7 @@ const taskLabels = { idle: '空闲', running: '高负载运行中', completed: '
 const stages = [
   ['deep', '深睡'], ['rem', 'REM'], ['core', '核心'], ['asleep', '未分期'], ['awake', '清醒'],
 ];
-
-function useResource(path, interval) {
-  const [data, setData] = useState(null);
-  const [error, setError] = useState('');
-  const [version, refresh] = useState(0);
-  useEffect(() => {
-    const controller = new AbortController();
-    let pending = false;
-    async function load() {
-      if (pending || document.hidden) return;
-      pending = true;
-      try {
-        const result = await request(path, { signal: controller.signal });
-        if (!controller.signal.aborted) { setData(result); setError(''); }
-      } catch (failure) {
-        if (!controller.signal.aborted) setError(failure.message);
-      } finally {
-        pending = false;
-      }
-    }
-    load();
-    const timer = window.setInterval(load, interval);
-    document.addEventListener('visibilitychange', load);
-    return () => {
-      controller.abort();
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', load);
-    };
-  }, [path, interval, version]);
-  return { data, setData, error, retry: () => refresh((value) => value + 1) };
-}
+const weatherMetrics = [{ value: 'temperature', label: '温度' }, { value: 'rain', label: '降水概率' }];
 
 function DailyBriefing() {
   const { data, setData } = useResource('/api/ai/briefing', 300_000);
@@ -93,12 +67,12 @@ function HostSummary({ telemetry, onOpen }) {
 }
 
 function MediaSummary({ track, onOpen }) {
-  return <motion.button className={`surface host-strip music-strip${track ? '' : ' music-strip-empty'}`} type="button"
+  return <motion.button className="surface host-strip music-strip" type="button"
     onClick={onOpen} whileTap={{ scale: 0.97 }}>
     <MediaCover track={track} compact />
     <span className="music-strip-text">
-      <strong>{track ? track.title || '未命名媒体' : '当前未在播放媒体'}</strong>
-      {track && <small className="muted">{[track.artist, track.player, playbackLabels[track.status]].filter(Boolean).join(' · ')}</small>}
+      <strong>{track.title || '未命名媒体'}</strong>
+      <small className="muted">{[track.artist, track.player, playbackLabels[track.status]].filter(Boolean).join(' · ')}</small>
     </span>
     <span className="host-link">控制<ArrowUpRight size={17} aria-hidden="true" /></span>
   </motion.button>;
@@ -124,6 +98,67 @@ function aqiWord(aqi) {
   if (aqi <= 200) return '不健康';
   if (aqi <= 300) return '很不健康';
   return '严重';
+}
+
+function AirBadge({ air, compact = false }) {
+  const aqi = air?.data?.us_aqi;
+  const valid = Number.isFinite(aqi);
+  const tone = aqi <= 50 ? 'green' : aqi <= 150 ? 'orange' : 'red';
+  return <span className={`aqi-badge ${valid ? `tone-${tone}` : ''}`} title={valid ? aqiWord(aqi) : '暂无空气质量数据'}>
+    US AQI <strong className="numeric">{number(aqi, 0)}</strong>{!compact && air?.status === 'stale' && ' · 缓存'}
+  </span>;
+}
+
+function WeatherPreview({ resource }) {
+  const reply = resource.data;
+  const current = reply?.data?.current;
+  const [, description] = condition(current?.code);
+  const location = current ? [description, reply?.city_name].filter(Boolean).join(' · ')
+    : resource.error || reply?.status === 'unavailable' ? '天气暂不可用' : '正在获取天气…';
+  const temperature = (value) => Number.isFinite(value) ? `${number(value, 0)}°` : '—';
+  const percent = (value) => Number.isFinite(value) ? `${number(value, 0)}%` : '—';
+  return <div className="weather-preview">
+    <div className="widget-weather">
+      <div className="widget-weather-current">
+        <p className="widget-weather-temperature numeric">{temperature(current?.temperature_c)}</p>
+        <p className="widget-muted widget-truncate" title={location}>{location}</p>
+      </div>
+      <dl className="widget-weather-range">{[['最高', current?.high_c], ['最低', current?.low_c]].map(([label, value]) => (
+        <div key={label}><dt>{label}</dt><dd className="numeric">{temperature(value)}</dd></div>
+      ))}</dl>
+    </div>
+    <dl className="widget-weather-facts">{[
+      ['体感', temperature(current?.feels_like_c)], ['湿度', percent(current?.humidity_percent)],
+      ['降水', percent(current?.precipitation_percent)],
+    ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd className="numeric">{value}</dd></div>)}</dl>
+  </div>;
+}
+
+function HealthPreview({ resource }) {
+  const { totals, heart_rate: heart, sleep } = resource.data ?? {};
+  const rings = [
+    ['活动能量', totals?.active_energy, 500, '#FF3B30', 39],
+    ['步数', totals?.step_count, 8000, '#34C759', 28],
+    ['睡眠', sleep?.total_minutes, 480, '#5856D6', 17],
+  ];
+  return <div className="widget-health">
+    <svg viewBox="0 0 88 88" className="health-rings" fill="none" strokeWidth="8" role="img" aria-label={rings.map(
+      ([label, value, goal]) => `${label}目标 ${Number.isFinite(value) ? `${Math.round(value / goal * 100)}%` : '暂无数据'}`
+    ).join('，')}>
+      {rings.map(([label, value, goal, color, radius]) => {
+        const progress = Number.isFinite(value) ? Math.min(100, Math.max(0, value / goal * 100)) : 0;
+        return <g key={label} stroke={color}>
+          <circle cx="44" cy="44" r={radius} opacity=".18" />
+          {progress > 0 && <circle cx="44" cy="44" r={radius} pathLength="100" strokeLinecap="round"
+            strokeDasharray={progress === 100 ? undefined : `${progress} 100`} transform="rotate(-90 44 44)" />}
+        </g>;
+      })}
+    </svg>
+    <dl>{[
+    ['步数', measure(totals?.step_count, '步', 0)], ['睡眠', sleepTime(sleep?.total_minutes)],
+    ['心率', measure(heart?.current, '次/分', 0)], ['活动能量', measure(totals?.active_energy, 'kcal', 0)],
+    ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd className="numeric">{value}</dd></div>)}</dl>
+  </div>;
 }
 
 function ForecastDays({ days }) {
@@ -152,37 +187,40 @@ function ForecastDays({ days }) {
 }
 
 function Weather({ resource, dark }) {
+  const [weatherMetric, setWeatherMetric] = useState('temperature');
   const { data: reply, error, retry } = resource;
   const data = reply?.data;
   const air = reply?.air_quality;
   const aqi = air?.data?.us_aqi;
-  const aqiTone = aqi <= 50 ? 'green' : aqi <= 150 ? 'orange' : 'red';
   const current = data?.current;
   const [Icon, label] = condition(current?.code);
+  const clock = new Intl.DateTimeFormat('zh-CN', { timeZone: data?.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const solarTime = (stamp) => Number.isFinite(stamp) ? clock.format(stamp * 1000) : '—';
+  const hourlyKey = weatherMetric === 'rain' ? 'precipitation_percent' : 'temperature_c';
   return (
-    <section className="today-section" aria-labelledby="weather-heading">
-      <div className="today-section-title"><h2 id="weather-heading">天气</h2><span className="muted">{reply?.city_name}</span></div>
+    <section className="today-detail-content" aria-label="天气预报">
       {data ? <>
         {reply.status === 'stale' && <p className="overview-notice">暂时无法更新，显示上次天气 · {time(reply.updated_at, true)}</p>}
         <div className="weather-grid">
           <section className="surface panel current-weather" aria-label="当前天气">
             <div className="panel-header"><h3>当前天气</h3>
-              <span className={`aqi-badge ${Number.isFinite(aqi) ? `tone-${aqiTone}` : ''}`} title={Number.isFinite(aqi) ? aqiWord(aqi) : '暂无空气质量数据'}>
-                US AQI <strong className="numeric">{number(aqi, 0)}</strong>{air?.status === 'stale' && ' · 缓存'}
-              </span>
+              <AirBadge air={air} />
             </div>
             <div className="weather-temperature numeric">{number(current.temperature_c, 0)}{Number.isFinite(current.temperature_c) && <span>°C</span>}</div>
             <div className="weather-caption"><Icon size={19} className="weather-symbol" aria-hidden="true" /><strong>{label}</strong><span className="numeric muted">最高 {measure(current.high_c, '°', 0)} · 最低 {measure(current.low_c, '°', 0)}</span></div>
             <dl className="weather-stats">
               {[['体感', measure(current.feels_like_c, '°C', 0)], ['降水概率', measure(current.precipitation_percent, '%', 0)],
-                ['湿度', measure(current.humidity_percent, '%', 0)], ['风速', measure(current.wind_kmh, 'km/h')]].map(([key, value]) => (
+                ['湿度', measure(current.humidity_percent, '%', 0)], ['风速', measure(current.wind_kmh, 'km/h')],
+                ['紫外线（UV）', number(current.uv_index, 1)], ['日出', solarTime(current.sunrise)], ['日落', solarTime(current.sunset)]].map(([key, value]) => (
                 <div key={key}><dt className="muted">{key}</dt><dd className="numeric">{value}</dd></div>
               ))}
             </dl>
           </section>
-          <section className="surface panel"><div className="panel-header"><h3>未来 24 小时</h3><span className="muted panel-note">气温</span></div>
-            {data.hourly.some((hour) => Number.isFinite(hour.temperature_c)) ? <Suspense fallback={<div className="chart-loading trend-plot muted">正在加载图表…</div>}>
-              <OverviewChart type="weather" readings={data.hourly} timezone={data.timezone} dark={dark}
+          <section className="surface panel"><div className="panel-header weather-chart-header"><h3>未来 24 小时</h3>
+            <Segmented id="weather-chart" label="天气图表" options={weatherMetrics} value={weatherMetric} onChange={setWeatherMetric} />
+          </div>
+            {data.hourly.some((hour) => Number.isFinite(hour[hourlyKey])) ? <Suspense fallback={<div className="chart-loading trend-plot muted">正在加载图表…</div>}>
+              <OverviewChart type="weather" weatherMetric={weatherMetric} readings={data.hourly} timezone={data.timezone} dark={dark}
                 start={data.hourly_start == null ? undefined : data.hourly_start * 1000} end={data.hourly_end == null ? undefined : data.hourly_end * 1000} />
             </Suspense> : <p className="section-empty">暂无逐小时数据</p>}
           </section>
@@ -274,8 +312,8 @@ function Health({ resource, dark }) {
   const heart = data?.heart_rate;
   const sleep = data?.sleep;
   return (
-    <section className="today-section" aria-labelledby="health-heading">
-      <div className="today-section-title"><h2 id="health-heading">健康状态</h2><span className="muted">{data?.available ? `最近导入 ${time(data.updated_at, true)}` : error ? '暂不可用' : data ? '暂无健康数据' : '正在读取健康数据…'}</span></div>
+    <section className="today-detail-content" aria-label="健康概览">
+      <p className="muted health-import-status">{data?.available ? `最近导入 ${time(data.updated_at, true)}` : error ? '暂不可用' : data ? '暂无健康数据' : '正在读取健康数据…'}</p>
       {error && <p className="overview-notice">健康数据暂时无法更新 <button className="text-link" type="button" onClick={retry}>重试</button></p>}
       <div className="metrics-grid health-grid">
         <HealthTile title="心率" Icon={HeartPulse} tone="red" value={number(heart?.current, 0)} unit="次/分" onOpen={() => setDetail('heart')} details={[
@@ -308,15 +346,49 @@ function Health({ resource, dark }) {
   );
 }
 
-export default function TodayPage({ telemetry, media, dark, openMonitor, openControl, briefingEnabled }) {
-  const weather = useResource('/api/weather', 60_000);
-  const health = useResource('/api/health/summary', 20_000);
+export default function TodayPage({ telemetry, media, dark, openMonitor, openControl, briefingEnabled, widgets }) {
+  const [open, setOpen] = useState(null);
+  const visible = (id) => widgets[id] !== false;
+  const weather = useResource('/api/weather', 60_000, visible('weather'));
+  const health = useResource('/api/health/summary', 20_000, visible('health'));
+  const calendar = useResource('/api/calendar/events', 45_000, visible('calendar'));
+  const todos = useResource('/api/todos', 15_000, visible('tasks'));
+  const habits = useResource('/api/habits', 15_000, visible('tasks'));
+  const countdowns = useResource('/api/countdowns', 30_000, visible('countdowns'));
+  const rates = useResource('/api/rates', 60_000, visible('rates'));
+
+  const previews = {
+    weather: <WeatherPreview resource={weather} />, health: <HealthPreview resource={health} />,
+    calendar: <CalendarPreview resource={calendar} />, tasks: <TasksPreview todos={todos} habits={habits} />,
+    countdowns: <CountdownPreview resource={countdowns} />, rates: <RatePreview resource={rates} />,
+  };
+  const details = {
+    weather: <Weather resource={weather} dark={dark} />, health: <Health resource={health} dark={dark} />,
+    tasks: <TasksDetails todos={todos} habits={habits} />,
+    countdowns: <CountdownDetails resource={countdowns} />, rates: <RateDetails resource={rates} dark={dark} />,
+  };
+  const selected = overviewCards.find(({ id }) => id === open && visible(id));
+  const shown = overviewCards.filter(({ id }) => visible(id));
+  const track = media.current;
   return <>
     <div className="page-heading"><h1>今日概览</h1></div>
-    <HostSummary telemetry={telemetry} onOpen={openMonitor} />
-    {briefingEnabled && <DailyBriefing />}
-    <MediaSummary track={media.current} onOpen={openControl} />
-    <Weather resource={weather} dark={dark} />
-    <Health resource={health} dark={dark} />
+    {visible('host') && <HostSummary telemetry={telemetry} onOpen={openMonitor} />}
+    {visible('media') && (track?.status === 'playing' || track?.status === 'paused') && <MediaSummary track={track} onOpen={openControl} />}
+    {visible('briefing') && briefingEnabled && <DailyBriefing />}
+    {shown.length > 0 && <div className="overview-grid">
+      {shown.map(({ id, title, Icon, tone }) => (
+        <motion.section key={id} className={`surface detail-tile overview-widget tone-${tone}`} data-widget={id} whileTap={{ scale: 0.98 }}>
+          <header><span className="metric-icon"><Icon size={18} aria-hidden="true" /></span><h2>{title}</h2>
+            {id === 'weather' && <div className="widget-aqi"><AirBadge air={weather.data?.air_quality} compact /></div>}
+          </header>
+          <div className="widget-content">{previews[id]}</div>
+          <DetailLink title={title} onClick={() => setOpen(id)} />
+        </motion.section>
+      ))}
+    </div>}
+    {selected?.id === 'calendar' && <CalendarDetails resource={calendar} onClose={() => setOpen(null)} />}
+    {selected && selected.id !== 'calendar' && <Modal id={`overview-${selected.id}`} title={selected.id === 'weather' && weather.data?.city_name
+      ? `天气 · ${weather.data.city_name}` : selected.title} className={`detail-dialog overview-dialog ${selected.id}-dialog`}
+      onClose={() => setOpen(null)}>{details[selected.id]}</Modal>}
   </>;
 }

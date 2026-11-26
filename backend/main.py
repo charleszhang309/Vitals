@@ -17,12 +17,16 @@ from starlette.responses import JSONResponse
 from websockets.exceptions import ConnectionClosed
 
 from .ai import AiState, DailyBriefing, ai_router
+from .calendar_service import CalendarService, calendar_router
 from .config import MIB, ROOT, Settings, load_settings
 from .control import PowerControl, control_router
 from .health import HealthStore, health_router
+from .life import LifeStore, life_router
 from .lyrics import LyricsCache
 from .media import MediaBridge, media_router
 from .monitor import Monitor
+from .rates import RatePins, Rates, rates_router
+from .rate_history import RateHistory
 from .scratchpad import Scratchpad, scratchpad_router
 from .wallpaper import wallpaper_router
 from .weather import Weather, weather_router
@@ -123,17 +127,25 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
         settings = load_settings(config_path)
     store = Scratchpad(data_dir)
     health = HealthStore(store.connect, settings.health)
+    calendar = CalendarService(settings.calendar, health.zone)
+    life = LifeStore(store.connect, health.zone)
+    rates = Rates(settings.finance)
+    rate_pins = RatePins(store.connect, settings.finance)
+    rate_history = RateHistory(rates, store.connect)
     sensor_file = data_dir / "fancontrol-mode.sensor" if settings.fancontrol_mode_sensor else None
     power = PowerControl(settings, sensor_file=sensor_file)
     weather = Weather(settings.weather)
     ai_state = AiState(settings.ai, config_path)
-    briefing = DailyBriefing(store, health, weather)
+    briefing = DailyBriefing(store, health, weather, calendar)
     media = MediaBridge()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await asyncio.to_thread(store.initialize)
         await asyncio.to_thread(health.initialize)
+        await asyncio.to_thread(life.initialize)
+        await asyncio.to_thread(rate_pins.initialize)
+        await asyncio.to_thread(rate_history.initialize)
         monitor = Monitor(settings)
         app.state.monitor = monitor
         async with (httpx.AsyncClient(trust_env=False) as lhm_client, httpx.AsyncClient() as external_client,
@@ -144,9 +156,12 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
                 asyncio.create_task(monitor.run(lhm_client, lambda: power.latest), name="metrics"),
                 asyncio.create_task(periodic("电源计划查询", 15, power.active_power), name="power"),
                 asyncio.create_task(periodic("中转站清理", 3600, store.cleanup), name="cleanup"),
+                asyncio.create_task(rate_history.sample(external_client, rate_pins), name="rate-snapshots"),
             ]
             if health.export_dir is not None:
                 workers.append(asyncio.create_task(periodic("本地健康导入", 120, health.scan), name="health-import"))
+            if calendar.sources:
+                workers.append(asyncio.create_task(calendar.run(external_client), name="calendar-sync"))
             if settings.webhook.kind != "disabled":
                 workers.append(asyncio.create_task(monitor.send_notifications(external_client), name="webhook"))
             if settings.webhook.kind == "bark" and settings.webhook.daily_briefing_time:
@@ -166,6 +181,9 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     app.include_router(wallpaper_router(data_dir))
     app.include_router(health_router(health))
     app.include_router(weather_router(weather))
+    app.include_router(calendar_router(calendar))
+    app.include_router(life_router(life))
+    app.include_router(rates_router(rates, rate_pins, rate_history))
     app.include_router(ai_router(ai_state, store, power, briefing))
     app.include_router(media_router(media, LyricsCache(store)))
 

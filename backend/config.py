@@ -112,6 +112,55 @@ class HealthConfig(ConfigModel):
         return value
 
 
+class CalendarSource(ConfigModel):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,31}$")
+    name: str = Field(min_length=1, max_length=80)
+    type: Literal["icloud", "google", "outlook", "ics"]
+    color: str = Field(default="#007AFF", pattern=r"^#[0-9a-fA-F]{6}$")
+    writable: bool = True
+    calendar_id: str | None = Field(default=None, max_length=400)
+    apple_id: SecretStr | None = None
+    app_password: SecretStr | None = None
+    client_id: SecretStr | None = None
+    client_secret: SecretStr | None = None
+    refresh_token: SecretStr | None = None
+    tenant: str = Field(default="common", pattern=r"^[a-zA-Z0-9.-]{1,100}$")
+    url: SecretStr | None = None
+
+    @property
+    def can_write(self):
+        return self.writable and self.type != "ics"
+
+
+class CalendarConfig(ConfigModel):
+    sources: list[CalendarSource] = Field(default_factory=list, max_length=16)
+
+    @field_validator("sources")
+    @classmethod
+    def unique_sources(cls, sources):
+        if len({source.id for source in sources}) != len(sources):
+            raise ValueError("日历来源 ID 不能重复")
+        return sources
+
+
+class FinanceConfig(ConfigModel):
+    base_currency: str = "CAD"
+    target_currencies: list[str] = Field(default_factory=lambda: ["CNY", "USD"], min_length=1, max_length=12)
+
+    @field_validator("base_currency")
+    @classmethod
+    def currency(cls, value):
+        value = value.strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", value):
+            raise ValueError("请使用三位币种代码")
+        return value
+
+    @field_validator("target_currencies")
+    @classmethod
+    def currencies(cls, values):
+        return list(dict.fromkeys(cls.currency(value) for value in values))
+
+
 class AiConfig(ConfigModel):
     enabled: bool = False
     base_url: HttpUrl = HttpUrl("https://api.openai.com/v1")
@@ -161,6 +210,8 @@ class Settings(ConfigModel):
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
     health: HealthConfig = Field(default_factory=HealthConfig)
+    calendar: CalendarConfig = Field(default_factory=CalendarConfig)
+    finance: FinanceConfig = Field(default_factory=FinanceConfig)
     ai: AiConfig = Field(default_factory=AiConfig)
     fancontrol_mode_sensor: bool = False
     fancontrol_exe: Path | None = None
