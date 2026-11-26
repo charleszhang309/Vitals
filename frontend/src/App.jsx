@@ -13,6 +13,7 @@ import { useTelemetry } from './useTelemetry.js';
 import { useAiSettings } from './useAiSettings.js';
 import { useMedia } from './useMedia.js';
 import { useFocusTimer } from './useFocusTimer.js';
+import useOverviewResource from './useOverviewResource.js';
 
 const AiChat = lazy(() => import('./AiChat.jsx'));
 const views = [{ value: 'today', label: '今日概览' }, { value: 'control', label: '控制' },
@@ -24,17 +25,26 @@ export default function App() {
   const [clockOpen, setClockOpen] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false);
   const [settings, setSettings] = useState(false);
-  const immersiveView = clockOpen ? 'clock' : view === 'control' && playerOpen ? 'player' : null;
+  const [selectedDevice, setSelectedDevice] = useState(null);
+  const agents = useOverviewResource('/api/agents', 2500, view === 'control' || monitorOpen);
+  const devices = agents.data?.devices ?? [];
+  const selected = devices.find((device) => device.device_id === selectedDevice);
+  const device = selected && agents.error ? { ...selected, online: false } : selected;
+  const immersiveView = clockOpen ? 'clock' : view === 'control' && playerOpen && !device ? 'player' : null;
   const appearance = useAppearance(immersiveView);
   const widgets = appearance.preferences.widgets;
   const telemetry = useTelemetry(settings || monitorOpen || view === 'control' || (view === 'today' && widgets.host !== false));
-  const power = usePowerControls(view === 'control' || monitorOpen);
+  const power = usePowerControls((view === 'control' || monitorOpen) && !device);
   const ai = useAiSettings();
-  const media = useMedia(view === 'control' || (view === 'today' && widgets.media !== false));
+  const media = useMedia((view === 'control' && !device) || (view === 'today' && widgets.media !== false));
   const focusTimer = useFocusTimer();
   const [chat, setChat] = useState(false);
   const reduced = useReducedMotion();
   const dark = appearance.theme === 'dark';
+  function chooseDevice(next) {
+    setSelectedDevice(next);
+    setPlayerOpen(false);
+  }
   function navigate(next) {
     if (next !== 'control') setPlayerOpen(false);
     setView(next);
@@ -65,11 +75,12 @@ export default function App() {
             <motion.section key={view} role="tabpanel" aria-labelledby={`tab-${view}`} id={`panel-${view}`}
               initial={{ opacity: 0, y: reduced ? 0 : 7 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 0 }} transition={{ duration: reduced ? 0 : 0.16 }}>
               {view === 'today' && <TodayPage telemetry={telemetry} media={media} dark={dark} widgets={widgets}
-                openMonitor={() => { navigate('control'); setMonitorOpen(true); }}
-                openControl={() => { media.select(media.current?.session_id ?? null); navigate('control'); }}
+                openMonitor={() => { chooseDevice(null); navigate('control'); setMonitorOpen(true); }}
+                openControl={() => { chooseDevice(null); media.select(media.current?.session_id ?? null); navigate('control'); }}
                 briefingEnabled={Boolean(ai.settings?.enabled && ai.settings.configured && ai.settings.include_vitals_context)} />}
               {view === 'control' && <ControlPage media={media} open={playerOpen} onOpenChange={setPlayerOpen}
-                sample={telemetry.sample} power={power} onMonitor={() => setMonitorOpen(true)} />}
+                sample={telemetry.sample} power={power} onMonitor={() => setMonitorOpen(true)}
+                devices={devices} device={device} onDevice={chooseDevice} onAgentCommand={agents.retry} />}
               {view === 'scratchpad' && <ScratchpadPage aiEnabled={Boolean(ai.settings?.enabled && ai.settings.configured)} />}
             </motion.section>
           </AnimatePresence>
@@ -81,7 +92,8 @@ export default function App() {
           if (!ai.settings?.enabled) setChat(false);
           setSettings(false);
         }} />}
-        {monitorOpen && <MonitorPage telemetry={telemetry} dark={dark} power={power} onClose={() => setMonitorOpen(false)} />}
+        {monitorOpen && <MonitorPage telemetry={telemetry} dark={dark} power={power} onClose={() => setMonitorOpen(false)}
+          devices={devices} device={device} onDevice={chooseDevice} />}
         {clockOpen && <ClockDialog style={appearance.preferences.clockStyle} focus={focusTimer} onClose={() => setClockOpen(false)} />}
         <FocusNotice notice={focusTimer.notice} clockOpen={clockOpen} />
       </AppearanceFrame>

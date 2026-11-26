@@ -12,6 +12,9 @@
     "timezone": "UTC",
     "ingest_token": null
   },
+  "agents": {
+    "token": null
+  },
   "calendar": {
     "sources": []
   },

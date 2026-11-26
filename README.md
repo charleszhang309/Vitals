@@ -198,6 +198,22 @@ Vitals 默认仅允许本机回环与 Tailscale 私有网络访问（内置 `Pri
 </details>
 
 <details>
+<summary>远程设备 Agent 与 Apple 提醒事项</summary>
+
+在 Windows 中心端的本机 `config.json` 中设置 `agents.token`，并在 Agent 端配置同一密钥。通过 Tailscale 私有 HTTPS 访问中心端。心跳、执行结果与提醒事项同步都要求 `Authorization: Bearer <token>`。密钥为空时，三个入口返回 HTTP 503。网页查询和入队继续使用 Vitals 的私有网络访问规则。
+
+- Agent 可每 5 秒向 `POST /api/agents/{device_id}/heartbeat` 上报一次。设备 ID 使用稳定的字母、数字、短横线、下划线或点。快照必填 `name`、`os` 和带时区的 `timestamp`，其余指标可按设备支持情况上报。
+- `battery` 使用 `percent`、`charging`、`minutes_left`。CPU 使用 `usage_percent`。内存使用 `used_bytes`、`total_bytes`、`percent`。磁盘条目使用 `mountpoint`、`free_bytes`、`total_bytes`，进程条目使用 `name`、`rss_bytes`、可选 `pid`，网速使用 `download_bytes_per_sec` 和 `upload_bytes_per_sec`。音量为 `{percent, muted}`，媒体为 `{title, artist, status, player}`。
+- 心跳响应为 `{"commands":[{"id":"…","action":"volume_set","payload":{"percent":40}}]}`。已下发的指令不会重复发送。Agent 完成后向 `POST /api/agents/{device_id}/commands/{cmd_id}/result` 回报 `{"ok":true,"message":"已完成"}`。心跳超过 15 秒未到达时，网页将设备标为离线并禁用操作。设备状态和指令队列保存在中心端内存中。
+- 浏览器通过 `GET /api/agents` 查看 `devices`，通过 `POST /api/agents/{device_id}/command` 入队。音量指令 `volume_set` 接收 `{"percent":40}`，`volume_mute` 接收 `{"muted":true}`。其余动作使用空载荷，支持 `media_play_pause`、`media_next`、`media_previous`、`lock`、`display_sleep`、`sleep`。
+
+Apple 提醒事项 Agent 通过 `POST /api/todos/sync/reminders` 同步。请求包含 `items` 和 `acknowledgements` 数组，两者均可为空。每条事项提供 `external_id`、时间戳 `updated_at`（含时区）、`title`、`done`，删除时发送 `deleted: true`。缺席的条目视为本次未同步。两端时钟需要同步，中心端以较新的版本为准。
+
+响应中的 `changes` 包含 `action`（`create`、`update` 或 `delete`）、`local_id`、`external_id`、`updated_at` 与事项数据。Agent 应在写回后按 `local_id` 保存 Apple ID 映射，以便重试时复用，随后在 `acknowledgements` 中回传 `{local_id, external_id, updated_at}`，其中版本时间使用响应中的原值。若 `has_more` 为真，确认这批后继续同步。中心端保留删除标记，防止旧快照恢复已删事项。
+
+</details>
+
+<details>
 <summary>主要 API 端点一览</summary>
 
 | 方法与路径 | 说明 |
@@ -206,11 +222,14 @@ Vitals 默认仅允许本机回环与 Tailscale 私有网络访问（内置 `Pri
 | `GET / POST /api/control/power` | 查询或切换 Windows 电源计划 |
 | `POST /api/control/webhook/test` | 发送 Bark / Webhook 测试通知 |
 | `GET / POST /api/media/...` | 读取/控制 Windows SMTC 媒体会话、多源歌词与系统音量 |
+| `GET /api/agents` & `POST /api/agents/{device_id}/{heartbeat,command}` | 远程设备快照、心跳与白名单指令 |
+| `POST /api/agents/{device_id}/commands/{cmd_id}/result` | 回报远程指令执行结果 |
 | `GET / POST / DELETE /api/scratchpad...` | 中转站文本/文件存取、固定、预览与清理设置 |
 | `GET /api/weather` | 获取天气、未来预报与 US AQI |
 | `POST /api/health/ingest` & `GET /api/health/...` | 导入 Apple / Android 健康 JSON 与查询健康摘要/详情 |
 | `GET / POST /api/calendar/events` & `PATCH / DELETE /api/calendar/events/{source_id}/{event_id}` | 多源日历查询、强制同步和写回 |
 | `/api/todos`、`/api/habits`、`/api/countdowns`、`/api/focus` | 日常事项与专注统计 |
+| `POST /api/todos/sync/reminders` | 双向同步 Apple 提醒事项 |
 | `GET /api/rates`、`GET /api/rates/quote`、`GET /api/rates/history`、`/api/rates/pins` | 查询参考汇率与历史走势、添加和排序固定汇率对 |
 | `GET / PATCH /api/ai/settings` & `POST /api/ai/chat` | AI 开关设置、SSE 流式对话与每日简报 |
 | `GET / PUT / DELETE /api/wallpaper` | 跨设备共享壁纸管理 |

@@ -823,6 +823,32 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .control-hardware dd { font-size: clamp(14px, 2vw, 21px); font-weight: 700; overflow-wrap: anywhere; }
 .control-hardware dd small { display: block; font-weight: 550; }
 .host-control-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 14px; align-items: stretch; margin-block: 14px; }
+.control-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.device-picker { width: fit-content; min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
+.device-picker .segments { width: max-content; }
+.device-picker .segment { flex: 0 0 auto; max-width: min(38vw, 180px); }
+.device-picker .segment-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.monitor-content > .device-picker { margin-bottom: 14px; }
+.remote-hardware.detail-tile .panel-header { padding-inline-end: 24px; }
+.remote-hardware h2, .remote-disks strong, .remote-processes span { overflow-wrap: anywhere; }
+.remote-status, .remote-actions { display: flex; align-items: center; gap: 8px; }
+.remote-status { flex: 0 0 auto; color: var(--muted); font-size: 13px; }
+.remote-status .state-dot { flex: 0 0 auto; }
+.remote-hardware[data-offline="true"] .remote-readings, .remote-hardware[data-offline="true"] .remote-detail-grid { opacity: .66; }
+.remote-readings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 115px), 1fr)); gap: 12px; }
+.remote-readings > div { display: grid; align-content: start; gap: 2px; font-size: 13px; min-width: 0; }
+.remote-readings strong { font-size: clamp(18px, 2.6vw, 26px); }
+.remote-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 255px), 1fr)); gap: 16px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--glass-edge); }
+.remote-detail-grid h3 { font-size: 14px; margin-bottom: 6px; }
+.remote-disks, .remote-processes { display: grid; gap: 5px; font-size: 13px; }
+.remote-disks .hardware-label { flex-wrap: wrap; gap: 3px 8px; }
+.remote-processes li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.remote-quick { margin-block: 14px; }
+.remote-actions { flex-wrap: wrap; }
+.remote-transport { margin-top: 10px; }
+.remote-confirm-actions { margin-top: 12px; }
+.reminder-preview { display: flex; align-items: center; gap: 4px; }
+.reminder-source { display: inline-block; flex: 0 0 auto; margin-inline-start: 4px; color: var(--muted); white-space: nowrap; font-size: .8em; }
 :root:has(.monitor-dialog[open]) { overflow: hidden; overscroll-behavior: none; }
 .monitor-dialog {
   position: fixed; inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none;

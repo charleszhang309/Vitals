@@ -4,6 +4,7 @@ import { postJson, request } from './api.js';
 import { IconButton, Modal, ProgressBar } from './ui.jsx';
 import { artworkUrl } from './useMedia.js';
 import { HardwareSummary, PowerCard, QuickControlCard } from './HostControls.jsx';
+import { DevicePicker, RemoteControl } from './RemoteDevice.jsx';
 
 export const playbackLabels = { playing: '播放中', paused: '已暂停', stopped: '已停止' };
 const volumePath = '/api/media/volume';
@@ -308,11 +309,10 @@ function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose }) {
   </Modal>;
 }
 
-export default function ControlPage({ media, open, onOpenChange, sample, power, onMonitor }) {
+function WindowsControl({ media, open, onOpenChange, sample, power, onMonitor }) {
   const sound = useSystemVolume();
   const [lyricsPreferred, setLyricsPreferred] = useState(true);
   return <>
-    <div className="page-heading"><h1>控制</h1></div>
     <HardwareSummary sample={sample} power={power.data} onOpen={onMonitor} />
     <div className="host-control-grid">
       <PowerCard controller={power} />
@@ -323,5 +323,15 @@ export default function ControlPage({ media, open, onOpenChange, sample, power, 
       <VolumeCard sound={sound} />
     </div>
     {open && <NowPlaying media={media} sound={sound} lyricsPreferred={lyricsPreferred} onLyrics={setLyricsPreferred} onClose={() => onOpenChange(false)} />}
+  </>;
+}
+
+export default function ControlPage({ devices, device, onDevice, onAgentCommand, ...props }) {
+  return <>
+    <div className="page-heading control-heading"><h1>控制</h1>
+      <DevicePicker id="control-device" devices={devices} device={device} onChange={onDevice} />
+    </div>
+    {device ? <RemoteControl key={device.device_id} device={device} onMonitor={props.onMonitor} onCommand={onAgentCommand} />
+      : <WindowsControl {...props} />}
   </>;
 }

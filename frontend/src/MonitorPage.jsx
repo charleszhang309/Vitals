@@ -5,6 +5,7 @@ import { bytes, duration, measure, number, rate, rateText, time } from './format
 import { DetailLink, Modal, ProgressBar, Segmented } from './ui.jsx';
 import HardwareDetails from './HardwareDetails.jsx';
 import { PowerCard } from './HostControls.jsx';
+import { DevicePicker, RemoteHardware } from './RemoteDevice.jsx';
 
 const TrendChart = lazy(() => import('./TrendChart.jsx'));
 const trendModes = [{ value: 'usage', label: '占用' }, { value: 'temperature', label: '温度' }];
@@ -93,7 +94,7 @@ function Fans({ items, peaks, ready }) {
   );
 }
 
-export default function MonitorPage({ telemetry, dark, power, onClose }) {
+function WindowsMonitor({ telemetry, dark, power }) {
   const { sample, history, fanPeaks, connection } = telemetry;
   const [selectedGpu, setSelectedGpu] = useState('');
   const [detail, setDetail] = useState(null);
@@ -104,8 +105,7 @@ export default function MonitorPage({ telemetry, dark, power, onClose }) {
   const chartGpu = gpu?.id ?? (remembered.find((item) => item.id === selectedGpu) ?? remembered[0])?.id;
   const network = rate(sample?.network?.download_bytes_per_sec);
   return (
-    <Modal id="full-monitor" title="硬件监控" className="monitor-dialog" onClose={onClose}>
-      <div className="monitor-content">
+    <>
         <div className="page-meta muted"><Activity size={16} aria-hidden="true" />
           {sample ? <span>{connection === 'online' ? '最近更新' : '最后收到'} <time dateTime={sample.timestamp} className="numeric">{time(sample.epoch)}</time></span> : <span>等待实时数据</span>}
         </div>
@@ -139,7 +139,15 @@ export default function MonitorPage({ telemetry, dark, power, onClose }) {
           <Fans items={sample?.fan_summary ?? []} peaks={fanPeaks} ready={Boolean(sample)} />
         </div>
         {detail && <HardwareDetails category={detail} sample={sample} gpu={gpu} onClose={() => setDetail(null)} />}
-      </div>
-    </Modal>
+    </>
   );
+}
+
+export default function MonitorPage({ telemetry, dark, power, onClose, devices, device, onDevice }) {
+  return <Modal id="full-monitor" title="硬件监控" className="monitor-dialog" onClose={onClose}>
+    <div className="monitor-content">
+      <DevicePicker id="monitor-device" devices={devices} device={device} onChange={onDevice} />
+      {device ? <RemoteHardware device={device} /> : <WindowsMonitor telemetry={telemetry} dark={dark} power={power} />}
+    </div>
+  </Modal>;
 }

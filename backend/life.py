@@ -5,10 +5,11 @@ from typing import Annotated
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from starlette.concurrency import run_in_threadpool
 
+from .reminders import APPLE_REMINDERS, RemindersSync, migrate_reminders, sync_reminders, todo_revision
 
 Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 
@@ -64,41 +65,56 @@ class LifeStore:
                 );
                 CREATE INDEX IF NOT EXISTS focus_day ON focus_sessions(day);
             """)
+            migrate_reminders(db, self.day())
 
     def tasks(self, kind):
         today = self.day()
         with self.connect() as db:
             if kind == "todos":
-                rows = db.execute("SELECT id,title,done FROM todos WHERE day = ? ORDER BY id", (today,))
+                rows = db.execute("""SELECT id,title,done,external_source FROM todos
+                                     WHERE deleted=0 AND (day=? OR (external_source=? AND done=0))
+                                     ORDER BY id""", (today, APPLE_REMINDERS))
             else:
                 rows = db.execute("""SELECT h.id,h.title,l.habit_id IS NOT NULL AS done FROM habits h
                                      LEFT JOIN habit_logs l ON l.habit_id=h.id AND l.day=? ORDER BY h.id""", (today,))
-            return {"date": today, "items": [{**dict(row), "done": bool(row["done"])} for row in rows]}
+            items = [dict(row) for row in rows]
+            for item in items:
+                item["done"] = bool(item["done"])
+                if item.get("external_source") is None:
+                    item.pop("external_source", None)
+            return {"date": today, "items": items}
 
     def add_task(self, kind, title):
         with self.connect() as db:
             if kind == "todos":
-                item = db.execute("INSERT INTO todos(title,day) VALUES (?,?)", (title, self.day()))
+                item = db.execute("INSERT INTO todos(title,day,updated_at) VALUES (?,?,?)", (title, self.day(), todo_revision()))
             else:
                 item = db.execute("INSERT INTO habits(title) VALUES (?)", (title,))
             return {"id": item.lastrowid, "title": title, "done": False}
 
     def change_task(self, kind, item_id, *, title=None, done=None, delete=False):
         day = self.day()
-        # 表名从两个固定路由取得。日期条件阻止跨午夜误改昨天的待办。
-        condition, args = ("id=? AND day=?", (item_id, day)) if kind == "todos" else ("id=?", (item_id,))
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            if not db.execute(f"SELECT 1 FROM {kind} WHERE {condition}", args).fetchone():
+            if kind == "todos":
+                row = db.execute("""SELECT updated_at,title,done FROM todos
+                                    WHERE id=? AND deleted=0 AND (day=? OR (external_source=? AND done=0))""",
+                                 (item_id, day, APPLE_REMINDERS)).fetchone()
+                if row is None:
+                    raise HTTPException(404, "找不到这条事项")
+                next_title = row["title"] if title is None else title
+                next_done = row["done"] if done is None else done
+                if delete or (next_title, next_done) != (row["title"], row["done"]):
+                    db.execute("UPDATE todos SET title=?,done=?,day=?,updated_at=?,deleted=? WHERE id=?",
+                               (next_title, next_done, day, todo_revision(row["updated_at"]), delete, item_id))
+                return
+            if not db.execute("SELECT 1 FROM habits WHERE id=?", (item_id,)).fetchone():
                 raise HTTPException(404, "找不到这条事项")
             if delete:
-                db.execute(f"DELETE FROM {kind} WHERE {condition}", args)
-                if kind == "habits":
-                    db.execute("DELETE FROM habit_logs WHERE habit_id=?", (item_id,))
+                db.execute("DELETE FROM habits WHERE id=?", (item_id,))
+                db.execute("DELETE FROM habit_logs WHERE habit_id=?", (item_id,))
             elif title is not None:
-                db.execute(f"UPDATE {kind} SET title=? WHERE {condition}", (title, *args))
-            elif kind == "todos":
-                db.execute("UPDATE todos SET done=? WHERE id=? AND day=?", (done, *args))
+                db.execute("UPDATE habits SET title=? WHERE id=?", (title, item_id))
             elif done:
                 db.execute("INSERT OR IGNORE INTO habit_logs(habit_id,day) VALUES (?,?)", (item_id, day))
             else:
@@ -151,7 +167,7 @@ class LifeStore:
                 raise HTTPException(404, "找不到这条专注记录")
 
 
-def life_router(store):
+def life_router(store, authenticate):
     router = APIRouter(prefix="/api", tags=["life"])
 
     def mount_tasks(kind):
@@ -178,6 +194,10 @@ def life_router(store):
 
     mount_tasks("todos")
     mount_tasks("habits")
+
+    @router.post("/todos/sync/reminders", dependencies=[Depends(authenticate)])
+    def reminders(payload: RemindersSync):
+        return sync_reminders(store, payload)
 
     @router.get("/countdowns")
     def countdowns(response: Response):

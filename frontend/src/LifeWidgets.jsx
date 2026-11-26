@@ -4,6 +4,10 @@ import { postJson, request, sendJson } from './api.js';
 import { Button, IconButton, ProgressBar, Segmented } from './ui.jsx';
 import useResource from './useOverviewResource.js';
 
+function ReminderSource({ item }) {
+  return item.external_source === 'apple_reminders' && <small className="reminder-source">提醒事项</small>;
+}
+
 export function TasksPreview({ todos, habits }) {
   if (!todos.data || !habits.data) return <p className="widget-muted">{todos.error || habits.error ? '事项暂不可用' : '正在读取事项…'}</p>;
   const items = [...todos.data.items, ...habits.data.items];
@@ -11,7 +15,8 @@ export function TasksPreview({ todos, habits }) {
   return <>
     <p className="widget-value numeric">{done} <small>/ {items.length} 已完成</small></p>
     <ProgressBar label="今日完成进度" value={items.length ? done / items.length * 100 : 0} />
-    <ul className="widget-lines">{items.filter((item) => !item.done).slice(0, 2).map((item, index) => <li key={index}>{item.title}</li>)}</ul>
+    <ul className="widget-lines">{items.filter((item) => !item.done).slice(0, 2).map((item, index) =>
+      <li className="reminder-preview" key={index}><span className="widget-truncate">{item.title}</span><ReminderSource item={item} /></li>)}</ul>
     {items.length === done && <p className="widget-muted">{items.length ? '今日事项已完成' : '今日暂无事项'}</p>}
   </>;
 }
@@ -47,7 +52,7 @@ function TaskList({ title, resource, kind }) {
       {data.items.map((item) => <li key={item.id} className="widget-list-row task-line">
         <label className="widget-checkbox"><input type="checkbox" checked={item.done} disabled={busy}
           onChange={(event) => { const done = event.target.checked; change(() => sendJson('PUT', `${path}/${item.id}/check`, { done })); }} />
-          <span>{item.title}</span></label>
+          <span>{item.title}<ReminderSource item={item} /></span></label>
         {confirm === item.id ? <div className="widget-actions">
           <Button disabled={busy} onClick={() => change(() => request(`${path}/${item.id}`, { method: 'DELETE' }))}>确认删除</Button>
           <Button disabled={busy} onClick={() => setConfirm(null)}>取消</Button>

@@ -16,6 +16,7 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from websockets.exceptions import ConnectionClosed
 
+from .agents import AgentRegistry, agents_router, require_agent_token
 from .ai import AiState, DailyBriefing, ai_router
 from .calendar_service import CalendarService, calendar_router
 from .config import MIB, ROOT, Settings, load_settings
@@ -129,6 +130,8 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     health = HealthStore(store.connect, settings.health)
     calendar = CalendarService(settings.calendar, health.zone)
     life = LifeStore(store.connect, health.zone)
+    agent_auth = require_agent_token(settings.agents)
+    agents = AgentRegistry()
     rates = Rates(settings.finance)
     rate_pins = RatePins(store.connect, settings.finance)
     rate_history = RateHistory(rates, store.connect)
@@ -182,7 +185,8 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     app.include_router(health_router(health))
     app.include_router(weather_router(weather))
     app.include_router(calendar_router(calendar))
-    app.include_router(life_router(life))
+    app.include_router(agents_router(agents, agent_auth))
+    app.include_router(life_router(life, agent_auth))
     app.include_router(rates_router(rates, rate_pins, rate_history))
     app.include_router(ai_router(ai_state, store, power, briefing))
     app.include_router(media_router(media, LyricsCache(store)))

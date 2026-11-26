@@ -112,6 +112,10 @@ class HealthConfig(ConfigModel):
         return value
 
 
+class AgentsConfig(ConfigModel):
+    token: SecretStr | None = None
+
+
 class CalendarSource(ConfigModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,31}$")
     name: str = Field(min_length=1, max_length=80)
@@ -210,6 +214,7 @@ class Settings(ConfigModel):
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
     health: HealthConfig = Field(default_factory=HealthConfig)
+    agents: AgentsConfig = Field(default_factory=AgentsConfig)
     calendar: CalendarConfig = Field(default_factory=CalendarConfig)
     finance: FinanceConfig = Field(default_factory=FinanceConfig)
     ai: AiConfig = Field(default_factory=AiConfig)
