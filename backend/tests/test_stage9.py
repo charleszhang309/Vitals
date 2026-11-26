@@ -210,6 +210,10 @@ def test_remote_media_artwork_and_upgrade_commands(tmp_path, monkeypatch):
     track_id = "a" * 64
     version = sha256(track_id.encode() + contents).hexdigest()
     snapshot = {**SNAPSHOT, "caffeinate": False,
+                "volume": {**SNAPSHOT["volume"], "device_id": "BuiltInSpeakerDevice", "devices": [
+                    {"id": "BuiltInSpeakerDevice", "name": "MacBook Speakers"},
+                    {"id": "fixture:headphones", "name": "Headphones"},
+                ]},
                 "media": {**SNAPSHOT["media"], "album": "Sample album", "track_id": track_id,
                           "artwork_version": version, "position_seconds": 6, "duration_seconds": 200,
                           "updated_at": SNAPSHOT["timestamp"]}}
@@ -237,6 +241,8 @@ def test_remote_media_artwork_and_upgrade_commands(tmp_path, monkeypatch):
             assert (await heart(snapshot))["artwork_needed"] is True
             assert (await read())["snapshot"]["media"]["artwork_version"] is None
             assert (await client.post(art_path, params=query, content=contents)).status_code == 401
+            assert (await client.post(art_path, params=query, content=contents,
+                                      headers={**AUTH, "Content-Type": "image/png"})).status_code == 415
             assert (await client.post(art_path, params=query, content=b"fake", headers=upload_headers)).status_code == 422
             assert (await client.post(art_path, params=query, content=contents, headers=upload_headers)).status_code == 204
             assert (await heart(snapshot))["artwork_needed"] is False
@@ -244,19 +250,84 @@ def test_remote_media_artwork_and_upgrade_commands(tmp_path, monkeypatch):
             cover = await client.get(art_path, params=query)
             assert cover.content == contents and cover.headers["Content-Type"] == "image/jpeg"
             assert (await client.get(art_path, params=query, headers={"If-None-Match": cover.headers["etag"]})).status_code == 304
+            current = await client.get(art_path)
+            assert current.content == contents and current.headers["cache-control"] == "private, no-cache"
+            assert (await client.get(art_path, params={"version": "b" * 64})).status_code == 404
 
             params = {"agent_id": "macbook", "track_id": track_id}
             assert (await client.get("/api/media/lyrics", params=params)).json() == {"status": "synced", "album": "Sample album"}
             assert (await client.get("/api/media/lyrics", params={**params, "track_id": "b" * 64})).json()["status"] == "missing"
 
             changes = {"display_lock": {}, "caffeinate_toggle": {}, "clipboard_push": {},
-                       "audio_device_set": {"device_id": "BuiltInSpeakerDevice"}}
+                       "sleep": {}, "audio_device_set": {"device_id": "fixture:headphones"}}
             for action, payload in changes.items():
                 reply = await client.post(AGENT + "/command", json={"action": action, "payload": payload})
                 assert reply.status_code == 202
             assert (await client.post(AGENT + "/command", json={"action": "audio_device_set", "payload": {}})).status_code == 422
+            unavailable = {"action": "audio_device_set", "payload": {"device_id": "another-output"}}
+            assert (await client.post(AGENT + "/command", json=unavailable)).status_code == 409
             assert {cmd["action"]: cmd["payload"] for cmd in (await heart(snapshot))["commands"]} == changes
             await heart({**snapshot, "media": None})
             assert (await client.get(art_path, params=query)).status_code == 404
+
+    asyncio.run(verify())
+
+
+def test_mac_agent_telemetry_and_metadata_lyrics_cache(tmp_path, monkeypatch):
+    from backend.lyrics import Track
+
+    settings = Settings(agents={"token": "fixture-agent-token"})
+    Scratchpad(tmp_path).initialize()
+    app = create_app(settings, tmp_path, static_dir=tmp_path / "no-static")
+    app.state.external_client = object()
+    interfaces = [{"name": "en0", "addresses": ["192.0.2.10"]},
+                  {"name": "utun1", "addresses": ["2001:db8::7"], "tailscale": True}]
+    snapshot = {
+        **SNAPSHOT, "caffeinate": True,
+        "battery": {**SNAPSHOT["battery"], "cycle_count": 45, "health_percent": 96, "temperature_c": 27.5},
+        "cpu": {**SNAPSHOT["cpu"], "name": "Fixture CPU", "physical_cores": 8, "logical_cores": 8},
+        "memory": {**SNAPSHOT["memory"], "available_bytes": 4},
+        "disks": [{**SNAPSHOT["disks"][0], "name": "Macintosh HD"}],
+        "network": {**SNAPSHOT["network"], "total_upload_bytes": 1000},
+        "network_info": {"interfaces": interfaces},
+        "volume": {"devices": [{"id": "fixture:usb", "name": "USB Audio"}], "device_id": "fixture:usb"},
+        "media": {"title": "Fixture song", "artist": "Fixture artist", "album": "Fixture album",
+                  "duration_seconds": 140, "position_seconds": 12, "status": "playing", "player": "Apple Music"},
+    }
+    result = {"status": "synced", "source": "amll", "amll_lines": [{"startTime": 1000}]}
+    lookups = []
+
+    async def find(client, identity, player):
+        lookups.append((identity, player))
+        return result
+
+    monkeypatch.setattr("backend.lyrics.find_lyrics", find)
+
+    async def verify():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as client:
+            async def publish(data):
+                assert (await client.post(AGENT + "/heartbeat", json=data, headers=AUTH)).status_code == 200
+                return (await client.get("/api/agents")).json()["devices"][0]["snapshot"]
+
+            observed = await publish(snapshot)
+            assert observed["battery"]["cycle_count"] == 45 and observed["battery"]["health_percent"] == 96
+            assert observed["cpu"]["physical_cores"] == 8 and observed["memory"]["available_bytes"] == 4
+            assert observed["disks"][0]["name"] == "Macintosh HD" and observed["caffeinate"] is True
+            assert observed["network"]["total_upload_bytes"] == 1000
+            assert [item["addresses"] for item in observed["network"]["interfaces"]] == [["192.0.2.10"], ["2001:db8::7"]]
+            assert observed["volume"]["percent"] is None and observed["volume"]["device_id"] == "fixture:usb"
+
+            track_id = observed["media"]["track_id"]
+            assert track_id and observed["media"]["position_seconds"] == 12
+            updated = await publish({**snapshot, "network": {"interfaces": interfaces},
+                                     "media": {**snapshot["media"], "position_seconds": 22}})
+            assert updated["media"]["track_id"] == track_id
+            query = {"agent_id": "macbook", "track_id": track_id}
+            for _ in range(2):
+                response = await client.get("/api/media/lyrics", params=query)
+                assert response.json() == result
+            assert lookups == [(Track("Fixture song", "Fixture artist", "Fixture album", 140), "apple music")]
+            await publish({**snapshot, "media": {**snapshot["media"], "album": "Alternate album"}})
+            assert (await client.get("/api/media/lyrics", params=query)).json()["status"] == "missing"
 
     asyncio.run(verify())

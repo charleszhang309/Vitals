@@ -123,6 +123,16 @@ class Track:
         return " ".join((without_translation(self.title), *artist_names(self.artist)))
 
 
+def metadata_track_id(state):
+    """兼容未上报曲目 ID 的 Agent，播放进度变化时保持歌词请求稳定。"""
+    track = Track.from_state(state)
+    if not track.title:
+        return None
+    player = display_text(state.get("player")).casefold()
+    identity = (track.title, track.artist, track.album, track.duration, player)
+    return sha256(json.dumps(identity).encode()).hexdigest()
+
+
 @dataclass(frozen=True)
 class Candidate:
     track: Track

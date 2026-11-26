@@ -144,7 +144,7 @@ function WindowsMonitor({ telemetry, dark, power }) {
 }
 
 export default function MonitorPage({ telemetry, dark, power, onClose, devices, device, onDevice }) {
-  return <Modal id="full-monitor" title="硬件监控" className="monitor-dialog" onClose={onClose}>
+  return <Modal id="full-monitor" title="硬件监控" className={device ? 'detail-dialog remote-monitor-dialog' : 'monitor-dialog'} onClose={onClose}>
     <div className="monitor-content">
       <DevicePicker id="monitor-device" devices={devices} device={device} onChange={onDevice} />
       {device ? <RemoteHardware device={device} /> : <WindowsMonitor telemetry={telemetry} dark={dark} power={power} />}

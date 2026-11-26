@@ -30,7 +30,7 @@ export default function App() {
   const devices = agents.data?.devices ?? [];
   const selected = devices.find((device) => device.device_id === selectedDevice);
   const device = selected && agents.error ? { ...selected, online: false } : selected;
-  const immersiveView = clockOpen ? 'clock' : view === 'control' && playerOpen && !device ? 'player' : null;
+  const immersiveView = clockOpen ? 'clock' : view === 'control' && playerOpen ? 'player' : null;
   const appearance = useAppearance(immersiveView);
   const widgets = appearance.preferences.widgets;
   const telemetry = useTelemetry(settings || monitorOpen || view === 'control' || (view === 'today' && widgets.host !== false));

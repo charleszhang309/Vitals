@@ -6,7 +6,7 @@ import { artworkUrl } from './useMedia.js';
 import { HardwareSummary, PowerCard, QuickControlCard } from './HostControls.jsx';
 import { DevicePicker, RemoteControl } from './RemoteDevice.jsx';
 
-export const playbackLabels = { playing: '播放中', paused: '已暂停', stopped: '已停止' };
+export const playbackLabels = { playing: '播放中', paused: '已暂停', stopped: '已停止', offline: '设备离线' };
 const volumePath = '/api/media/volume';
 const AmllLyrics = lazy(() => import('./AmllLyrics.jsx'));
 
@@ -43,9 +43,10 @@ function usePosition(track, received) {
 const emptyPlayback = {
   desktop_unavailable: '等待 Windows 桌面会话',
   media_unavailable: 'Windows 媒体会话暂不可用',
+  agent_offline: 'MacBook 已休眠或离线',
 };
 
-function PlayerCard({ media, onOpen, children }) {
+function PlayerCard({ media, onOpen }) {
   const { track } = media;
   return <section className="surface panel detail-tile player-card" aria-labelledby="player-heading">
     <div className="panel-header"><h2 id="player-heading">正在播放</h2></div>
@@ -58,7 +59,6 @@ function PlayerCard({ media, onOpen, children }) {
         </> : <p className="section-empty">{emptyPlayback[media.reason] ?? '当前未在播放媒体'}</p>}
       </div>
     </div>
-    {children}
     {onOpen && <button className="detail-link" type="button" aria-label="展开正在播放" aria-haspopup="dialog" onClick={onOpen}>
       <Maximize2 size={17} aria-hidden="true" />
     </button>}
@@ -70,7 +70,8 @@ function useTrackLyrics(track) {
   const sessionId = track?.session_id;
   const agentId = track?.agent_id;
   const trackId = track?.track_id;
-  const lookupKey = sessionId && trackId && track.title?.trim() && track.artist?.trim() ? `${sessionId}:${trackId}` : '';
+  const lookupKey = sessionId && trackId && track.status !== 'offline' && track.title?.trim() && track.artist?.trim()
+    ? `${sessionId}:${trackId}` : '';
 
   useEffect(() => {
     if (!lookupKey) return undefined;
@@ -204,38 +205,39 @@ function PlaybackGlyph({ kind }) {
 }
 
 function VolumeControls({ sound, immersive = false }) {
-  const { available, percent, muted, switching, queue, flush } = sound;
+  const { available, percent, muted, switching, queue, flush, canAdjust = available, canMute = available } = sound;
   const disabled = !available || switching;
   return <div className="volume-controls">
-    <IconButton label={muted ? '取消静音' : '静音'} disabled={disabled} onClick={() => queue({ muted: !muted }, true)}>
+    <IconButton label={muted ? '取消静音' : '静音'} disabled={disabled || !canMute} onClick={() => queue({ muted: !muted }, true)}>
       {immersive ? <PlaybackGlyph kind={muted ? 'muted' : 'volume'} /> : muted ? <VolumeX size={21} /> : <Volume2 size={21} />}
     </IconButton>
-    <input className="media-range" type="range" min="0" max="100" aria-label="系统主音量" aria-valuetext={`${percent}%`}
-      disabled={disabled} value={percent} style={{ '--range-fill': `${percent}%` }}
+    <input className="media-range" type="range" min="0" max="100" aria-label="系统主音量" aria-valuetext={percent == null ? '音量不可用' : `${percent}%`}
+      disabled={disabled || !canAdjust} value={percent ?? 0} style={{ '--range-fill': `${percent ?? 0}%` }}
       onChange={(event) => queue({ percent: Number(event.target.value) })} onPointerUp={flush} onBlur={flush} />
   </div>;
 }
 
 function VolumeCard({ sound }) {
-  const { available, percent, output, switching, devices, feedback, queue } = sound;
+  const { available, percent, output, switching, devices, feedback, queue, unavailableLabel = '等待 Windows 音频设备' } = sound;
   return <section className="surface panel volume-card" aria-labelledby="volume-heading">
     <div className="panel-header"><h2 id="volume-heading">系统音量</h2>
-      <span className="numeric volume-readout">{available ? `${percent}%` : '—'}</span></div>
+      <span className="numeric volume-readout">{available && percent != null ? `${percent}%` : '—'}</span></div>
     <VolumeControls sound={sound} />
     {devices.length > 0 && <label className="volume-device"><span>输出设备</span>
-      <select value={output} disabled={switching} onChange={(event) => queue({ device_id: event.target.value }, true)}>
+      <select value={output} disabled={!available || switching} onChange={(event) => queue({ device_id: event.target.value }, true)}>
         {!devices.some((device) => device.id === output) && <option value="" disabled>选择输出设备</option>}
         {devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
       </select>
     </label>}
-    {!available && <p className="muted subtle-line">等待 Windows 音频设备</p>}
+    {(!available || percent == null) && <p className="muted subtle-line">{unavailableLabel}</p>}
     {feedback && <p className="feedback error" role="alert">{feedback}</p>}
   </section>;
 }
 
-function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose, onAction }) {
+function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose, onAction, commandStatus, commandError }) {
   const { track, sessions } = media;
-  const lyrics = useTrackLyrics(track);
+  const foundLyrics = useTrackLyrics(track);
+  const lyrics = Number.isFinite(track?.position_seconds) ? foundLyrics : { plain: foundLyrics?.plain };
   const hasLyrics = Boolean(lyrics?.amll_lines?.length || lyrics?.lines?.some((line) => line.text) || lyrics?.plain?.trim());
   const showLyrics = lyricsPreferred && hasLyrics;
   const position = usePosition(track, media.received);
@@ -300,7 +302,8 @@ function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose, onAction
           </div>}
           <VolumeControls sound={sound} immersive />
         </div>
-        {(feedback || sound.feedback) && <p className="now-feedback" role="alert">{feedback || sound.feedback}</p>}
+        {(feedback || sound.feedback || commandError) ? <p className="now-feedback" role="alert">{feedback || sound.feedback || commandError}</p>
+          : commandStatus && <p className="muted" role="status">{commandStatus}</p>}
       </div>
       <div className="now-lyrics-slot">
         {showLyrics && <LyricsPanel key={`${track.session_id}:${track.track_id}`} lyrics={lyrics} track={track} received={media.received} />}
@@ -315,20 +318,29 @@ function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose, onAction
   </Modal>;
 }
 
-function WindowsControl({ media, open, onOpenChange, sample, power, onMonitor }) {
-  const sound = useSystemVolume();
+function PlaybackControls({ media, sound, open, onOpenChange, onAction, commandStatus, commandError }) {
   const [lyricsPreferred, setLyricsPreferred] = useState(true);
+  return <>
+    <div className="media-control-grid">
+      <PlayerCard media={media} onOpen={() => onOpenChange(true)} />
+      <VolumeCard sound={sound} />
+    </div>
+    {open ? <NowPlaying media={media} sound={sound} lyricsPreferred={lyricsPreferred} onLyrics={setLyricsPreferred}
+      onClose={() => onOpenChange(false)} onAction={onAction} commandStatus={commandStatus} commandError={commandError} />
+      : commandError ? <p className="feedback error" role="alert">{commandError}</p>
+      : commandStatus && <p className="feedback muted" role="status">{commandStatus}</p>}
+  </>;
+}
+
+function WindowsControl({ sample, power, onMonitor, ...player }) {
+  const sound = useSystemVolume();
   return <>
     <HardwareSummary sample={sample} power={power.data} onOpen={onMonitor} />
     <div className="host-control-grid">
       <PowerCard controller={power} />
       <QuickControlCard />
     </div>
-    <div className="media-control-grid">
-      <PlayerCard media={media} onOpen={() => onOpenChange(true)} />
-      <VolumeCard sound={sound} />
-    </div>
-    {open && <NowPlaying media={media} sound={sound} lyricsPreferred={lyricsPreferred} onLyrics={setLyricsPreferred} onClose={() => onOpenChange(false)} />}
+    <PlaybackControls sound={sound} {...player} />
   </>;
 }
 
@@ -337,8 +349,9 @@ export default function ControlPage({ devices, device, onDevice, onAgentCommand,
     <div className="page-heading control-heading"><h1>控制</h1>
       <DevicePicker id="control-device" devices={devices} device={device} onChange={onDevice} />
     </div>
-    {device ? <RemoteControl key={device.device_id} device={device} onMonitor={props.onMonitor} onCommand={onAgentCommand}
-      PlayerCard={PlayerCard} NowPlaying={NowPlaying} />
+    {device ? <RemoteControl key={device.device_id} device={device} onMonitor={props.onMonitor} onCommand={onAgentCommand}>
+      {(playback) => <PlaybackControls {...playback} open={props.open} onOpenChange={props.onOpenChange} />}
+    </RemoteControl>
       : <WindowsControl {...props} />}
   </>;
 }

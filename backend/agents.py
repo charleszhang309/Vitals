@@ -15,6 +15,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from PIL import Image
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, IPvAnyAddress, StrictBool, StringConstraints
 
+from .lyrics import metadata_track_id
+
 
 OFFLINE_AFTER = 15
 RESULT_TIMEOUT = 60
@@ -57,12 +59,16 @@ class Battery(BaseModel):
 
 class CPU(BaseModel):
     usage_percent: Percent
+    name: Label | None = None
+    physical_cores: Bytes | None = None
+    logical_cores: Bytes | None = None
 
 
 class Memory(BaseModel):
     used_bytes: Bytes
     total_bytes: Bytes
     percent: Percent
+    available_bytes: Bytes | None = None
 
 
 class Disk(BaseModel):
@@ -78,10 +84,15 @@ class NetworkInterface(BaseModel):
     tailscale: StrictBool = False
 
 
-class Network(BaseModel):
+class NetworkInfo(BaseModel):
     interfaces: list[NetworkInterface] = Field(default_factory=list, max_length=32)
+
+
+class Network(NetworkInfo):
     upload_bytes_per_sec: Speed | None = None
     download_bytes_per_sec: Speed | None = None
+    total_upload_bytes: Bytes | None = None
+    total_download_bytes: Bytes | None = None
 
 
 class Process(BaseModel):
@@ -96,8 +107,8 @@ class AudioDevice(BaseModel):
 
 
 class Volume(BaseModel):
-    percent: Percent | None
-    muted: StrictBool | None
+    percent: Percent | None = None
+    muted: StrictBool | None = None
     device_id: DeviceUID | None = None
     devices: list[AudioDevice] = Field(default_factory=list, max_length=64)
 
@@ -124,6 +135,7 @@ class Heartbeat(BaseModel):
     memory: Memory | None = None
     disks: list[Disk] = Field(default_factory=list, max_length=48)
     network: Network | None = None
+    network_info: NetworkInfo | None = Field(default=None, exclude=True)
     top_processes: list[Process] = Field(default_factory=list, max_length=64)
     volume: Volume | None = None
     media: Media | None = None
@@ -209,7 +221,19 @@ class AgentRegistry:
         self.lock = Lock()
 
     def heartbeat(self, device_id, snapshot):
+        network_info = snapshot.network_info
         snapshot = snapshot.model_dump(mode="json")
+        if network_info and network_info.interfaces:
+            network = snapshot["network"]
+            if network is None:
+                network = snapshot["network"] = Network().model_dump(mode="json")
+            if not network["interfaces"]:
+                network["interfaces"] = network_info.model_dump(mode="json")["interfaces"]
+        media = snapshot["media"]
+        if media and not media["track_id"]:
+            media["track_id"] = metadata_track_id(media)
+            # 旧版快照不能提供与曲目绑定的封面版本。
+            media["artwork_version"] = None
         snapshot["top_processes"] = sorted(snapshot["top_processes"], key=lambda row: -row["rss_bytes"])[:5]
         with self.lock:
             now = monotonic()
@@ -257,11 +281,11 @@ class AgentRegistry:
                 raise HTTPException(422, "封面版本无效")
             device.artwork = version, contents
 
-    def get_artwork(self, device_id, version):
+    def get_artwork(self, device_id, version=None):
         with self.lock:
             device = self.devices.get(device_id)
-            if device and device.artwork and device.artwork[0] == version:
-                return device.artwork[1]
+            if device and device.artwork and (version is None or device.artwork[0] == version):
+                return device.artwork
         raise HTTPException(404, "该曲目暂无封面")
 
     def list(self):
@@ -284,6 +308,10 @@ class AgentRegistry:
                 raise HTTPException(404, "找不到该设备")
             if not device.online(now):
                 raise HTTPException(409, "设备已休眠或离线")
+            if payload.action == "audio_device_set":
+                volume = device.snapshot["volume"] or {}
+                if not any(item["id"] == payload.payload.device_id for item in volume.get("devices", [])):
+                    raise HTTPException(409, "该输出设备已不可用")
             if len(device.commands) >= MAX_COMMANDS:
                 oldest = next((key for key, command in device.commands.items()
                                if command.status(now) not in {"queued", "delivered"}), None)
@@ -336,10 +364,10 @@ def agents_router(registry, authenticate):
         registry.set_artwork(device_id, version, bytes(data))
 
     @router.get("/{device_id}/artwork")
-    def artwork(device_id: DeviceId, request: Request, version: Annotated[str, Query(pattern=HASH_PATTERN)]):
-        contents = registry.get_artwork(device_id, version)
-        etag = f'"{version}"'
-        headers = {"ETag": etag, "Cache-Control": "private, max-age=86400, immutable",
+    def artwork(device_id: DeviceId, request: Request, version: Annotated[str | None, Query(pattern=HASH_PATTERN)] = None):
+        digest, contents = registry.get_artwork(device_id, version)
+        etag = f'"{digest}"'
+        headers = {"ETag": etag, "Cache-Control": "private, max-age=86400, immutable" if version else "private, no-cache",
                    "X-Content-Type-Options": "nosniff"}
         if any(tag.strip() in {etag, "*"} for tag in request.headers.get("if-none-match", "").split(",")):
             return Response(status_code=304, headers=headers)

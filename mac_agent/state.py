@@ -1,7 +1,6 @@
 """Durable private state for a single agent instance."""
 
 from contextlib import contextmanager
-import fcntl
 from hashlib import sha256
 import json
 import os
@@ -36,6 +35,8 @@ def save_state(path, state):
 
 @contextmanager
 def single_instance(directory):
+    import fcntl
+
     with (directory / "agent.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

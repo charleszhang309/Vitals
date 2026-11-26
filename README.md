@@ -203,9 +203,10 @@ Vitals 默认仅允许本机回环与 Tailscale 私有网络访问（内置 `Pri
 在 Windows 中心端的本机 `config.json` 中设置 `agents.token`，并在 Agent 端配置同一密钥。通过 Tailscale 私有 HTTPS 访问中心端。心跳、执行结果与提醒事项同步都要求 `Authorization: Bearer <token>`。密钥为空时，三个入口返回 HTTP 503。网页查询和入队继续使用 Vitals 的私有网络访问规则。
 
 - Agent 可每 5 秒向 `POST /api/agents/{device_id}/heartbeat` 上报一次。设备 ID 使用稳定的字母、数字、短横线、下划线或点。快照必填 `name`、`os` 和带时区的 `timestamp`，其余指标可按设备支持情况上报。
-- `battery` 使用 `percent`、`charging`、`minutes_left`。CPU 使用 `usage_percent`。内存使用 `used_bytes`、`total_bytes`、`percent`。磁盘条目使用 `mountpoint`、`free_bytes`、`total_bytes`，进程条目使用 `name`、`rss_bytes`、可选 `pid`，网速使用 `download_bytes_per_sec` 和 `upload_bytes_per_sec`。音量为 `{percent, muted}`，媒体为 `{title, artist, status, player}`。
+- `battery` 支持 `percent`、`charging`、`state`、`minutes_left`、`cycle_count`、`health_percent` 和 `temperature_c`。CPU 使用 `usage_percent`，内存使用 `used_bytes`、`total_bytes` 和 `percent`。磁盘条目使用 `mountpoint`、`free_bytes`、`total_bytes`，可加 `name`。进程条目使用 `name`、`rss_bytes` 和可选的 `pid`。网速使用 `download_bytes_per_sec` 和 `upload_bytes_per_sec`，网卡 IP 使用 `network.interfaces` 或 `network_info.interfaces`。保持唤醒状态通过 `caffeinate` 上报。
+- 音量支持 `percent`、`muted`、`device_id` 和 `devices: [{id, name}]`。全屏播放器读取媒体的 `title`、`artist`、`album`、`status`、`player`、`position_seconds`、`duration_seconds`、`track_id` 和 `artwork_version`，用与 Windows 相同的歌词服务。若心跳返回 `artwork_needed: true`，Agent 使用 `POST /api/agents/{device_id}/artwork?version=…` 上传最长边不超过 512 像素、最大 512 KiB 的 JPEG 封面。
 - 心跳响应为 `{"commands":[{"id":"…","action":"volume_set","payload":{"percent":40}}]}`。已下发的指令不会重复发送。Agent 完成后向 `POST /api/agents/{device_id}/commands/{cmd_id}/result` 回报 `{"ok":true,"message":"已完成"}`。心跳超过 15 秒未到达时，网页将设备标为离线并禁用操作。设备状态和指令队列保存在中心端内存中。
-- 浏览器通过 `GET /api/agents` 查看 `devices`，通过 `POST /api/agents/{device_id}/command` 入队。音量指令 `volume_set` 接收 `{"percent":40}`，`volume_mute` 接收 `{"muted":true}`。其余动作使用空载荷，支持 `media_play_pause`、`media_next`、`media_previous`、`lock`、`display_sleep`、`sleep`。
+- 浏览器通过 `GET /api/agents` 查看 `devices`，通过 `POST /api/agents/{device_id}/command` 入队。音量指令 `volume_set` 接收 `{"percent":40}`，`volume_mute` 接收 `{"muted":true}`，`audio_device_set` 接收已上报设备的 `{"device_id":"…"}`。播放、息屏锁屏、休眠和保持唤醒操作使用空载荷。点击「推剪贴板」会将 Mac 剪贴板的图片或文字发送到中转站。
 
 Apple 提醒事项 Agent 通过 `POST /api/todos/sync/reminders` 同步。请求包含 `items` 和 `acknowledgements` 数组，两者均可为空。每条事项提供 `external_id`、时间戳 `updated_at`（含时区）、`title`、`done`，删除时发送 `deleted: true`。缺席的条目视为本次未同步。两端时钟需要同步，中心端以较新的版本为准。
 
