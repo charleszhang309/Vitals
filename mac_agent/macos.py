@@ -134,29 +134,44 @@ class Caffeinate:
             self._stop()
 
 
-def execute_command(action: str, params: dict, *, caffeinate=None, clipboard_push=None):
+def execute_command(action: str, params: dict, *, caffeinate=None, clipboard_push=None, quick=None):
     if not isinstance(params, dict):
         raise ValueError("params 必须是对象")
     if action == "volume_set":
         percent = params.get("percent")
         if params.keys() != {"percent"} or type(percent) is not int or not 0 <= percent <= 100:
             raise ValueError("volume_set 需要 0–100 的整数 percent")
-        apple(f"set volume output volume {percent}")
+        script = f"set volume output volume {percent}"
+        if quick:
+            return {"volume": quick.volume(percent=percent)}
+        apple(script)
+        return {"volume": parse_volume(apple("get volume settings"))}
     elif action == "volume_mute":
         muted = params.get("muted")
         if params.keys() != {"muted"} or type(muted) is not bool:
             raise ValueError("volume_mute 需要布尔值 muted")
-        apple("set volume with output muted" if muted else "set volume without output muted")
+        script = "set volume with output muted" if muted else "set volume without output muted"
+        if quick:
+            return {"volume": quick.volume(muted=muted)}
+        apple(script)
+        return {"volume": parse_volume(apple("get volume settings"))}
     elif action == "audio_device_set":
         set_audio_output(params)
+        if quick:
+            return {"volume": {**quick.volume(), "device_id": params["device_id"]}}
+        return {"volume": {**parse_volume(apple("get volume settings")), "device_id": params["device_id"]}}
     elif params:
         raise ValueError(f"{action} 不接受参数")
     elif action in MEDIA_ACTIONS:
-        javascript(MEDIA_SCRIPT, MEDIA_ACTIONS[action])
+        if quick:
+            quick.media(action)
+        else:
+            javascript(MEDIA_SCRIPT, MEDIA_ACTIONS[action])
     elif action in POWER_ACTIONS:
         native(PMSET, POWER_ACTIONS[action])
     elif action == "caffeinate_toggle" and caffeinate is not None:
         caffeinate.toggle()
+        return {"caffeinate": caffeinate.active()}
     elif action == "clipboard_push" and clipboard_push is not None:
         clipboard_push()
     else:

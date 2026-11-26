@@ -7,12 +7,12 @@ from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
-from queue import Empty, Full, Queue
+from queue import Empty, Queue
 import re
 import signal
 import subprocess
 import sys
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from time import monotonic, time
 
 import httpx
@@ -24,42 +24,94 @@ if __package__ in ("", None):
 from mac_agent.api import CONFIG_PATH, Config
 from mac_agent.clipboard import notify, push
 from mac_agent.macos import Caffeinate, Sampler, execute_command
+from mac_agent.playback import MEDIA_ACTIONS, read_playback
+from mac_agent.quick_controls import QuickControls, ScriptError
 from mac_agent.reminders import sync_once
 from mac_agent.state import load_state, save_state, single_instance, state_directory
 
 HEARTBEAT_SECONDS = 3
 REMINDERS_SECONDS = 30
-STREAM_RETRY_SECONDS = 2
+STREAM_BACKOFF = (1, 2, 5)
+STREAM_KEEPALIVE_SECONDS = 20
 COMMAND_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 RECEIPT_TTL = 48 * 3600
+REFRESH_ACTIONS = {"volume_set", "volume_mute", "audio_device_set", "media_play_pause", "media_next",
+                   "media_previous", "caffeinate_toggle"}
 FAILURES = (httpx.HTTPError, OSError, RuntimeError, ValueError, TypeError, KeyError, psutil.Error,
             subprocess.TimeoutExpired)
 logger = logging.getLogger(__name__)
 
 
-def heartbeat(client, config, sampler, caffeinate):
-    path = f"/api/agents/{config.device_id}/heartbeat"
-    snapshot = sampler.sample()
-    response = client.post(path, json={
-        "name": config.device_name, "os": "macos", "timestamp": datetime.now(timezone.utc).isoformat(),
-        "caffeinate": caffeinate.active(), **snapshot,
-    })
-    response.raise_for_status()
-    data = response.json()
-    commands = data["commands"]
-    if not isinstance(commands, list):
-        raise ValueError("心跳响应中的 commands 必须是数组")
-    if data.get("artwork_needed") is True and snapshot["media"]:
-        version = snapshot["media"]["artwork_version"]
-        contents = sampler.playback.bytes_for(version)
-        if contents:
-            try:
-                upload = client.post(f"/api/agents/{config.device_id}/artwork", params={"version": version},
-                                     headers={"Content-Type": "image/jpeg"}, content=contents)
-                upload.raise_for_status()
-            except httpx.HTTPError as exc:
-                logger.warning("封面上传失败：%s", exc)
-    return commands
+class SnapshotPublisher:
+    def __init__(self, client, config, caffeinate, inbox):
+        self.client = client
+        self.path = f"/api/agents/{config.device_id}"
+        self.device_name = config.device_name
+        self.caffeinate = caffeinate
+        self.inbox = inbox
+        self.snapshot = {}
+        self.lock = Lock()
+        self.generation = 0
+        self.changed = {}
+
+    def revision(self):
+        with self.lock:
+            return self.generation
+
+    def media_identity(self):
+        with self.lock:
+            media = self.snapshot.get("media") or {}
+            return media.get("track_id"), media.get("status")
+
+    def _post(self):
+        response = self.client.post(self.path + "/heartbeat", json={
+            "name": self.device_name, "os": "macos",
+            "timestamp": datetime.now(timezone.utc).isoformat(), **self.snapshot,
+        })
+        response.raise_for_status()
+        reply = response.json()
+        commands = reply["commands"]
+        if not isinstance(commands, list):
+            raise ValueError("心跳响应中的 commands 必须是数组")
+        if commands:
+            self.inbox.put_nowait(commands)
+        return reply.get("artwork_needed") is True
+
+    def hardware(self, snapshot, revision, artwork):
+        # Samples are gathered outside this lock. Rebase any controls that were
+        # already published while the full hardware sample was being collected.
+        with self.lock:
+            for field, generation in self.changed.items():
+                if generation > revision and field in snapshot:
+                    snapshot[field] = self.snapshot[field]
+            if self.caffeinate is not None:
+                snapshot["caffeinate"] = self.caffeinate.active()
+            self.snapshot = snapshot
+            needs_artwork = self._post()
+            version = (snapshot.get("media") or {}).get("artwork_version")
+        if needs_artwork and artwork is not None:
+            contents = artwork.bytes_for(version)
+            if contents:
+                try:
+                    response = self.client.post(self.path + "/artwork", params={"version": version},
+                                                headers={"Content-Type": "image/jpeg"}, content=contents)
+                    if response.status_code != 409:
+                        response.raise_for_status()
+                except httpx.HTTPError as exc:
+                    logger.warning("封面上传失败：%s", exc)
+
+    def control(self, updates):
+        with self.lock:
+            if "volume" in updates:
+                updates = {**updates, "volume": {**(self.snapshot.get("volume") or {}), **updates["volume"]}}
+            if media := updates.get("media"):
+                current = self.snapshot.get("media") or {}
+                if media.get("track_id") == current.get("track_id"):
+                    updates = {**updates, "media": {**media, "artwork_version": current.get("artwork_version")}}
+            self.generation += 1
+            self.changed.update(dict.fromkeys(updates, self.generation))
+            self.snapshot.update(updates)
+            self._post()
 
 
 def command_events(lines):
@@ -68,9 +120,13 @@ def command_events(lines):
     for line in lines:
         if not line:
             if event == "command" and data:
-                command = json.loads("\n".join(data))
-                if isinstance(command, dict):
-                    yield command
+                try:
+                    command = json.loads("\n".join(data))
+                except json.JSONDecodeError:
+                    logger.debug("忽略格式错误的 SSE 指令")
+                else:
+                    if isinstance(command, dict):
+                        yield command
             event, data = None, []
         elif not line.startswith(":"):
             field, separator, value = line.partition(":")
@@ -82,29 +138,33 @@ def command_events(lines):
 
 def listen_commands(config, stopped, inbox):
     path = f"/api/agents/{config.device_id}/commands/stream"
+    retry = 0
     with config.client(timeout=httpx.Timeout(5, read=26)) as client:
         while not stopped.is_set():
+            connected_at = None
             try:
                 with client.stream("GET", path, headers={"Accept": "text/event-stream"}) as response:
                     response.raise_for_status()
                     if not response.headers.get("content-type", "").startswith("text/event-stream"):
                         raise ValueError("指令流响应格式不正确")
+                    connected_at = monotonic()
+                    logger.info("SSE 指令流已连接")
                     for command in command_events(response.iter_lines()):
                         if stopped.is_set():
                             return
-                        while not stopped.is_set():
-                            try:
-                                inbox.put([command], timeout=0.5)
-                                break
-                            except Full:
-                                continue
+                        logger.debug("SSE 收到指令 %s", command.get("id"))
+                        inbox.put_nowait([command])
+                        retry = 0
             except (httpx.HTTPError, ValueError) as exc:
-                # 旧中心端或正在重启的中心端继续通过心跳下发。
+                # Older or restarting centers continue dispatching via heartbeat.
                 logger.debug("指令流暂不可用（%s）", type(exc).__name__)
-            stopped.wait(STREAM_RETRY_SECONDS)
+            if connected_at is not None and monotonic() - connected_at >= STREAM_KEEPALIVE_SECONDS:
+                retry = 0
+            stopped.wait(STREAM_BACKOFF[retry])
+            retry = min(retry + 1, len(STREAM_BACKOFF) - 1)
 
 
-def process_commands(client, config, commands, directory, caffeinate):
+def process_commands(client, config, commands, directory, caffeinate, quick, publisher, media_refresh):
     path = directory / "command-receipts.json"
     now = time()
     receipts = {key: value for key, value in load_state(path, {}).items() if now - value["time"] < RECEIPT_TTL}
@@ -124,7 +184,6 @@ def process_commands(client, config, commands, directory, caffeinate):
             receipt["reported"] = True
             save_state(path, receipts)
 
-    changed = False
     retried = [(key, value) for key, value in receipts.items() if not value["reported"]]
     for command in commands:
         if not isinstance(command, dict):
@@ -139,77 +198,120 @@ def process_commands(client, config, commands, directory, caffeinate):
                    "result": {"ok": False, "message": "执行时进程中断，结果未知"}}
         receipts[command_id] = receipt
         save_state(path, receipts)
+        update = None
         try:
             action = command.get("action")
             if not isinstance(action, str):
                 raise ValueError("action 必须是字符串")
-            execute_command(action, command.get("payload", {}), caffeinate=caffeinate,
-                            clipboard_push=send_clipboard)
+            params = command.get("payload", {})
+            started = monotonic()
+            try:
+                update = execute_command(action, params, caffeinate=caffeinate, clipboard_push=send_clipboard, quick=quick)
+            except ScriptError as exc:
+                if exc.number != -1743:
+                    raise
+                # A denied Apple event was never delivered. Keep support for
+                # systems that granted Automation to osascript only.
+                logger.debug("进程内 AppleScript 权限受限，使用 osascript")
+                update = execute_command(action, params, caffeinate=caffeinate, clipboard_push=send_clipboard)
+            logger.debug("指令 %s %s 本机执行耗时 %.1f ms", command_id, action, 1000 * (monotonic() - started))
             receipt["result"] = {"ok": True, "message": "已完成"}
-            changed = True
         except FAILURES as exc:
             receipt["result"] = {"ok": False, "message": str(exc)[:500]}
         save_state(path, receipts)
         report(command_id, receipt)
+        if receipt["result"]["ok"] and action in REFRESH_ACTIONS:
+            try:
+                if update is not None:
+                    publisher.control(update)
+                elif action in MEDIA_ACTIONS:
+                    media_refresh.set()
+            except FAILURES as exc:
+                logger.warning("即时心跳失败，将在定时心跳重试：%s", exc)
     for command_id, receipt in retried:
         report(command_id, receipt)
-    return changed
 
 
-def command_worker(config, directory, caffeinate, stopped, inbox, sample_now):
+def command_worker(client, config, directory, caffeinate, stopped, inbox, quick, publisher, media_refresh):
+    while not stopped.is_set():
+        try:
+            commands = inbox.get(timeout=HEARTBEAT_SECONDS)
+        except Empty:
+            commands = []
+        if stopped.is_set():
+            break
+        try:
+            process_commands(client, config, commands, directory, caffeinate, quick, publisher, media_refresh)
+        except FAILURES as exc:
+            logger.warning("处理指令失败：%s", exc)
+
+
+def hardware_heartbeats(publisher, sampler, listener, stopped):
+    next_sample = monotonic()
+    while not stopped.is_set():
+        if next_sample <= monotonic():
+            next_sample = monotonic() + HEARTBEAT_SECONDS
+        try:
+            revision = publisher.revision()
+            snapshot = sampler.sample()
+            publisher.hardware(snapshot, revision, sampler.playback)
+            if listener.ident is None and not stopped.is_set():
+                listener.start()
+        except FAILURES as exc:
+            logger.warning("心跳失败：%s", exc)
+        stopped.wait(max(0, next_sample - monotonic()))
+
+
+def refresh_media(publisher, requested, stopped):
+    while not stopped.is_set():
+        if not requested.wait(1) or stopped.is_set():
+            continue
+        requested.clear()
+        previous = publisher.media_identity()
+        deadline = monotonic() + 0.65
+        try:
+            while not stopped.is_set():
+                media, _ = read_playback()
+                identity = (media["track_id"], media["status"]) if media else (None, None)
+                if identity != previous or monotonic() >= deadline:
+                    publisher.control({"media": media})
+                    break
+        except FAILURES as exc:
+            logger.warning("播放状态即时心跳失败：%s", exc)
+
+
+def sync_reminders(config, directory, stopped):
     with config.client() as client:
         while not stopped.is_set():
             try:
-                commands = inbox.get(timeout=HEARTBEAT_SECONDS)
-            except Empty:
-                commands = []
-            if stopped.is_set():
-                break
-            try:
-                if process_commands(client, config, commands, directory, caffeinate):
-                    sample_now.set()
+                sync_once(client, config, directory)
             except FAILURES as exc:
-                logger.warning("处理指令失败：%s", exc)
+                logger.warning("提醒事项失败：%s", exc)
+            stopped.wait(REMINDERS_SECONDS)
 
 
 def run_agent(config, directory, stopped):
     sampler = Sampler()
-    next_heartbeat = next_reminders = monotonic()
-    reminders_task = None
-    inbox = Queue(maxsize=64)
-    sample_now = Event()
+    inbox, media_refresh = Queue(), Event()
     listener = Thread(target=listen_commands, args=(config, stopped, inbox), name="vitals-command-stream", daemon=True)
-    with (closing(Caffeinate()) as caffeinate, config.client(timeout=3) as client, config.client() as reminders_client,
-          ThreadPoolExecutor(max_workers=2) as workers):
-        workers.submit(command_worker, config, directory, caffeinate, stopped, inbox, sample_now)
+    # AppleScript must run on the main thread. Warm the scripting engine so
+    # the first wall-clock delay is paid at startup instead of on a command.
+    quick = QuickControls()
+    try:
+        quick.volume()
+    except ScriptError as exc:
+        logger.debug("AppleScript 预热失败：%s", exc)
+    with (closing(Caffeinate()) as caffeinate, config.client(timeout=3) as client,
+          ThreadPoolExecutor(max_workers=3) as workers):
+        publisher = SnapshotPublisher(client, config, caffeinate, inbox)
+        workers.submit(hardware_heartbeats, publisher, sampler, listener, stopped)
+        workers.submit(refresh_media, publisher, media_refresh, stopped)
+        workers.submit(sync_reminders, config, directory, stopped)
         try:
-            while not stopped.is_set():
-                task = reminders_task
-                if task is not None and task.done():
-                    try:
-                        task.result()
-                    except FAILURES as exc:
-                        logger.warning("提醒事项失败：%s", exc)
-                    reminders_task = None
-                now = monotonic()
-                if now >= next_reminders:
-                    next_reminders = now + REMINDERS_SECONDS
-                    if reminders_task is None:
-                        reminders_task = workers.submit(sync_once, reminders_client, config, directory)
-                if now >= next_heartbeat or sample_now.is_set():
-                    sample_now.clear()
-                    next_heartbeat = now + HEARTBEAT_SECONDS
-                    try:
-                        commands = heartbeat(client, config, sampler, caffeinate)
-                        if commands:
-                            inbox.put(commands)
-                        if listener.ident is None:
-                            listener.start()
-                    except FAILURES as exc:
-                        logger.warning("心跳失败：%s", exc)
-                sample_now.wait(max(0, min(next_heartbeat, next_reminders) - monotonic()))
+            command_worker(client, config, directory, caffeinate, stopped, inbox, quick, publisher, media_refresh)
         finally:
             stopped.set()
+            media_refresh.set()
 
 
 def main() -> int:

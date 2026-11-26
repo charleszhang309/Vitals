@@ -73,18 +73,24 @@ class UpgradeTests(unittest.TestCase):
         from pathlib import Path
 
         stopped, sample_now, inbox = Event(), Event(), Queue()
-        reported = []
+        reported, snapshots = [], []
 
         def server(request):
             reported.append(request.url.path)
             return httpx.Response(204)
 
-        config = SimpleNamespace(device_id="macbook", client=lambda: httpx.Client(
-            base_url="https://fixture.test", transport=httpx.MockTransport(server)))
+        config = SimpleNamespace(device_id="macbook")
         command = {"id": "a", "action": "volume_mute", "payload": {"muted": True}}
-        with TemporaryDirectory() as path:
+        execute.return_value = {"volume": {"muted": True}}
+
+        def publish(update):
+            snapshots.append(update)
+            sample_now.set()
+
+        publisher = SimpleNamespace(control=publish)
+        with httpx.Client(base_url="https://fixture.test", transport=httpx.MockTransport(server)) as client, TemporaryDirectory() as path:
             worker = Thread(target=agent.command_worker,
-                            args=(config, Path(path), None, stopped, inbox, sample_now), daemon=True)
+                            args=(client, config, Path(path), None, stopped, inbox, None, publisher, Event()), daemon=True)
             worker.start()
             try:
                 inbox.put([command, command])
@@ -93,6 +99,79 @@ class UpgradeTests(unittest.TestCase):
                 stopped.set()
                 inbox.put([])
                 worker.join(1)
+        self.assertEqual(snapshots, [{"volume": {"muted": True}}])
         self.assertFalse(worker.is_alive())
         execute.assert_called_once()
         self.assertEqual(reported, ["/api/agents/macbook/commands/a/result"])
+
+    def test_stream_reconnect_delays_and_recovers_after_a_command(self):
+        stopped = Event()
+        attempts, waits = [], []
+
+        def server(request):
+            attempts.append(request)
+            if len(attempts) == 4:
+                return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, text=(
+                    'event: command\ndata: malformed\n\n'
+                    'event: command\ndata: {"id":"wake","action":"media_next"}\n\n'
+                ))
+            return httpx.Response(503)
+
+        def wait(delay):
+            waits.append(delay)
+            if len(waits) == 5:
+                stopped.set()
+
+        inbox = Queue()
+        config = SimpleNamespace(device_id="macbook", client=lambda **_: httpx.Client(
+            base_url="https://fixture.test", headers={"Authorization": "Bearer fixture"}, transport=httpx.MockTransport(server)))
+        with patch.object(stopped, "wait", side_effect=wait):
+            agent.listen_commands(config, stopped, inbox)
+        self.assertEqual(waits, [1, 2, 5, 1, 2])
+        self.assertEqual(inbox.get_nowait(), [{"id": "wake", "action": "media_next"}])
+        self.assertTrue(all(request.headers["Authorization"] == "Bearer fixture" for request in attempts))
+
+    def test_hardware_publication_does_not_roll_back_a_concurrent_control_update(self):
+        sent = []
+        config = SimpleNamespace(device_id="macbook", device_name="MacBook")
+
+        def server(request):
+            import json
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"commands": []})
+
+        with httpx.Client(base_url="https://fixture.test", transport=httpx.MockTransport(server)) as client:
+            publisher = agent.SnapshotPublisher(client, config, None, Queue())
+            initial = publisher.revision()
+            publisher.hardware({"cpu": {"usage_percent": 2}, "volume": {"percent": 40, "devices": [{"id": "a"}]},
+                                "media": {"track_id": "first"}}, initial, None)
+            before = publisher.revision()
+            publisher.control({"volume": {"percent": 32}, "media": {"track_id": "second"}})
+            publisher.hardware({"cpu": {"usage_percent": 4}, "volume": {"percent": 40, "devices": [{"id": "a"}]},
+                                "media": {"track_id": "first"}}, before, None)
+        self.assertEqual(sent[1]["cpu"]["usage_percent"], 2)
+        self.assertEqual(sent[1]["volume"], {"percent": 32, "devices": [{"id": "a"}]})
+        self.assertEqual(sent[2]["cpu"]["usage_percent"], 4)
+        self.assertEqual(sent[2]["volume"]["percent"], 32)
+        self.assertEqual(sent[2]["media"]["track_id"], "second")
+
+    @patch("mac_agent.agent.execute_command", return_value=None)
+    def test_media_result_is_reported_before_requesting_player_state(self, execute):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        refresh = Event()
+        results = []
+
+        def server(request):
+            self.assertFalse(refresh.is_set())
+            results.append(request.url.path)
+            return httpx.Response(204)
+
+        config = SimpleNamespace(device_id="macbook")
+        command = {"id": "next-one", "action": "media_next", "payload": {}}
+        with httpx.Client(base_url="https://fixture.test", transport=httpx.MockTransport(server)) as client, TemporaryDirectory() as folder:
+            agent.process_commands(client, config, [command], Path(folder), None, None, None, refresh)
+        execute.assert_called_once()
+        self.assertEqual(results, ["/api/agents/macbook/commands/next-one/result"])
+        self.assertTrue(refresh.is_set())

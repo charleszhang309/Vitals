@@ -104,6 +104,11 @@ def normalize_track(raw):
     return track
 
 
+def read_playback():
+    raw = json.loads(javascript(MEDIA_SCRIPT))
+    return (normalize_track(raw), raw) if raw is not None else (None, None)
+
+
 def spotify_artwork(url):
     destination = urlsplit(url)
     if (destination.scheme != "https" or destination.hostname not in SPOTIFY_ARTWORK_HOSTS
@@ -150,11 +155,10 @@ class Playback:
         self.track_id = self.artwork_version = self.artwork = None
 
     def sample(self):
-        raw = json.loads(javascript(MEDIA_SCRIPT))
-        if raw is None:
+        track, raw = read_playback()
+        if track is None:
             self.track_id = self.artwork_version = self.artwork = None
             return None
-        track = normalize_track(raw)
         if track["track_id"] != self.track_id:
             self.track_id = track["track_id"]
             self.artwork_version = self.artwork = None
