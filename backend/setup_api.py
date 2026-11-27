@@ -11,17 +11,19 @@ import subprocess
 import sys
 from urllib.parse import quote, urlsplit
 
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import ValidationError
+from fastapi import APIRouter, HTTPException, Query, Request
+import httpx
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
-from .config import CalendarSource, OPENAI_HOSTS, Settings, load_settings, update_settings_file
+from .config import CalendarSource, HealthConfig, OPENAI_HOSTS, Settings, load_settings, update_settings_file
 from .monitor import Rules, send_webhook, utc_now
 
 
 LOOPBACK = {"127.0.0.1", "::1"}
 PRIVATE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 CALENDAR_SECRETS = {
     "icloud": ("apple_id", "app_password"),
     "google": ("client_id", "client_secret", "refresh_token"),
@@ -52,6 +54,42 @@ def direct_setup_request(scope, headers, parse_origin):
     return headers.get("sec-fetch-site") in {None, "none", "same-origin"} and (
         not origins or (len(origins) == 1 and parse_origin(origins[0]) == authority)
     )
+
+
+class CityMatch(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    admin1: str | None = None
+    country: str | None = None
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    timezone: str
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value):
+        return HealthConfig.check_timezone(value)
+
+
+async def city_matches(client, query):
+    try:
+        response = await asyncio.wait_for(client.get(
+            GEOCODING_URL, params={"name": query, "count": 6, "language": "zh", "format": "json"}, timeout=5,
+        ), timeout=6)
+        response.raise_for_status()
+        document = response.json()
+        rows = document.get("results", []) if isinstance(document, dict) and not document.get("error") else None
+        if not isinstance(rows, list):
+            raise ValueError("invalid location data")
+    except (httpx.HTTPError, TimeoutError, ValueError):
+        raise HTTPException(502, "暂时无法查询城市，请稍后重试或手动填写") from None
+
+    locations = []
+    for row in rows[:6]:
+        try:
+            locations.append(CityMatch.model_validate(row))
+        except ValidationError:
+            continue
+    return locations
 
 
 def config_view(settings: Settings, running: Settings):
@@ -256,6 +294,13 @@ def setup_router(path: Path, running: Settings):
     @router.get("/config")
     def get_config():
         return view(read_config())
+
+    @router.get("/geocode")
+    async def geocode(request: Request, q: str = Query(max_length=100)) -> list[CityMatch]:
+        query = q.strip()
+        if not query:
+            raise HTTPException(422, "请输入城市名")
+        return await city_matches(request.app.state.external_client, query)
 
     @router.patch("/config")
     async def patch_config(request: Request):

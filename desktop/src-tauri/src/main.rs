@@ -125,6 +125,22 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 || url.scheme() == "tauri"
                 || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
         })
+        .on_new_window(|url, _| {
+            let path = url.path().to_ascii_lowercase();
+            if url.scheme() == "https"
+                && url.host_str() == Some("github.com")
+                && (path == "/charleszhang309/vitals"
+                    || path == "/charleszhang309/vitals/releases"
+                    || path.starts_with("/charleszhang309/vitals/releases/"))
+            {
+                if let Err(error) = open::that_detached(url.as_str()) {
+                    eprintln!("Could not open Vitals GitHub page: {error}");
+                }
+                tauri::webview::NewWindowResponse::Deny
+            } else {
+                tauri::webview::NewWindowResponse::Allow
+            }
+        })
         .build()?;
     let startup = window.url()?;
     let closing = window.clone();

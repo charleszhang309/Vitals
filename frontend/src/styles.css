@@ -353,6 +353,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .host-calendar-source legend { max-width: 100%; overflow-wrap: anywhere; padding: 0 6px; font-weight: 650; }
 .host-calendar-source .host-setup-actions { margin-top: 10px; justify-content: space-between; }
 .host-setup-color { display: inline-flex; align-items: center; gap: 6px; }
+.host-city-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+.host-city-search .button { min-height: 38px; white-space: nowrap; }
+.host-city-matches { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.host-city-matches .button { width: 100%; justify-content: flex-start; text-align: left; overflow-wrap: anywhere; }
+.about-app { display: flex; align-items: center; gap: 13px; }
+.about-app img { flex: 0 0 auto; border-radius: 14px; }
+.about-app h3 { margin: 0; font-size: 21px; }
+.about-app p, .about-updates p { margin: 0; }
+.about-repository, .about-release .button { justify-self: start; }
+.about-release { display: grid; gap: 9px; min-width: 0; }
+.about-notes { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 15rem; overflow: auto; }
+.about-update-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); flex: 0 0 auto; }
 @media (max-width: 460px) { .host-setup-grid { grid-template-columns: minmax(0, 1fr); } }
 .settings-device-list { display: grid; gap: 7px; }
 .settings-device-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 8px;

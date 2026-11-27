@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Copy, Plus, Trash2 } from 'lucide-react';
+import { Copy, Plus, Search, Trash2 } from 'lucide-react';
 import { postJson, request, sendJson } from './api.js';
 import { Button } from './ui.jsx';
 
@@ -200,6 +200,82 @@ function AgentSetup({ config, onChange }) {
   </section>;
 }
 
+function WeatherSetup({ weather, timezone, save }) {
+  const [fields, setFields] = useState({ ...weather, timezone });
+  const [matches, setMatches] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const lookup = useRef(null);
+  useEffect(() => () => lookup.current?.abort(), []);
+
+  function edit(key, value) {
+    setFields((current) => ({ ...current, [key]: value }));
+    if (key === 'city_name') {
+      lookup.current?.abort();
+      setMatches(null);
+      setSearchError('');
+      setSearching(false);
+    }
+  }
+
+  async function search() {
+    const query = fields.city_name.trim();
+    if (!query || searching) return;
+    lookup.current?.abort();
+    const controller = new AbortController();
+    lookup.current = controller;
+    setSearching(true);
+    setMatches(null);
+    setSearchError('');
+    try {
+      const results = await request(`${BASE}/geocode?${new URLSearchParams({ q: query })}`, { signal: controller.signal });
+      if (!controller.signal.aborted) setMatches(results);
+    } catch (error) {
+      if (!controller.signal.aborted) setSearchError(error.message);
+    } finally {
+      if (!controller.signal.aborted) setSearching(false);
+    }
+  }
+
+  return <SetupForm title="天气与时区" onSave={(data) => save({
+    weather: { city_name: data.get('city_name').trim(), latitude: Number(data.get('latitude')), longitude: Number(data.get('longitude')) },
+    health: { timezone: data.get('timezone').trim() },
+  })}>
+    <div className="host-city-search">
+      <SetupField label="城市名" name="city_name" value={fields.city_name} required maxLength={100}
+        onChange={(event) => edit('city_name', event.target.value)} onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            search();
+          }
+        }} />
+      <Button disabled={searching || !fields.city_name.trim()} onClick={search}>
+        <Search size={16} />{searching ? '正在搜索…' : '搜索匹配'}
+      </Button>
+    </div>
+    <Feedback error={searchError} notice={matches?.length === 0 ? '未找到匹配城市，可以换个名称或手动填写。' : ''} />
+    {!!matches?.length && <ul className="host-city-matches" aria-label="城市匹配结果">
+      {matches.map(({ name, admin1, country, timezone: cityTimezone, latitude, longitude }) => <li key={
+        JSON.stringify([name, admin1, country, latitude, longitude])
+      }>
+        <Button onClick={() => {
+          setFields({ city_name: name, latitude, longitude, timezone: cityTimezone });
+          setMatches(null);
+        }}>
+          {[name, admin1, country, cityTimezone].filter(Boolean).join(' · ')}
+        </Button>
+      </li>)}
+    </ul>}
+    <div className="host-setup-grid">
+      <SetupField label="IANA 时区" name="timezone" value={fields.timezone} required onChange={(event) => edit('timezone', event.target.value)} />
+      <SetupField label="纬度" name="latitude" type="number" min="-90" max="90" step="any" value={fields.latitude} required
+        onChange={(event) => edit('latitude', event.target.value)} />
+      <SetupField label="经度" name="longitude" type="number" min="-180" max="180" step="any" value={fields.longitude} required
+        onChange={(event) => edit('longitude', event.target.value)} />
+    </div>
+  </SetupForm>;
+}
+
 export default function HostSetup({ config, onConfig }) {
   const [barkEnabled, setBarkEnabled] = useState(config.webhook.kind === 'bark');
   async function save(payload) {
@@ -217,17 +293,7 @@ export default function HostSetup({ config, onConfig }) {
         <SetupField label="OpenAI API Key" name="api_key" secret configured={config.ai.has_api_key} />
       </div>
     </SetupForm>
-    <SetupForm title="天气与时区" onSave={(data) => save({
-      weather: { city_name: data.get('city_name').trim(), latitude: Number(data.get('latitude')), longitude: Number(data.get('longitude')) },
-      health: { timezone: data.get('timezone').trim() },
-    })}>
-      <div className="host-setup-grid">
-        <SetupField label="城市名" name="city_name" defaultValue={config.weather.city_name} required maxLength={100} />
-        <SetupField label="IANA 时区" name="timezone" defaultValue={config.health.timezone} required />
-        <SetupField label="纬度" name="latitude" type="number" min="-90" max="90" step="any" defaultValue={config.weather.latitude} required />
-        <SetupField label="经度" name="longitude" type="number" min="-180" max="180" step="any" defaultValue={config.weather.longitude} required />
-      </div>
-    </SetupForm>
+    <WeatherSetup weather={config.weather} timezone={config.health.timezone} save={save} />
     <SetupForm title="Bark 推送" onTest={() => postJson(`${BASE}/webhook/test`, {})}
       onSave={(data) => save({ webhook: {
         kind: barkEnabled ? 'bark' : config.webhook.kind === 'json' ? 'json' : 'disabled',

@@ -80,6 +80,8 @@
 
 使用 Tailscale Serve 前，先安装并登录 Tailscale，并在管理后台开启 MagicDNS 与 HTTPS。随后可在主机配置中开启 Serve 并查看 HTTPS 地址。Bark 的测试按钮使用已保存的配置，可在服务重启前测试推送。日历凭据的申请步骤见下文。
 
+「天气与时区」支持按城市名搜索 Open-Meteo。选中候选城市会填入经纬度和 IANA 时区，可调整后再保存。「关于」可查看运行中的版本，并查询 GitHub Releases。自动检查默认开启，每个浏览器或桌面应用实例每 24 小时最多静默检查一次，可随时关闭。发现新版后可打开发布页或下载匹配的安装包。
+
 #### 在 Windows 构建桌面安装包
 
 准备 Node.js、已安装 `backend/requirements.txt` 的项目 `.venv`、Rust MSVC 工具链、Visual Studio 的「使用 C++ 的桌面开发」工作负载与 WebView2 Runtime。构建 MSI 还需要 Windows 的 VBScript 可选功能。

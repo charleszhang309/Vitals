@@ -102,7 +102,7 @@ def test_setup_pairing_token_can_be_read_and_rotated_locally(tmp_path):
 ])
 def test_tailscale_discovery_on_macos_with_a_minimal_path(monkeypatch, installed):
     monkeypatch.setattr(setup_api, "sys", SimpleNamespace(platform="darwin"))
-    monkeypatch.setattr(Path, "is_file", lambda path: str(path) == installed)
+    monkeypatch.setattr(Path, "is_file", lambda path: path.as_posix() == installed)
     monkeypatch.setattr(setup_api.os, "access", lambda path, mode: str(path) == installed)
     monkeypatch.setattr(setup_api.shutil, "which", lambda _: None)
     assert setup_api.tailscale_cli() == installed
