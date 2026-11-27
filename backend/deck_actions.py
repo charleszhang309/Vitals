@@ -164,6 +164,19 @@ class DeckActions:
     async def audio(self, client, snapshot):
         return (snapshot.get("volume") or {}) if snapshot is not None else await self.media.volume(client)
 
+    async def set_faders(self, target, client, changes):
+        _, snapshot = self.target(target)
+        if snapshot is None:
+            return await self.media.set_volume(client, VolumeChange(**changes))
+        volume = snapshot.get("volume") or {}
+        if any(volume.get(key) is None for key in changes):
+            raise HTTPException(409, "音频设备暂不可用")
+        for key, value in changes.items():
+            prefix = "input_" if key.startswith("input_") else ""
+            command = (VolumeCommand(action=prefix + "volume_set", payload={"percent": value})
+                       if key.endswith("percent") else MuteCommand(action=prefix + "volume_mute", payload={"muted": value}))
+            await self.remote(target, command)
+
     async def remote(self, target, command, *, wait=True):
         receipt = self.agents.enqueue(target, command)
         if not wait:

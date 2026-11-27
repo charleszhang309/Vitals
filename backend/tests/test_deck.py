@@ -1,9 +1,11 @@
 import asyncio
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
@@ -80,6 +82,79 @@ def test_catalog_config_and_example_plugin_round_trip(deck):
     }
     layout["scenes"][0]["tiles"][0] = {"kind": "folder", "page": "missing"}
     assert client.post("/api/deck/validate", json=layout).status_code == 422
+
+
+def test_wide_tile_round_trips_with_legacy_tiles_and_reserved_slot(deck):
+    actions = DeckActions(Settings(), None, "windows", AgentRegistry(), None, None, None)
+    app = FastAPI()
+    app.include_router(deck_router(deck, actions))
+    client = TestClient(app)
+    legacy = {"kind": "live", "live": "cpu"}
+    layout = {"scenes": [{"id": "daily", "title": "Daily", "grid": "3x2", "tiles": [
+        {**legacy, "span": 2}, None, legacy,
+    ]}]}
+    normalized = client.post("/api/deck/validate", json=layout)
+    assert normalized.status_code == 200
+    tiles = normalized.json()["scenes"][0]["tiles"]
+    assert [tile["span"] if tile else None for tile in tiles] == [2, None, 1]
+    saved = client.put("/api/deck", json={"revision": 0, "layout": layout})
+    assert saved.status_code == 200
+    assert client.get("/api/deck").json() == saved.json()
+    assert DeckStore(deck.connect).read()["layout"].tile("daily", 0).span == 2
+    assert DeckStore(deck.connect).read()["layout"].tile("daily", 2).span == 1
+
+
+@pytest.mark.parametrize("tiles, grid", [
+    ([2, 1], "3x2"), ([None, None, 2], "3x2"), ([None] * 5 + [2], "3x2"),
+    ([None] * 6 + [1], "3x2"), ([3], "4x3"), ([True], "4x3"),
+])
+def test_deck_rejects_overlapping_out_of_grid_or_invalid_widths(deck, tiles, grid):
+    app = FastAPI()
+    app.include_router(deck_router(deck, None))
+    client = TestClient(app)
+    layout = {"scenes": [{"id": "daily", "title": "Daily", "grid": grid, "tiles": [
+        None if span is None else {"kind": "live", "live": "cpu", "span": span} for span in tiles
+    ]}]}
+    assert client.post("/api/deck/validate", json=layout).status_code == 422
+    assert client.put("/api/deck", json={"revision": 0, "layout": layout}).status_code == 422
+
+
+@pytest.mark.anyio
+async def test_deck_audio_sets_both_channels_and_waits_for_remote_receipt(deck):
+    calls = []
+
+    async def set_volume(client, change):
+        calls.append(change.model_dump(exclude_none=True))
+        return calls[-1]
+
+    registry = AgentRegistry()
+    registry.heartbeat("test-mac", Heartbeat(name="Test Mac", os="macos", timestamp=datetime.now(timezone.utc),
+                                               volume={"percent": 40, "input_percent": 17, "input_muted": False}))
+    actions = DeckActions(Settings(), None, "windows", registry, None, SimpleNamespace(set_volume=set_volume), None)
+    app = FastAPI()
+    app.state.media_client = None
+    app.include_router(deck_router(deck, actions))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+        change = {"percent": 61, "input_muted": True}
+        assert (await client.post("/api/deck/audio", json=change)).json() == change
+        assert calls == [change]
+        stream = registry.stream("test-mac")
+        assert await anext(stream) == b": connected\n\n"
+        task = asyncio.create_task(client.post("/api/deck/audio?target=test-mac", json=change))
+        try:
+            for action, payload in [("volume_set", {"percent": 61}), ("input_volume_mute", {"muted": True})]:
+                event = await asyncio.wait_for(anext(stream), 1)
+                command = json.loads(event.split(b"data: ", 1)[1])
+                assert command["action"] == action and command["payload"] == payload
+                assert not task.done()
+                registry.result("test-mac", UUID(command["id"]), SimpleNamespace(ok=True))
+            assert (await asyncio.wait_for(task, 1)).status_code == 204
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            await stream.aclose()
+        assert (await client.post("/api/deck/audio", json={"percent": True})).status_code == 422
 
 
 def test_macro_orders_delays_and_stops_on_error():

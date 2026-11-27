@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import {
   ArrowLeft, Check, ChevronLeft, ChevronRight, Download, FolderOpen,
-  Grip, Maximize, Pencil, Plug, Plus, Upload, X,
+  Grip, Maximize, Minimize, Pencil, Plug, Plus, Upload, X,
 } from 'lucide-react';
 import { AnimatePresence } from 'framer-motion';
 import { CUSTOM_ICON_RE, DECK_ICONS } from './deckIcons.js';
@@ -10,8 +10,10 @@ import { httpUrl, request, sendJson } from './api.js';
 import useResource from './useOverviewResource.js';
 import { focusClock } from './useFocusTimer.js';
 import { getLocale, t } from './i18n/messages.js';
-import { freshTile, grids, liveLabels, SceneEditor, TileEditor } from './DeckEditor.jsx';
+import { freshTile, liveLabels, SceneEditor, TileEditor } from './DeckEditor.jsx';
+import { deckSlots, fitsDeckGrid, grids } from './deckLayout.js';
 import DeckPlugins from './DeckPlugins.jsx';
+import DeckTouchStrip, { useDeckFaders } from './DeckTouchStrip.jsx';
 import ScreenshotControl from './ScreenshotControl.jsx';
 import { desktopPlatform } from './DesktopChrome.jsx';
 import './deck.css';
@@ -143,11 +145,14 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
   const [message, setMessage] = useState(null);
   const [syncConflict, setSyncConflict] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [toolbarHidden, setToolbarHidden] = useState(false);
   const [feedback, setFeedback] = useState({});
   const fileInput = useRef(null);
   const region = useRef(null);
   const screenshot = useRef(null);
   const drag = useRef(null);
+  const swipe = useRef(null);
+  const skipSwipeClick = useRef(0);
   const skipDragClick = useRef(false);
   const sending = useRef(null);
   const alive = useRef(true);
@@ -159,12 +164,15 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
   const list = layout?.scenes.filter((item) => draft || !item.folder) ?? [];
   const [columns, rows] = grids[scene?.grid] ?? [3, 2];
   const { data: catalog, retry: refreshCatalog } = useResource(`${root}/catalog`, 60_000);
-  const { data: hostAudio, retry: refreshAudio } = useResource(`${root}/audio?target=hub`, 2500, target.device_id === HUB);
-  const audio = target.device_id === HUB ? hostAudio : target.snapshot?.volume;
+  const { data: hostAudio, setData: setHostAudio, retry: refreshAudio } = useResource(`${root}/audio?target=hub`, 2500, target.device_id === HUB);
   const audioTarget = target.device_id;
   const currentTarget = useRef(audioTarget);
   currentTarget.current = audioTarget;
   const localTarget = audioTarget === HUB;
+  const targetTrack = localTarget ? media : target.snapshot?.media && { ...target.snapshot.media, agent_id: audioTarget };
+  const reportError = (text) => setMessage({ text, error: true });
+  const faders = useDeckFaders(audioTarget, localTarget ? hostAudio : target.snapshot?.volume, setHostAudio, refreshDevices, reportError);
+  const audio = faders.values;
   const { data: aiData } = useResource('/api/ai/usage', 60_000, Boolean(scene?.tiles.some((tile) => tile?.live === 'ai')));
   const quota = aiData?.sources?.find((item) => item.id === 'codex' || item.source === 'codex')?.quota;
   const ai = quota?.five_hour?.remaining_percent ?? quota?.seven_day?.remaining_percent;
@@ -237,10 +245,28 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
   }, [activeSceneId, feedbackKey, savedRevision, editing]);
 
   useEffect(() => {
-    const update = () => setFullscreen(Boolean(document.fullscreenElement));
+    const update = () => setFullscreen(document.fullscreenElement === region.current);
     document.addEventListener('fullscreenchange', update);
     return () => document.removeEventListener('fullscreenchange', update);
   }, []);
+
+  useEffect(() => {
+    setToolbarHidden(false);
+    if (!fullscreen || editing || pluginsOpen || confirm !== null) return undefined;
+    let timer;
+    const events = ['pointermove', 'pointerdown', 'keydown', 'focusin'];
+    function reveal() {
+      setToolbarHidden(false);
+      clearTimeout(timer);
+      timer = setTimeout(() => setToolbarHidden(true), 3000);
+    }
+    reveal();
+    for (const event of events) document.addEventListener(event, reveal);
+    return () => {
+      clearTimeout(timer);
+      for (const event of events) document.removeEventListener(event, reveal);
+    };
+  }, [fullscreen, editing, pluginsOpen, confirm]);
 
   useEffect(() => {
     if (!message || message.error || message.link) return undefined;
@@ -251,6 +277,16 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
   function leave() {
     if (document.fullscreenElement === region.current) document.exitFullscreen?.().catch(() => {});
     close();
+  }
+  async function toggleFullscreen() {
+    if (fullscreen && document.fullscreenElement === region.current) {
+      await document.exitFullscreen().catch(() => {});
+    } else if (!fullscreen && region.current?.requestFullscreen) {
+      try { await region.current.requestFullscreen(); }
+      catch { setFullscreen(true); }
+    } else {
+      setFullscreen(!fullscreen);
+    }
   }
   function back() {
     if (!trail.length) return;
@@ -266,8 +302,11 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
   }
   function handleKeys(event) {
     if (pluginsOpen || event.defaultPrevented || event.target.closest('input, select, textarea, dialog, [role="dialog"]')) return;
-    if (event.key === 'Escape' && !draft && !confirm) {
-      if (trail.length) back();
+    if (event.key === 'Escape' && confirm === null) {
+      if (editing && entry !== null) setEntry(null);
+      else if (editing) return;
+      else if (fullscreen) toggleFullscreen();
+      else if (trail.length) back();
       else leave();
     }
     if (!draft && !trail.length && ['ArrowLeft', 'ArrowRight'].includes(event.key) && list.length > 1) {
@@ -289,9 +328,23 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
     tiles[index] = tile;
     return { ...current, tiles };
   }
+  function editTile(sceneId, index, next) {
+    const current = draftRef.current;
+    const edited = current?.scenes.find((item) => item.id === sceneId);
+    if (!edited?.tiles[index]) return;
+    const tile = typeof next === 'function' ? next(edited.tiles[index]) : next;
+    const updated = changeTile(index, tile, edited);
+    if (!fitsDeckGrid(updated)) return;
+    setEditor({ ...current, scenes: current.scenes.map((item) => item.id === sceneId ? updated : item) });
+  }
   function moveTile(from, to) {
     if (from == null || to == null || from === to) return;
-    updateScene(changeTile(to, scene.tiles[from] ?? null, changeTile(from, scene.tiles[to] ?? null)));
+    const moved = changeTile(to, scene.tiles[from] ?? null, changeTile(from, scene.tiles[to] ?? null));
+    if (!fitsDeckGrid(moved)) {
+      reportError(t('宽键需要同一行右侧有空位'));
+      return;
+    }
+    updateScene(moved);
     setEntry(to);
   }
   function newScene(folder = false) {
@@ -442,13 +495,30 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
 
   const currentIndex = list.findIndex((item) => item.id === scene?.id);
   const adjacent = (step) => {
-    if (list.length > 1) changePage(list[(currentIndex + list.length + step) % list.length].id);
+    if (list.length > 1) changePage(list[(Math.max(0, currentIndex) + list.length + step) % list.length].id);
   };
 
+  function startSwipe(event) {
+    if (!editing && event.pointerType === 'touch' && event.isPrimary) {
+      skipSwipeClick.current = 0;
+      swipe.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    }
+  }
+
+  function endSwipe(event) {
+    const start = swipe.current;
+    swipe.current = null;
+    if (!start || start.id !== event.pointerId || list.length < 2) return;
+    const dx = event.clientX - start.x;
+    if (Math.abs(dx) <= 60 || Math.abs(dx) <= Math.abs(event.clientY - start.y)) return;
+    skipSwipeClick.current = performance.now() + 420;
+    adjacent(dx < 0 ? 1 : -1);
+  }
+
   return <section className="deck-view" ref={region} tabIndex={-1} autoFocus
-    aria-label="Vitals Deck" onKeyDown={handleKeys} data-desktop={desktopPlatform}>
-    <div className="deck-body">
-      <header className="deck-toolbar">
+    aria-label="Vitals Deck" onKeyDown={handleKeys} data-desktop={desktopPlatform} data-immersive={fullscreen}>
+    <div className="deck-body" style={{ '--deck-cols': columns, '--deck-rows': rows }}>
+      <header className="deck-toolbar surface" data-hidden={fullscreen && toolbarHidden}>
         <div className="deck-brand">
           <span className="deck-brand-mark" aria-hidden="true"><Grip size={18} /></span>
           <h1>Vitals Deck</h1>
@@ -489,8 +559,9 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
             </> : <IconButton label={t('编辑 Deck')} disabled={busy} onClick={() => {
               setMessage(null); setEditor(structuredClone(saved.layout));
             }}><Pencil size={17} /></IconButton>)}
-            {region.current?.requestFullscreen && !fullscreen && <IconButton label={t('全屏')} onClick={() =>
-              region.current?.requestFullscreen().catch(() => {})}><Maximize size={17} /></IconButton>}
+            <IconButton label={t(fullscreen ? '退出全屏' : '全屏')} aria-pressed={fullscreen} onClick={toggleFullscreen}>
+              {fullscreen ? <Minimize size={17} /> : <Maximize size={17} />}
+            </IconButton>
             <IconButton label={t('退出 Deck')} onClick={leave}><X size={19} /></IconButton>
           </div>
         </div>
@@ -503,12 +574,18 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
           <Button onClick={cancelEdit}>{t('重新载入')}</Button></p>}
         <div className="deck-layout" data-editing={editing} data-has-editor={editing && entry !== null}>
           <div className="deck-stage">
-            <div className="deck-board" style={{ '--deck-cols': columns, '--deck-rows': rows }}>
-              <div className="deck-grid">
-                {Array.from({ length: columns * rows }, (_, index) => {
+            <div className="surface deck-board">
+              <div className="deck-grid" onPointerDown={startSwipe} onPointerUp={endSwipe}
+                onPointerCancel={() => { swipe.current = null; }} onClickCapture={(event) => {
+                  if (event.detail && performance.now() < skipSwipeClick.current) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }
+                }}>
+                {deckSlots(scene).map((index) => {
                   const tile = scene.tiles[index];
                   const state = tileState(tile, { sample: localTarget ? sample : target.snapshot, audio,
-                    media: localTarget ? media : target.snapshot?.media, focus, ai, feedback: feedback[index] });
+                    media: targetTrack, focus, ai, feedback: feedback[index] });
                   const label = tile ? labelFor(tile, layout, catalog) : t('添加按键');
                   const isButton = editing || tile?.kind === 'folder' || Boolean(tile?.steps.length);
                   const classes = 'deck-key';
@@ -517,15 +594,16 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
                     {hasLed && <span className="deck-key-led" data-active={Boolean(state.active)} aria-hidden="true" />}
                     {state.value ? <>
                       <div className="deck-key-metric-top"><KeyIcon tile={tile} state={state} /></div>
-                      <strong className="deck-key-value numeric">{state.value}</strong>
-                      <span className="deck-key-name">{label}</span>
+                      <div className="deck-key-reading"><strong className="deck-key-value numeric">{state.value}</strong>
+                        <span className="deck-key-name">{label}</span></div>
                     </> : <>
                       <KeyIcon tile={tile} state={state} />
                       {(tile || editing) && <span className="deck-key-name">{label}</span>}
                     </>}
                   </>;
                   const hasCover = CUSTOM_ICON_RE.test(tile?.icon || '') || undefined;
-                  return <div key={index} data-deck-slot={index} className="deck-slot">
+                  return <div key={index} data-deck-slot={index} className="deck-slot" data-span={tile?.span ?? 1}
+                    data-selected={editing && entry === index}>
                     {isButton ? <button type="button" className={classes} title={label}
                       data-deck-color={tile?.color || 'slate'} data-kind={tile?.kind} data-active={Boolean(state.active)} data-selected={editing && entry === index}
                       data-empty={!tile} data-has-cover={hasCover} disabled={busy && !editing} aria-pressed={tile?.kind === 'toggle' ? Boolean(state.active) : undefined}
@@ -555,11 +633,17 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
               </div>
             </div>
           </div>
-          {editing && entry !== null && scene.tiles[entry] && <TileEditor tile={scene.tiles[entry]} scene={scene} scenes={draft.scenes}
-            set={(tile) => updateScene(changeTile(entry, tile))} ensureFolder={addFolder} catalog={catalog} audio={audio}
-            onClose={() => setEntry(null)} onRemove={() => { updateScene(changeTile(entry, null)); setEntry(null); }} />}
+          {editing && entry !== null && scene.tiles[entry] && <>
+            <div className="deck-editor-scrim" aria-hidden="true" />
+            <TileEditor key={`${scene.id}:${entry}`} tile={scene.tiles[entry]} scene={scene} scenes={draft.scenes}
+              set={(tile) => editTile(scene.id, entry, tile)} ensureFolder={addFolder} catalog={catalog} audio={audio}
+              canExpand={entry % columns < columns - 1 && !scene.tiles[entry + 1]}
+              onClose={() => setEntry(null)} onRemove={() => { updateScene(changeTile(entry, null)); setEntry(null); }} />
+          </>}
         </div>
       </> : !message && <p className="deck-loading" role="status">{t('正在加载 Deck…')}</p>}
+      <DeckTouchStrip key={audioTarget} deviceId={audioTarget} track={targetTrack} faders={faders} reportError={reportError}
+        onMediaChange={localTarget ? refreshMedia : refreshDevices} />
       {message && <div className={`deck-toast ${message.error ? 'is-error' : ''}`} role={message.error ? 'alert' : 'status'}>
         {!message.error && <Check size={14} aria-hidden="true" />}
         {message.link ? <a href={httpUrl(`/api/control/launchers/${encodeURIComponent(message.link)}/open`).href}

@@ -4,8 +4,9 @@
 
 # Vitals
 
-**Local-First Personal Status Hub, Cross-Device Controller & Wireless OLED Stream Deck**  
-Unifies a customizable **Today Bento Dashboard**, real-time **Windows & macOS Hardware Monitoring & Remote Control**, an **iPad / iPhone Wireless OLED Deck with Plugin Store**, **Apple Music-style Fullscreen Player & AMLL Lyrics**, **Cross-Device Scratchpad**, and an optional **AI Assistant** — designed with Liquid Glass aesthetics and zero cloud lock-in.
+**Local-First Personal Status Hub, Cross-Device Controller & Wireless Studio Deck**
+
+Unifies a customizable **Today Bento Dashboard**, real-time **Windows & macOS Hardware Monitoring & Remote Control**, an **iPad / iPhone Wireless Deck with Plugin Store**, **Apple Music-style Fullscreen Player & AMLL Lyrics**, **Cross-Device Scratchpad**, and an optional **AI Assistant** — designed with Liquid Glass aesthetics and zero cloud lock-in.
 
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20iPadOS%2FiOS-0078D6?style=flat-square)
 ![Desktop](https://img.shields.io/badge/Desktop-Tauri%20v2-FFC131?style=flat-square&logo=tauri&logoColor=black)
@@ -19,7 +20,7 @@ Unifies a customizable **Today Bento Dashboard**, real-time **Windows & macOS Ha
 
 ## Screenshots
 
-| Vitals Deck (OLED Touch Console) | Overview Dashboard (Bento Widgets) |
+| Vitals Deck (Touch Console) | Overview Dashboard (Bento Widgets) |
 | :---: | :---: |
 | ![Vitals Deck](docs/screenshots/deck.png) | ![Today Dashboard](docs/screenshots/today.png) |
 
@@ -96,9 +97,10 @@ tailscale serve status
 
 ## Core Features
 
-### 1. Vitals Deck (Wireless OLED Stream Deck + Plugin Store)
+### 1. Vitals Deck (Studio Glass + Plugin Store)
 Click the grid icon in the top bar (especially great in fullscreen on an iPad next to your monitor):
-- **OLED Keycaps & Custom Covers**: Tactile squircle keys with radial glow, LED state indicators, a **43-icon curated vector picker**, and **custom PNG/JPG/WebP/SVG cover uploads** synced across devices.
+- **Glass Keys & Custom Covers**. Mix standard `1×1` and wide `2×1` keys. Pick a vector icon or upload a PNG, JPG, WebP, or SVG cover that syncs across devices.
+- **Touch Strip**. Adjust speaker and microphone volume, mute either channel, and play, pause, or skip on the selected host. Swipe the board to change scenes.
 - **Four Key Types**: Trigger Actions, Two-State Toggles, Live Data Tiles (CPU/GPU temp, Focus countdown, AI quota), and Scenes / Nested Folders (`3×2` to `6×3` grids, drag-and-drop editing, JSON import/export).
 - **Temporary Target Switching**: Control Windows or your remote MacBook directly from Deck; exits cleanly back to your default host when leaving Deck.
 - **Built-in Universal Engine**:

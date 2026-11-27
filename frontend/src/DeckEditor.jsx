@@ -1,16 +1,16 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ImagePlus, Plus, Sparkles, Trash2, X } from 'lucide-react';
-import { Button, IconButton } from './ui.jsx';
-import { request } from './api.js';
+import { Button, IconButton, Segmented } from './ui.jsx';
+import { httpUrl, request } from './api.js';
 import { getLocale, t } from './i18n/messages.js';
 import { CUSTOM_ICON_RE, DECK_ICON_KEYS, DECK_ICONS } from './deckIcons.js';
+import { fitsDeckGrid, grids } from './deckLayout.js';
 
 export const palettes = ['slate', 'blue', 'teal', 'green', 'amber', 'pink', 'purple', 'red'];
-export const grids = { '3x2': [3, 2], '4x3': [4, 3], '5x3': [5, 3], '6x3': [6, 3] };
 export const liveLabels = { cpu: 'CPU 温度', gpu: 'GPU 温度', focus: '专注计时', ai: 'AI 余量' };
 const typeLabels = { action: '触发键', toggle: '开关键', live: '实时信息键', folder: '文件夹 / 切页' };
 const plainAction = () => ({ id: 'mute', params: { direction: 'output' } });
-export const freshTile = () => ({ kind: 'action', title: '', icon: '', color: 'slate', steps: [{ action: plainAction(), delay_ms: 0 }] });
+export const freshTile = () => ({ kind: 'action', title: '', icon: '', color: 'slate', span: 1, steps: [{ action: plainAction(), delay_ms: 0 }] });
 
 function name(label) {
   return typeof label === 'object' && label
@@ -119,28 +119,38 @@ function FeedbackFields({ tile, catalog, set, audio }) {
   </>;
 }
 
-export function TileEditor({ tile, set, onClose, onRemove, scenes, scene, ensureFolder, catalog, audio }) {
+export function TileEditor({ tile, set, onClose, onRemove, scenes, scene, ensureFolder, catalog, audio, canExpand }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const iconFileRef = useRef(null);
+  const upload = useRef(null);
+  const cover = CUSTOM_ICON_RE.test(tile.icon);
   const setStep = (index, next) => set({ ...tile, steps: tile.steps.map((item, i) => i === index ? next : item) });
+
+  useEffect(() => () => upload.current?.abort(), []);
 
   async function uploadIcon(file) {
     if (!file) return;
+    upload.current?.abort();
+    const controller = new AbortController();
+    upload.current = controller;
     setUploading(true);
     setUploadError('');
     try {
       const form = new FormData();
       form.append('file', file);
-      const result = await request('/api/deck/icons', { method: 'POST', body: form });
-      set({ ...tile, icon: result.url });
+      const result = await request('/api/deck/icons', { method: 'POST', body: form, signal: controller.signal });
+      if (controller.signal.aborted) return;
+      set((current) => ({ ...current, icon: result.url }));
       setPickerOpen(false);
     } catch (error) {
-      setUploadError(error.message);
+      if (!controller.signal.aborted) setUploadError(error.message);
     } finally {
-      setUploading(false);
-      if (iconFileRef.current) iconFileRef.current.value = '';
+      if (!controller.signal.aborted) {
+        setUploading(false);
+        if (iconFileRef.current) iconFileRef.current.value = '';
+      }
     }
   }
   function changeKind(kind) {
@@ -159,7 +169,9 @@ export function TileEditor({ tile, set, onClose, onRemove, scenes, scene, ensure
     [steps[index], steps[index + offset]] = [steps[index + offset], steps[index]];
     set({ ...tile, steps });
   }
-  return <aside className="deck-editor surface" aria-label={t('配置按键')}>
+  return <aside className="deck-editor surface" aria-label={t('配置按键')} onKeyDown={(event) => {
+    if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.stopPropagation(); onClose(); }
+  }}>
     <div className="deck-editor-heading"><h2>{t('配置按键')}</h2><IconButton label={t('关闭')} onClick={onClose}><X size={18} /></IconButton></div>
     <label className="deck-field"><span>{t('按键类型')}</span><select value={tile.kind} onChange={(event) => changeKind(event.target.value)}>
       {Object.entries(typeLabels).map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}
@@ -167,7 +179,14 @@ export function TileEditor({ tile, set, onClose, onRemove, scenes, scene, ensure
     <label className="deck-field"><span>{t('标题')}</span><input value={tile.title} maxLength={40} placeholder={t('自动标题')}
       onChange={(event) => set({ ...tile, title: event.target.value })} /></label>
     <div className="deck-field">
+      <span>{t('宽度')}</span>
+      <Segmented label={t('宽度')} value={tile.span ?? 1} onChange={(span) => set({ ...tile, span })}
+        options={[{ value: 1, label: t('标准 1×1') }, { value: 2, label: t('宽键 2×1'), disabled: !canExpand }]} />
+      {!canExpand && <small>{t('宽键需要同一行右侧有空位')}</small>}
+    </div>
+    <div className="deck-field">
       <span>{t('图标')}</span>
+      {cover && <img className="deck-cover-preview" src={httpUrl(tile.icon).href} alt={t('按键封面预览')} data-span={tile.span ?? 1} />}
       <div className="deck-icon-bar">
         <Button onClick={() => setPickerOpen((open) => !open)}><Sparkles size={15} />{pickerOpen ? t('收起图标库') : t('选择图标')}</Button>
         <Button disabled={uploading} onClick={() => iconFileRef.current?.click()}><ImagePlus size={15} />{uploading ? t('上传中…') : t('上传图片')}</Button>
@@ -187,7 +206,7 @@ export function TileEditor({ tile, set, onClose, onRemove, scenes, scene, ensure
             </button>;
           })}
         </div>
-        <input value={CUSTOM_ICON_RE.test(tile.icon) || tile.icon?.startsWith('lucide:') ? '' : tile.icon} maxLength={16}
+        <input value={cover || tile.icon?.startsWith('lucide:') ? '' : tile.icon} maxLength={16}
           placeholder={t('或输入 Emoji')} onChange={(event) => set({ ...tile, icon: event.target.value })} />
       </div>}
     </div>
@@ -223,7 +242,6 @@ export function TileEditor({ tile, set, onClose, onRemove, scenes, scene, ensure
 }
 
 export function SceneEditor({ scene, set, add, remove, hasFolder, canAdd, canRemove }) {
-  const occupied = scene.tiles.findLastIndex(Boolean) + 1;
   return <div className="deck-scene-editor surface">
     <label className="deck-field"><span>{t('场景名称')}</span><input maxLength={32} value={scene.title}
       onChange={(event) => set({ ...scene, title: event.target.value })} /></label>
@@ -232,7 +250,7 @@ export function SceneEditor({ scene, set, add, remove, hasFolder, canAdd, canRem
       const [cols, rows] = grids[grid];
       set({ ...scene, grid, tiles: scene.tiles.slice(0, cols * rows) });
     }}>
-      {Object.entries(grids).map(([key, [cols, rows]]) => <option key={key} value={key} disabled={occupied > cols * rows}>{cols} × {rows}</option>)}
+      {Object.entries(grids).map(([key, [cols, rows]]) => <option key={key} value={key} disabled={!fitsDeckGrid(scene, key)}>{cols} × {rows}</option>)}
     </select></label>
     <label className="deck-field deck-folder-field"><input type="checkbox" checked={scene.folder}
       disabled={!scene.folder && !canRemove} onChange={(event) => set({ ...scene, folder: event.target.checked })} /><span>{t('仅在文件夹中显示')}</span></label>

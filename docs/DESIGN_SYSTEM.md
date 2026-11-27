@@ -9,7 +9,7 @@ Source of truth for values: `frontend/src/styles.css` (`:root` and `:root[data-t
 Vitals is a calm, instrument-grade control surface. Two materials carry the whole app:
 
 - **Frosted glass** for the everyday app (Overview, Control, Scratchpad, Settings, dialogs). Surfaces are translucent panels with a bright top rim, a soft bottom rim, and a diffuse shadow. Content sits on top of an ambient tinted background or the user's wallpaper.
-- **Dark hardware** for Vitals Deck. The Deck console is a physical dark device in every theme: a matte chassis, a recessed key well, and OLED keycaps that glow in their accent color. It never inherits the light glass surface.
+- **Studio Glass** for Vitals Deck. The console uses the current light, dark, or wallpaper glass surface, with a recessed key well, tactile keycaps, and a separate Touch Strip for audio and playback.
 
 Core principles:
 
@@ -31,8 +31,8 @@ Kept, because it already worked well:
 
 Rebuilt or tightened:
 
-- **Tokens:** added spacing, radius, motion, type-scale, accent-fill, focus-ring, and Deck chassis tokens. Hard-coded `#0074f3`, `cubic-bezier(...)` literals, and `18px` radii in shared rules now reference tokens.
-- **Deck console:** the board no longer derives from `--surface`, which made it look washed out in Light mode. It now uses fixed `--deck-chassis-*` tokens, a recessed key well, and a glass reflection layer on each OLED key.
+- **Tokens** cover spacing, radius, motion, type scale, accent fills, and focus rings. Shared rules reference these values.
+- **Deck console** uses the shared glass tokens, a sunken well, and a soft rim. The eight key colors apply to glyphs, active fills, and live outlines.
 - **Bento cards:** larger 24px radius, muted small-caps-style titles, a hairline ring on the icon tile, and a little more breathing room.
 - **Reduced motion:** a global `prefers-reduced-motion: reduce` guard now neutralizes every animation and transition, including those in feature CSS files that previously had no guard.
 - **Numerals:** tabular figures are applied by default to every reading class, not only to elements that remembered to add `.numeric`.
@@ -100,13 +100,13 @@ Use the `.surface` class rather than copying this.
 - Every `.surface` and `.app-header` keeps a backdrop blur, and falls back to 88% opacity when `backdrop-filter` is unsupported.
 - Free-floating text that is not on a surface (page headings, `.source-note`) gets its own small glass chip. Any new free-floating text must do the same, or it will be unreadable on a busy image.
 
-### Deck hardware
+### Deck Studio Glass
 
 | Token | Value | Use |
 |---|---|---|
-| `--deck-chassis-top` / `-bottom` | `#1d222c` / `#0b0e14` | Console body gradient |
-| `--deck-chassis-edge` | 9% white | Console border |
-| `--deck-accent` | set by `[data-deck-color]` | Key glow color |
+| `--surface-rgb`, `--glass-alpha`, `--glass-sheen` | current appearance | The board and Touch Strip use `.surface` |
+| `--deck-accent` | set by `[data-deck-color]` | Key hue, active fill, and live glow |
+| `--shadow-thumb`, `--shadow-accent` | shared shadows | Key and fader relief, active-key glow |
 
 Deck palette (`data-deck-color`): `slate #8290a6`, `blue #3b8ef5`, `teal #22b8c7`, `green #2ec273`, `amber #f0972c`, `pink #ec68a5`, `purple #9b6ef3`, `red #ef5868`. Add new colors here and in `deck.css` together.
 
@@ -128,7 +128,7 @@ Weights: 650 for buttons and labels, 700–745 for titles, 760–780 for reading
 
 **Spacing (8px base):** `--space-xs 4`, `--space-sm 8`, `--space-md 12`, `--space-lg 16`, `--space-xl 24`, `--space-2xl 32`. Grid gaps are 12px (Bento) to 16px (panels); card padding is 14–20px; mobile drops one step.
 
-**Radius:** `--radius-sm 8` (inputs, small chips), `--radius-md 12` (buttons, icon tiles, list rows), `--radius-lg 18` (panels, dialogs), `--radius-xl 24` (Bento cards, detail dialogs, AI chat), `--radius-pill 999` (segments, badges, pills). Deck keys use their own clamp(18–24px); the console uses 30px.
+**Radius:** `--radius-sm 8` (inputs, small chips), `--radius-md 12` (buttons, icon tiles, list rows), `--radius-lg 18` (panels, dialogs), `--radius-xl 24` (Bento cards, detail dialogs, AI chat), `--radius-pill 999` (segments, badges, pills). The Deck console uses 32px with a 24px recessed well.
 
 **Motion:**
 
@@ -141,7 +141,7 @@ Weights: 650 for buttons and labels, 700–745 for titles, 760–780 for reading
 | `--duration-modal` | 180ms | Dialog enter and exit (matches `modalDuration` in `ui.jsx`) |
 | `--duration-page` | 220ms | Page and tab transitions |
 
-Press feedback is `scale: 0.97` (Framer `whileTap` on `Button` and `IconButton`). Cards lift `translate: 0 -3px` on hover only on `(hover: hover)` devices. Deck keys travel down 4px on press.
+Press feedback is `scale: 0.97` (Framer `whileTap` on `Button` and `IconButton`). Cards lift `translate: 0 -3px` on hover only on `(hover: hover)` devices. Deck keys hover up 2px and press to `scale(.95)`.
 
 **Reduced motion:** a global rule in `styles.css` collapses all animation and transition durations when `prefers-reduced-motion: reduce` is set. JS-driven motion must also check `useReducedMotion()` (as `Modal` and `Segmented` do).
 
@@ -189,9 +189,13 @@ Rules:
 
 `<section className="surface panel">` with `<div className="panel-header"><h2>…</h2>…</div>`. Two-column layouts use `.host-control-grid` or `.media-control-grid` and collapse to one column at 720px.
 
-### Deck keys
+### Deck board, keys, and Touch Strip
 
-A key is `button.deck-key` with `data-deck-color`, plus optional `data-active`, `data-selected`, `data-has-cover`, and `data-empty`. Layering, bottom to top: cover image (z 0), glass reflection `::before` (z 1), cover scrim `::after` (z 1), glyph (z 1), value and name (z 2), LED (z 3). Labels clamp to two lines. Live keys show `.deck-key-value` above `.deck-key-name`. Keep keys square (`aspect-ratio: 1`) at every grid size, `3×2` through `6×3`.
+- `.deck-board` is centered, capped at `min(92vw, 1120px)`, and uses a 12px-inset `::before` for the well. Grid heights stay consistent, including rows that contain only wide keys.
+- Idle keys have tinted glyphs and muted labels. Active keys use a full accent fill with a light top sheen and white content. Live keys use a tinted border and tabular readings. Cover images fill their key and use a dark lower scrim behind white labels. Empty slots are recessed and gain a dashed border and plus in edit mode.
+- The layout retains indexed `tiles` slots. A `span: 2` key occupies its index and the empty slot immediately to the right on that scene row. The occupied right slot remains `null` or omitted in JSON. At 440px and below, CSS reflows the visual grid to two columns while actions and edits still address the stored indices.
+- `.deck-touch-strip` follows the board and remains reachable in fullscreen. It uses three columns above 720px, two through tablet widths, and one at 440px and below. The speaker and microphone faders coalesce rapid changes and display them immediately. The playback module follows the same target host.
+- The tile editor is a bottom sheet below 1024px and a right-hand panel at wider widths. A fixed scrim softens the background, unselected keys dim to 50%, and the selected key gets the blue focus ring. Fullscreen parks the toolbar after three idle seconds. Horizontal board swipes over 60px switch scenes without firing a key.
 
 ### Where styles live
 
@@ -228,7 +232,7 @@ Every text input, select and textarea uses the well recipe: `--well` background,
 
 ## 5. Responsive and bilingual guardrails
 
-Breakpoints used across the app: **1120** (weather three-column), **1000**, **850** (Bento to 2 columns), **720** (most grids to 1 column, Deck editor becomes a bottom sheet), **700** (header tabs wrap to a second row, AI chat becomes a bottom sheet), **620** (Bento to 1 column), **530**, **440**, **390/370/365** (tightest phone tweaks).
+Breakpoints used across the app include **1120** (weather three-column), **1024** (Deck editor becomes a bottom sheet below this width), **1000**, **850** (Bento to 2 columns), **720** (most grids to 1 column and Deck Touch Strip to 2 columns), **700** (header tabs wrap to a second row, AI chat becomes a bottom sheet), **620** (Bento to 1 column), **530**, **440** (Deck keys to two columns and the Touch Strip to one), and **390/370/365** (tightest phone tweaks).
 
 Platform chrome:
 
@@ -256,7 +260,7 @@ Bilingual rules:
 - [ ] Add `min-width: 0` to grid and flex children that contain text.
 - [ ] Give icon-only buttons a `label`.
 - [ ] Respect `prefers-reduced-motion` in any JS animation (`useReducedMotion`).
-- [ ] Keep Deck UI on the dark chassis tokens in all themes.
+- [ ] Use the active theme’s glass surface and keep Deck state colors readable in both themes.
 - [ ] Run `npm --prefix frontend run build` before finishing.
 
 **Don't**
@@ -267,6 +271,6 @@ Bilingual rules:
 - [ ] Don't let Bento cards change height or show spinners.
 - [ ] Don't place free-floating text over a wallpaper without a glass chip.
 - [ ] Don't use `100vh` or ignore safe-area insets on fullscreen views.
-- [ ] Don't derive Deck console or key colors from `--surface` or `--background`.
+- [ ] Don't use the accent palette for non-Deck form actions or animate the glass blur.
 - [ ] Don't add web fonts or icon sets other than `lucide-react` (Deck icons come from `deckIcons.js`).
 - [ ] Don't change API paths, SSE/WebSocket payload handling, or the telemetry sampling hooks from the UI layer.

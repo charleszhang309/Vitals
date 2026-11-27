@@ -97,11 +97,6 @@
   --text-heading: clamp(17px, 1.65vw, 21px);
   --text-display: clamp(30px, 3.25vw, 42px);
 
-  /* Deck hardware (theme-independent: the console is always a dark device) */
-  --deck-chassis-top: #1d222c;
-  --deck-chassis-bottom: #0b0e14;
-  --deck-chassis-edge: rgb(255 255 255 / 0.09);
-
   -webkit-font-smoothing: antialiased;
 }
 

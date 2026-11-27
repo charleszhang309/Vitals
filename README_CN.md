@@ -4,8 +4,9 @@
 
 # Vitals
 
-**跨平台个人状态台、多设备控制中心 & 无线 OLED Stream Deck**  
-集「今日概览 Bento 小组件」「Windows & MacBook 实时硬件监控与远程控制」「iPad / iPhone 无线 OLED Deck 与插件商店」「Apple Music 风格全屏播放与 AMLL 动态歌词」「跨设备中转站」「可选记账与 AI 管家」于一体，本地优先、零订阅、MIT 开源。
+**跨平台个人状态台、多设备控制中心与无线 Studio Deck**
+
+集「今日概览 Bento 小组件」「Windows & MacBook 实时硬件监控与远程控制」「iPad / iPhone 无线 Deck 与插件商店」「Apple Music 风格全屏播放与 AMLL 动态歌词」「跨设备中转站」「可选记账与 AI 管家」于一体，本地优先、零订阅、MIT 开源。
 
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20iPadOS%2FiOS-0078D6?style=flat-square)
 ![Desktop](https://img.shields.io/badge/Desktop-Tauri%20v2-FFC131?style=flat-square&logo=tauri&logoColor=black)
@@ -19,7 +20,7 @@
 
 ## 界面预览
 
-| Vitals Deck（OLED 无线控制台） | 今日概览（Bento 小组件） |
+| Vitals Deck（无线触控台） | 今日概览（Bento 小组件） |
 | :---: | :---: |
 | ![Vitals Deck](docs/screenshots/deck.png) | ![今日概览](docs/screenshots/today.png) |
 
@@ -96,9 +97,10 @@ tailscale serve status
 
 ## 核心功能
 
-### 1. Vitals Deck（无线 OLED Stream Deck + 插件商店）
+### 1. Vitals Deck（Studio Glass 与插件商店）
 点击顶栏四宫格按钮进入 Deck（尤其适合横屏放在桌边的 iPad PWA 全屏使用）：
-- **OLED 液晶键帽与自定义封面**：正方形微立体发光键帽、LED 状态灯、**43 个精选矢量图标选择器**，并支持**上传 PNG / JPG / WebP / SVG 自定义封面图**跨端同步。
+- **玻璃键帽与自定义封面**。混合布局 `1×1` 标准键和 `2×1` 宽键，从图标库选择矢量图标，或上传 PNG、JPG、WebP、SVG 封面跨设备同步。
+- **触控条**。调节目标主机的扬声器和麦克风音量，也可快速静音、播放、暂停或切歌。左右滑动板面即可切换场景。
 - **四种按键形态**：触发键、双态开关键、实时信息键（CPU/GPU 温度、专注倒计时、AI 额度）、场景分页与文件夹（支持 `3×2` 至 `6×3` 网格、拖拽排序与 JSON 导入导出）。
 - **临时切换目标主机**：进入 Deck 后可临时切换控制 Windows 或 MacBook，退出 Deck 时自动切回默认主机。
 - **内置通用动作引擎**：

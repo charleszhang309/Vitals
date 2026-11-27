@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints, field_validator, model_validator
 
 from .agents import DEVICE_PATTERN
 from .deck_actions import DeckActions, execute_macro, parameters
@@ -55,6 +55,7 @@ class Tile(Model):
     title: str = Field(default="", max_length=40)
     icon: str = Field(default="", max_length=MAX_ICON_VALUE_LENGTH)
     color: Literal[PALETTES] = "slate"
+    span: Literal[1, 2] = 1
     steps: list[Step] = Field(default_factory=list, max_length=8)
     page: Key | None = None
     live: Literal["cpu", "gpu", "focus", "ai"] | None = None
@@ -64,6 +65,13 @@ class Tile(Model):
     @classmethod
     def check_icon(cls, icon: str) -> str:
         return validate_icon_value(icon)
+
+    @field_validator("span", mode="before")
+    @classmethod
+    def check_span(cls, span):
+        if type(span) is not int:
+            raise ValueError("Deck 按键宽度无效")
+        return span
 
     @model_validator(mode="after")
     def check_kind(self):
@@ -89,6 +97,11 @@ class Scene(Model):
     def capacity(self):
         if len(self.tiles) > GRIDS[self.grid] or not self.title.strip():
             raise ValueError("Deck 场景配置无效")
+        columns = int(self.grid[0])
+        for index, tile in enumerate(self.tiles):
+            if tile and tile.span == 2 and ((index + 1) % columns == 0 or
+                                           (index + 1 < len(self.tiles) and self.tiles[index + 1])):
+                raise ValueError("宽键需要同一行右侧有空位")
         return self
 
 
@@ -162,6 +175,19 @@ class FeedbackRequest(Model):
     revision: int = Field(ge=0)
     scene: Key
     slots: list[Annotated[int, Field(ge=0, lt=18)]] = Field(max_length=18)
+
+
+class FaderChange(Model):
+    percent: int | None = Field(default=None, ge=0, le=100)
+    muted: StrictBool | None = None
+    input_percent: int | None = Field(default=None, ge=0, le=100)
+    input_muted: StrictBool | None = None
+
+    @model_validator(mode="after")
+    def has_change(self):
+        if not self.model_dump(exclude_none=True):
+            raise ValueError("至少设置一项音频控制")
+        return self
 
 
 class DeckStore:
@@ -253,6 +279,11 @@ def deck_router(store: DeckStore, actions: DeckActions):
         response.headers["Cache-Control"] = "no-store"
         _, snapshot = actions.target(target)
         return await actions.audio(request.app.state.media_client, snapshot)
+
+    @router.post("/audio")
+    async def set_audio(change: FaderChange, request: Request, target: DeviceKey = "hub"):
+        volume = await actions.set_faders(target, request.app.state.media_client, change.model_dump(exclude_none=True))
+        return Response(status_code=204) if volume is None else volume
 
     @router.post("/run")
     async def run(payload: Run, request: Request):
