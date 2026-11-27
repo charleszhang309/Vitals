@@ -1,12 +1,12 @@
 import { t } from './i18n/messages.js';
-import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { RefreshCw, ScanLine } from 'lucide-react';
 import { request } from './api.js';
 import { Button, IconButton, Modal } from './ui.jsx';
 import './ScreenshotControl.css';
 
-export default function ScreenshotControl({ deviceId, deviceName, disabled = false }) {
+export default function ScreenshotControl({ deviceId, deviceName, disabled = false, controlRef }) {
   const id = useId();
   const captureRequest = useRef(null);
   const objectUrl = useRef(null);
@@ -37,8 +37,10 @@ export default function ScreenshotControl({ deviceId, deviceName, disabled = fal
       if (!['image/webp', 'image/jpeg'].includes(image.type)) throw new Error(t('未收到有效截图，请重试。'));
       objectUrl.current = URL.createObjectURL(image);
       setView({ url: objectUrl.current });
+      return true;
     } catch (error) {
       if (!controller.signal.aborted && captureRequest.current === controller) setView({ error: error.message });
+      return false;
     }
   }
 
@@ -50,13 +52,15 @@ export default function ScreenshotControl({ deviceId, deviceName, disabled = fal
 
   function openPreview() {
     setOpen(true);
-    capture();
+    return capture();
   }
 
+  useImperativeHandle(controlRef, () => ({ open: openPreview }));
+
   return <>
-    <Button onClick={openPreview} disabled={disabled} aria-haspopup="dialog">
+    {!controlRef && <Button onClick={openPreview} disabled={disabled} aria-haspopup="dialog">
       <ScanLine size={15} aria-hidden="true" /><span>{t('截图')}</span>
-    </Button>
+    </Button>}
     <AnimatePresence>
       {open && <Modal id={id} className="detail-dialog screenshot-dialog" title={deviceName ? t('{p1} 截图', { p1: deviceName }) : t('主屏截图')}
         onClose={close} headerActions={<IconButton label={t('重新截图')} disabled={disabled || view.loading} onClick={capture}>

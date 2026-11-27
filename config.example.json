@@ -1,4 +1,8 @@
 {
+  "deck": {
+    "enabled_plugins": [],
+    "webhooks": []
+  },
   "host": "0.0.0.0",
   "port": 3993,
   "upload_limit_mib": 50,

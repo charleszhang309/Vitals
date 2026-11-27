@@ -13,6 +13,8 @@ const dueMonthDay = localizedDate({ month: 'short', day: 'numeric', timeZone: 'U
 const dueDate = localizedDate({ year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
 const percentFormat = localizedNumber({ style: 'percent', maximumFractionDigits: 1 });
 const countFormat = localizedNumber({ maximumFractionDigits: 0 });
+const commonCurrencies = ['CNY', 'USD', 'CAD', 'EUR', 'GBP', 'JPY', 'HKD', 'AUD', 'NZD', 'CHF', 'SGD', 'KRW', 'INR', 'SEK', 'NOK', 'TWD', 'MXN', 'BRL'];
+const currencyCode = /^[A-Z]{3}$/;
 
 function displayAmount(amount) {
   if (amount == null) return '—';
@@ -83,6 +85,51 @@ function BudgetEditor({ amount, currency, refresh }) {
   </form>;
 }
 
+function CurrencyField({ label, value, onChange, disabled }) {
+  const [custom, setCustom] = useState(() => !commonCurrencies.includes(value));
+  return <div className="bills-currency-field">
+    <label>{label}<select value={custom ? 'custom' : value} disabled={disabled} onChange={(event) => {
+      const next = event.target.value;
+      setCustom(next === 'custom');
+      onChange(next === 'custom' ? '' : next);
+    }}>
+      {commonCurrencies.map((code) => <option key={code} value={code}>{code}</option>)}
+      <option value="custom">{t('自定义币种')}</option>
+    </select></label>
+    {custom && <input aria-label={t('三位币种代码')} required pattern="[A-Z]{3}" maxLength={3}
+      autoCapitalize="characters" autoComplete="off" spellCheck={false} placeholder="CNY" value={value} disabled={disabled}
+      onChange={(event) => onChange(event.target.value.toUpperCase())} />}
+  </div>;
+}
+
+function BaseCurrencyEditor({ currency, refresh }) {
+  const [draft, setDraft] = useState(currency);
+  const [saved, setSaved] = useState(currency);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function save(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const next = await sendJson('PUT', '/api/expenses/base-currency', { base_currency: draft });
+      setSaved(next.base_currency);
+      refresh();
+    } catch (failure) {
+      setError(failure.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <form className="widget-form bills-default-currency" onSubmit={save}>
+    <CurrencyField label={t('默认币种')} value={draft} onChange={setDraft} disabled={busy} />
+    <Button type="submit" disabled={busy || draft === saved || !currencyCode.test(draft)}>{t('保存')}</Button>
+    {error && <p className="feedback error" role="alert">{error}</p>}
+  </form>;
+}
+
 function MonthlyTotal({ data }) {
   return <div className="bills-monthly">
     <p className="widget-muted">{t('本月支出')}</p>
@@ -138,7 +185,7 @@ function localInputTime(value) {
   return new Date(moment.getTime() - moment.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
-function BillingEditor({ draft, setDraft, subscription, currencies, busy, onSave }) {
+function BillingEditor({ draft, setDraft, subscription, busy, onSave }) {
   const [expanded, setExpanded] = useState(Boolean(draft.category || draft.card || draft.note));
   const set = (key) => (event) => setDraft((current) => ({ ...current, [key]: event.target.value }));
   const name = subscription ? 'name' : 'merchant';
@@ -158,10 +205,8 @@ function BillingEditor({ draft, setDraft, subscription, currencies, busy, onSave
     <label>{subscription ? t('订阅名称') : t('商户')}<input autoFocus required maxLength={200} value={draft[name]} onChange={set(name)} /></label>
     <div className="widget-form-pair">
       <label>{t('金额')}<input required inputMode="decimal" maxLength={32} value={draft.amount} onChange={set('amount')} /></label>
-      <label>{t('币种')}<input required list="bills-currencies" pattern="[A-Za-z]{3}" maxLength={3} autoCapitalize="characters"
-        value={draft.currency} onChange={(event) => setDraft((current) => ({ ...current, currency: event.target.value.toUpperCase() }))} />
-        <datalist id="bills-currencies">{currencies.map((code) => <option value={code} key={code} />)}</datalist>
-      </label>
+      <CurrencyField label={t('币种')} value={draft.currency} disabled={busy}
+        onChange={(currency) => setDraft((current) => ({ ...current, currency }))} />
     </div>
     {subscription ? <>
       <div className="widget-form-pair">
@@ -236,7 +281,7 @@ function BillingList({ resource, summary, subscription }) {
     {(error || resource.error) && <p className="feedback error" role="alert">{error || resource.error}
       {!error && <button className="text-link" type="button" onClick={retry}>{t('重试')}</button>}
     </p>}
-    {draft && <BillingEditor draft={draft} setDraft={setDraft} subscription={subscription} currencies={data.currencies} busy={busy}
+    {draft && <BillingEditor draft={draft} setDraft={setDraft} subscription={subscription} busy={busy}
       onSave={(payload) => change(() => sendJson(draft.id ? 'PATCH' : 'POST', draft.id ? `${path}/${draft.id}` : path, payload))} />}
     {data?.items.length > 0 ? <ul className="widget-detail-stack" aria-label={subscription ? t('订阅列表') : t('本月账单列表')}>
       {data.items.map((item) => {
@@ -272,13 +317,19 @@ export function ExpensesDetails({ resource }) {
   const receipts = useResource('/api/expenses', 30_000, !isSubscriptions);
   const subscriptions = useResource('/api/subscriptions', 30_000, isSubscriptions);
   const { data, error, retry } = resource;
+  function refreshCurrency() {
+    retry();
+    receipts.retry();
+    subscriptions.retry();
+  }
   return <div className="widget-detail-stack bills-details">
     {data && <section className="surface bills-total" aria-label={t('本月支出汇总')}>
+      <BaseCurrencyEditor key={data.base_currency} currency={data.base_currency} refresh={refreshCurrency} />
       <MonthlyTotal data={data} />
       {data.missing_rates.length > 0 && <p className="bills-missing">{t('未计入 {p1}', { p1: new Intl.ListFormat(getLocale(), { type: 'unit', style: 'short' })
         .format(data.missing_rates.map((code) => `${displayAmount(data.totals_by_currency[code])} ${code}`)) })}
       </p>}
-      <BudgetEditor amount={data.monthly_budget?.amount} currency={data.base_currency} refresh={retry} />
+      <BudgetEditor key={`budget-${data.base_currency}`} amount={data.monthly_budget?.amount} currency={data.base_currency} refresh={retry} />
     </section>}
     {error && <p className="feedback error" role="alert">{t('本月汇总暂不可用')}<button className="text-link" type="button" onClick={retry}>{t('重试')}</button></p>}
     <Segmented id="bills-tab" label={t('账单与订阅')} options={tabs} value={tab} onChange={setTab} tabs />

@@ -22,6 +22,12 @@ export const overviewModules = [...overviewStrips, ...overviewCards];
 export const defaultCardOrder = overviewCards.map(({ id }) => id);
 const cardsById = new Map(overviewCards.map((card) => [card.id, card]));
 
+export function readOverviewWidgets(preferences) {
+  const existing = preferences !== null && typeof preferences === 'object' && !Array.isArray(preferences);
+  return Object.fromEntries(overviewModules.map(({ id }) => [id, existing
+    ? preferences.widgets?.[id] !== false : id !== 'expenses']));
+}
+
 export function readCardOrder(storedOrder) {
   const known = Array.isArray(storedOrder) ? storedOrder.filter((id) => cardsById.has(id)) : [];
   return [...new Set([...known, ...defaultCardOrder])];

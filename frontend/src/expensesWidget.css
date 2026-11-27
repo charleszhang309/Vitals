@@ -44,6 +44,18 @@
 .overview-dialog.expenses-dialog { width: min(650px, calc(100% - 28px)); }
 .bills-total, .bills-editor { padding: 14px; }
 .bills-total { display: grid; gap: 8px; }
+.bills-default-currency {
+  grid-template-columns: minmax(0, 14rem) auto;
+  justify-content: start;
+  align-items: end;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  padding-bottom: 10px;
+}
+.bills-default-currency .feedback { grid-column: 1 / -1; }
+.bills-default-currency .button { min-height: 38px; }
+.bills-currency-field { display: grid; gap: 5px; min-width: 0; }
+.bills-editor .widget-form-pair { align-items: start; }
 .bills-total > .bills-missing { font-size: 13px; overflow-wrap: anywhere; }
 .bills-extra-fields[open] > :not(summary) { margin-top: 8px; }
 .bills-extra-fields > summary { color: var(--link); cursor: pointer; font-size: 13px; }

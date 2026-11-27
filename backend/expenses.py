@@ -56,6 +56,11 @@ class BudgetInput(BaseModel):
     amount: AMOUNT | None
 
 
+class BaseCurrencyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_currency: CURRENCY
+
+
 class PaymentInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     amount: AMOUNT
@@ -187,6 +192,10 @@ class ExpenseStore:
                     currency TEXT PRIMARY KEY NOT NULL,
                     amount_minor INTEGER NOT NULL CHECK(amount_minor > 0)
                 );
+                CREATE TABLE IF NOT EXISTS expense_settings (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    base_currency TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS subscriptions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
@@ -206,8 +215,22 @@ class ExpenseStore:
     def local_date(self, now=None):
         return (now or datetime.now(timezone.utc)).astimezone(self.zone).date()
 
+    def _base_currency(self, db):
+        row = db.execute("SELECT base_currency FROM expense_settings WHERE id=1").fetchone()
+        return row["base_currency"] if row else self.rates.base
+
+    def base_currency(self):
+        with self.connect() as db:
+            return self._base_currency(db)
+
+    def set_base_currency(self, currency):
+        with self.connect() as db:
+            db.execute("""INSERT INTO expense_settings(id,base_currency) VALUES (1,?)
+                ON CONFLICT(id) DO UPDATE SET base_currency=excluded.base_currency""", (currency,))
+        return {"base_currency": currency}
+
     def money(self, amount, currency):
-        currency = currency or self.rates.base
+        currency = currency or self.base_currency()
         if amount is None:
             raise HTTPException(422, "请输入金额")
         digits = precision(currency)
@@ -233,18 +256,21 @@ class ExpenseStore:
 
     def list_receipts(self):
         today = self.local_date()
-        return {"date": today.isoformat(), "time_zone": self.zone.key, "base_currency": self.rates.base,
+        return {"date": today.isoformat(), "time_zone": self.zone.key, "base_currency": self.base_currency(),
                 "currencies": self.rates.currencies, "items": [public_payment(row) for row in self.month_receipts(today)]}
 
     def budget(self):
-        currency = self.rates.base
         with self.connect() as db:
-            row = db.execute("SELECT amount_minor FROM expense_budgets WHERE currency=?", (currency,)).fetchone()
+            return self._budget(db, self._base_currency(db))
+
+    def _budget(self, db, currency):
+        row = db.execute("SELECT amount_minor FROM expense_budgets WHERE currency=?", (currency,)).fetchone()
         return {"currency": currency, "amount": amount_text(row["amount_minor"], currency) if row else None}
 
     def set_budget(self, amount):
-        currency = self.rates.base
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            currency = self._base_currency(db)
             if amount is None:
                 db.execute("DELETE FROM expense_budgets WHERE currency=?", (currency,))
             else:
@@ -351,14 +377,14 @@ class ExpenseStore:
         for row in receipts:
             totals[row["currency"]] += row["amount_minor"]
         upcoming = [item for item in self.subscriptions(today) if item["active"] and item["next_billing_date"]]
-        return receipts, totals, upcoming, self.budget()["amount"]
+        return receipts, totals, upcoming, self.budget()
 
     async def summary(self, client):
         today = self.local_date()
-        receipts, totals, upcoming, budget_amount = await run_in_threadpool(self.snapshot, today)
-        base = self.rates.base
-        targets = sorted(set(totals).intersection(self.rates.currencies) - {base})
-        quotes = await self.rates.quotes(client, base, targets) if targets else {}
+        receipts, totals, upcoming, settings = await run_in_threadpool(self.snapshot, today)
+        base, budget_amount = settings["currency"], settings["amount"]
+        targets = set(totals) - {base}
+        quotes = await self.rates.expense_quotes(client, base, targets) if targets else {}
         total = amount_from_minor(totals.get(base, 0), base)
         missing = []
         for currency in sorted(set(totals) - {base}):
@@ -443,6 +469,10 @@ def expenses_router(store: ExpenseStore):
     def set_budget(payload: BudgetInput):
         return store.set_budget(payload.amount)
 
+    @router.put("/expenses/base-currency")
+    def set_base_currency(payload: BaseCurrencyInput):
+        return store.set_base_currency(payload.base_currency)
+
     @router.post("/expenses", status_code=201)
     def create_receipt(payload: ReceiptInput):
         return store.add_receipt(payload)
@@ -471,7 +501,7 @@ def expenses_router(store: ExpenseStore):
     def list_subscriptions(response: Response):
         response.headers["Cache-Control"] = "no-store"
         today = store.local_date()
-        return {"date": today.isoformat(), "base_currency": store.rates.base,
+        return {"date": today.isoformat(), "base_currency": store.base_currency(),
                 "currencies": store.rates.currencies, "items": store.subscriptions(today)}
 
     @router.post("/subscriptions", status_code=201)

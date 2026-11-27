@@ -137,9 +137,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .brand-icon, .metric-icon, .hardware-icon, .scratch-type { display: grid; place-items: center; flex: none; border-radius: 12px; }
 .brand-icon { width: 43px; height: 43px; color: var(--link); background: color-mix(in srgb, var(--blue) 11%, var(--surface)); }
 .brand-name strong { display: block; font-size: 22px; line-height: 1.25; font-weight: 750; letter-spacing: -.045em; white-space: nowrap; }
-.header-tabs { grid-area: tabs; }
-.header-tabs .segments { min-width: 250px; }
-:root:lang(en) .header-tabs .segment { padding-inline: 7px; }
+.header-tabs { grid-area: tabs; min-width: 0; max-width: 100%; }
+.header-tabs .segment { flex: 0 0 auto; padding-inline: clamp(9px, 1.8vw, 17px); }
 .header-actions { grid-area: actions; justify-self: end; display: flex; align-items: center; gap: 8px; }
 .system-badge { font-size: 12px; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 99px; background: var(--track); }
 .system-off { color: var(--amber-text); background: var(--amber-fill); }
@@ -153,8 +152,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 .segments { position: relative; display: inline-flex; flex-wrap: wrap; width: fit-content; max-width: 100%; min-width: 0; background: var(--track); border: 1px solid var(--border); box-shadow: inset 0 1px 2px rgb(15 23 42 / .05); border-radius: 30px; padding: 3px; gap: 1px; }
 .segment { flex: 0 0 auto; position: relative; z-index: 1; min-height: 34px; min-width: 0; border-radius: 24px; padding: 6px 14px; font-weight: 650; font-size: 14px; color: var(--muted); white-space: nowrap; }
-.header-tabs .segments, .power-card .segments { display: flex; flex-wrap: nowrap; width: 100%; }
-.header-tabs .segment, .power-card .segment { flex: 1 1 0; }
+.power-card .segments { display: flex; width: 100%; }
+.power-card .segment { flex: 1 0 auto; padding-inline: clamp(7px, 1.3vw, 14px); }
 .segment:disabled { opacity: .58; }
 .segment:not(:disabled):focus-visible { color: var(--text); z-index: 1; }
 @media (hover: hover) {
@@ -210,7 +209,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .metric-reading span { font-size: clamp(13px, 1.5vw, 21px); color: var(--unit); margin-left: 7px; font-weight: 610; letter-spacing: 0; }
 .metric-details { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--border); }
 .metric-details div { min-width: 0; }
-.metric-details dt { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.metric-details dt { min-width: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .metric-details dd { font-size: 13px; font-weight: 660; overflow-wrap: anywhere; }
 .metric-device { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 7px; }
 .gpu-choice { max-width: 100%; min-height: 30px; margin-top: 6px; border-radius: 8px; border: 1px solid var(--field-border); background: var(--surface); color: var(--text); font-size: 12px; padding-inline: 6px; }
@@ -218,7 +217,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .monitor-grid { display: grid; grid-template-columns: minmax(0, 1.88fr) minmax(0, 1fr); gap: 19px 17px; align-items: stretch; }
 .panel { padding: 19px 20px; }
 .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 7px 10px; margin-bottom: 14px; }
-.panel-header h2 { font-size: clamp(17px, 1.65vw, 21px); font-weight: 745; letter-spacing: -.025em; line-height: 1.22; }
+.panel-header h2 { min-width: 0; font-size: clamp(17px, 1.65vw, 21px); font-weight: 745; letter-spacing: -.025em; line-height: 1.22; overflow-wrap: anywhere; }
 .panel-note, .subtle-line { font-size: 13px; }
 .side-stack { display: grid; grid-template-rows: auto 1fr; gap: 15px; min-width: 0; }
 .power-card .subtle-line { margin-top: 12px; overflow-wrap: anywhere; }
@@ -308,7 +307,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .modal-body { padding: 20px; }
 .modal-header { margin-bottom: 17px; }
-.modal-header h2 { font-size: 20px; font-weight: 760; overflow-wrap: anywhere; }
+.modal-header h2 { min-width: 0; font-size: 20px; font-weight: 760; overflow-wrap: anywhere; }
 .modal-header .icon-button { min-height: 38px; width: 38px; }
 .modal-header .modal-close { border: 0; background: transparent; box-shadow: none; color: var(--muted); transition: color .18s ease; }
 .modal-header .modal-close:is(:hover, :focus-visible) { background: transparent; color: var(--text); }
@@ -382,8 +381,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .settings-dialog { width: min(760px, calc(100vw - 32px)); max-width: none; height: min(560px, calc(100dvh - 48px)); overflow: hidden; }
 .settings-dialog > .modal-body { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }
 .settings-layout { display: grid; grid-template-columns: 185px minmax(0, 1fr); min-height: 0; }
-.settings-nav { display: flex; flex-direction: column; gap: 6px; padding-inline-end: 14px; border-inline-end: 1px solid var(--border); }
-.settings-nav .settings-category { justify-content: flex-start; border-color: transparent; white-space: nowrap; }
+.settings-nav { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-inline-end: 14px; border-inline-end: 1px solid var(--border); }
+.settings-nav .settings-category { justify-content: flex-start; text-align: start; border-color: transparent; }
+.settings-nav .settings-category > svg { flex: none; }
 .settings-nav .settings-category[aria-selected="true"] { background: var(--track); color: var(--link); box-shadow: var(--glass-sheen); }
 .settings-panel { min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; padding: 2px 3px 8px 18px; }
 .settings-subsection { display: grid; gap: 10px; min-width: 0; padding-top: 12px; border-top: 1px solid var(--border); }
@@ -435,7 +435,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .overview-settings-cards { display: grid; gap: 4px; }
 .overview-settings-card { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center;
   gap: 8px; min-height: 44px; padding: 3px 0; border-bottom: 1px solid var(--border); }
-.overview-settings-card > span { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; font-weight: 640; }
+.overview-settings-card > span { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; font-weight: 640; overflow-wrap: anywhere; }
 .overview-settings-card > span > svg { flex: none; color: var(--muted); }
 .overview-settings-card > select { min-height: 34px; min-width: 0; padding: 3px 6px; border: 1px solid var(--field-border);
   border-radius: 9px; background: var(--surface); font-size: 12px; }
@@ -450,7 +450,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .settings-dialog { width: calc(100vw - 22px); height: min(560px, calc(100dvh - 28px)); }
   .settings-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .settings-nav { flex-direction: row; gap: 4px; overflow-x: auto; border-inline-end: 0; padding: 2px 1px 10px; }
-  .settings-nav .settings-category { border-radius: 999px; min-height: 36px; font-size: 12px; padding-inline: 6px; gap: 3px; }
+  .settings-nav .settings-category { flex: none; white-space: nowrap; border-radius: 999px; min-height: 36px; font-size: 12px; padding-inline: 6px; gap: 3px; }
   .settings-nav .settings-category svg { width: 13px; height: 13px; }
   .settings-panel { border-top: 1px solid var(--border); padding: 12px 2px 5px; }
 }
@@ -460,8 +460,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .settings-fields { display: grid; gap: 17px; font-size: 14px; }
 .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 7px; }
-.settings-row > span { font-weight: 640; }
-:root:lang(en) .settings-category { overflow-wrap: anywhere; }
+.settings-row > span { min-width: 0; font-weight: 640; overflow-wrap: anywhere; }
 .settings-row:has(> .segments) { flex-wrap: wrap; }
 .settings-row .segment { font-size: 13px; }
 .settings-row > select { border: 1px solid var(--field-border); border-radius: 10px; background: var(--surface); min-height: 36px; padding: 5px 9px; }
@@ -803,8 +802,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .overview-widget[data-width="wide"] { grid-column: span 2; }
 .overview-widget > header { display: flex; align-items: center; gap: 8px; padding-right: 17px; min-width: 0; }
 .overview-widget > header .metric-icon { width: 29px; height: 29px; border-radius: 9px; flex: none; }
-.overview-widget h2 { font-size: 14px; font-weight: 730; line-height: 1.2; }
-.overview-widget[data-widget="weather"] h2 { white-space: nowrap; }
+.overview-widget h2 { min-width: 0; font-size: 14px; font-weight: 730; line-height: 1.2; overflow-wrap: anywhere; }
 .overview-widget .detail-link svg { top: 15px; right: 12px; }
 .widget-aqi { margin-inline-start: auto; }
 .widget-aqi .aqi-badge { display: flex; white-space: nowrap; }
@@ -1154,9 +1152,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .metric { padding: 14px; }
   .metric-details { gap: 5px 9px; }
 }
-@media (max-width: 640px) {
+@media (max-width: 700px) {
   .header-inner { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "brand actions" "tabs tabs"; gap: 8px; }
-  .header-tabs .segments { min-width: 0; }
+  .header-tabs { justify-self: center; }
 }
 
 @media (max-width: 720px) {
@@ -1175,9 +1173,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 @media (max-width: 530px) {
   .header-inner { --header-padding-inline: 15px; padding-top: 10px; padding-bottom: 12px; }
-  .header-tabs { width: 100%; }
-  .header-tabs .segments { min-width: 0; }
-  .header-tabs .segment { padding-inline: 5px; font-size: 13px; }
+  .header-tabs .segment { padding-inline: 10px; font-size: 13px; }
   .brand-icon { width: 39px; height: 39px; }
   .brand-name strong { font-size: 20px; }
   .main-content { padding-top: 23px; }

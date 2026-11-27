@@ -51,22 +51,22 @@ def test_city_search_handles_no_matches_and_timeout(tmp_path):
 
 
 @pytest.mark.parametrize(("platform", "asset"), [
-    ("windows", "Vitals_2.4.10_x64-setup.exe"),
-    ("macos", "Vitals_2.4.10_x64.dmg"),
+    ("windows", "Vitals_3.0.10_x64-setup.exe"),
+    ("macos", "Vitals_3.0.10_x64.dmg"),
     ("linux", None),
 ])
 def test_update_checks_semver_selects_platform_asset_and_caches(tmp_path, monkeypatch, platform, asset):
     calls = []
-    page = f"{REPO}/releases/tag/v2.4.10"
-    base = f"{REPO}/releases/download/v2.4.10"
+    page = f"{REPO}/releases/tag/v3.0.10"
+    base = f"{REPO}/releases/download/v3.0.10"
 
     def release(request):
         calls.append(str(request.url))
-        return httpx.Response(200, json={"tag_name": "v2.4.10", "html_url": page, "body": "Update notes", "assets": [
+        return httpx.Response(200, json={"tag_name": "v3.0.10", "html_url": page, "body": "Update notes", "assets": [
             {"name": "external.exe", "browser_download_url": "https://example.invalid/download.exe"},
-            {"name": "Vitals_2.4.10_arm64-setup.exe", "browser_download_url": f"{base}/Vitals_2.4.10_arm64-setup.exe"},
-            {"name": "Vitals_2.4.10_x64-setup.exe", "browser_download_url": f"{base}/Vitals_2.4.10_x64-setup.exe"},
-            {"name": "Vitals_2.4.10_x64.dmg", "browser_download_url": f"{base}/Vitals_2.4.10_x64.dmg"},
+            {"name": "Vitals_3.0.10_arm64-setup.exe", "browser_download_url": f"{base}/Vitals_3.0.10_arm64-setup.exe"},
+            {"name": "Vitals_3.0.10_x64-setup.exe", "browser_download_url": f"{base}/Vitals_3.0.10_x64-setup.exe"},
+            {"name": "Vitals_3.0.10_x64.dmg", "browser_download_url": f"{base}/Vitals_3.0.10_x64.dmg"},
         ]})
 
     monkeypatch.setattr("backend.main.host_identity", lambda: {"platform": platform, "name": "test"})
@@ -75,7 +75,7 @@ def test_update_checks_semver_selects_platform_asset_and_caches(tmp_path, monkey
     assert client.get("/api/system/version").json() == {"version": APP_VERSION, "build_id": None, "platform": platform, "desktop": False}
     for _ in range(2):
         assert client.get("/api/system/update/check").json() == {
-            "current_version": APP_VERSION, "latest_version": "2.4.10", "has_update": True,
+            "current_version": APP_VERSION, "latest_version": "3.0.10", "has_update": True,
             "release_url": page, "notes": "Update notes", "download_url": f"{base}/{asset}" if asset else page,
         }
     assert calls == ["https://api.github.com/repos/charleszhang309/Vitals/releases/latest"]

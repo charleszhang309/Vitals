@@ -146,6 +146,14 @@ tailscale serve status
 
 ---
 
+## Vitals Deck
+
+点击顶栏的网格按钮进入 Deck。可切换场景、打开文件夹，或临时选择目标设备。编辑后点「保存」，布局会同步到连着同一个主中心的设备。JSON 导入只修改草稿，保存后才会同步。专注计时使用打开 Deck 的设备上的 Vitals 计时器。
+
+- 快捷键与文本片段输入到目标主机当前的应用。Windows 需要已解锁的交互式会话。Mac 需要在「系统设置 → 隐私与安全性 → 辅助功能」中授予 Vitals 权限。远程 Mac 的快捷键和文本片段需要 3.0 版 Agent。
+- HTTP Webhook 在主中心运行。先在主机的 `config.json` 中配置固定 URL 和请求方法，例如 `"deck": {"webhooks": [{"id": "start-scene", "name": "启动场景", "method": "POST", "url": "https://example.invalid/hooks/scene"}]}`。按钮只保存 ID 和可选 JSON 请求体。URL 不会写入 Deck 布局或布局导出。
+- 插件安装、清单、加载与动态表单接口见 [Deck Plugin SDK](plugins/README.md)。安装和启用插件需重启主中心。
+
 ## 致谢（Credits）
 
 - [Tauri](https://v2.tauri.app/) — 轻量级跨平台桌面应用框架

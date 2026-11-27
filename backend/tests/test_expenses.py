@@ -94,6 +94,53 @@ def test_summary_reports_unavailable_rates_when_the_request_stalls(ledger, monke
     asyncio.run(verify())
 
 
+def test_default_currency_persists_and_converts_custom_codes(ledger):
+    app = FastAPI()
+    app.include_router(expenses_router(ledger))
+    catalog_requests = []
+
+    def exchange_rates(request):
+        if request.url.path.endswith("/currencies"):
+            catalog_requests.append(True)
+            return httpx.Response(200, json=[{"iso_code": "AED"}, {"iso_code": "VND"}])
+        assert request.url.params["base"] == "VND"
+        assert request.url.params["quotes"] == "AED,CAD"
+        return httpx.Response(200, json=[
+            {"base": "VND", "quote": quote, "rate": rate, "date": "2026-02-25"}
+            for quote, rate in (("AED", 0.5), ("CAD", 0.25))
+        ])
+
+    app.state.external_client = httpx.AsyncClient(transport=httpx.MockTransport(exchange_rates))
+    client = TestClient(app)
+    currency_path = "/api/expenses/base-currency"
+    budget_path = "/api/expenses/budget"
+    assert client.get("/api/expenses").json()["base_currency"] == "CAD"
+    assert client.put(budget_path, json={"amount": "100"}).status_code == 200
+    assert client.put(currency_path, json={"base_currency": "usd$"}).status_code == 422
+    assert [client.put(currency_path, json={"base_currency": code}).json() for code in ("usd", " vnd ")] == [
+        {"base_currency": "USD"}, {"base_currency": "VND"},
+    ]
+    assert ledger.rates.base == "CAD"
+    assert ExpenseStore(ledger.connect, ledger.zone, ledger.rates).base_currency() == "VND"
+    assert client.get("/api/subscriptions").json()["base_currency"] == "VND"
+    assert client.get(budget_path).json() == {"amount": None, "currency": "VND"}
+    assert client.put(budget_path, json={"amount": "50"}).json() == {"amount": "50", "currency": "VND"}
+
+    receipt = {"merchant": "Cafe", "amount": "20", "occurred_at": "2026-02-25T17:00:00Z"}
+    assert client.post("/api/expenses/ingest", json=receipt).json()["currency"] == "VND"
+    for currency, amount in [("CAD", "5"), ("AED", "2"), ("ABC", "2")]:
+        assert client.post("/api/expenses", json={**receipt, "currency": currency, "amount": amount}).status_code == 201
+    for _ in range(2):
+        summary = client.get("/api/expenses/summary").json()
+        assert summary["base_currency"] == "VND"
+        assert summary["month_total"] == "44"
+        assert summary["missing_rates"] == ["ABC"]
+        assert summary["monthly_budget"] == {"amount": "50", "remaining": "6", "used_percent": 88}
+    assert catalog_requests == [True]
+    assert client.put(currency_path, json={"base_currency": "CAD"}).status_code == 200
+    assert client.get(budget_path).json() == {"amount": "100.00", "currency": "CAD"}
+
+
 def test_budget_persists_and_tracks_each_month_in_base_currency(ledger, monkeypatch):
     app = FastAPI()
     app.include_router(expenses_router(ledger))

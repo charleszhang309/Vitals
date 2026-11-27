@@ -30,6 +30,9 @@ from .ai_usage import AiUsage, UsageLedger, usage_router
 from .backup import Backups, backup_router
 from .calendar_service import CalendarService, calendar_router
 from .config import ConfigModel, MIB, ROOT, SamplingMode, Settings, load_settings, update_settings_file
+from .deck import DeckStore, deck_router
+from .deck_actions import DeckActions
+from .deck_plugins import DeckPluginRegistry
 from .control import MacPowerControl, PowerControl, control_router
 from .expenses import ExpenseStore, expenses_router
 from .health import HealthStore, health_router
@@ -132,7 +135,7 @@ class PrivateNetwork:
                                    headers={"Cache-Control": "no-store"})(scope, receive, send)
             return
         allowed = bool(peer and local_address(peer[0]) and trusted_host(host))
-        if allowed and (scope_type == "websocket" or scope["method"] not in {"GET", "HEAD", "OPTIONS"}
+        if allowed and (scope_type == "websocket" or scope["method"] not in {"GET", "HEAD", "OPTIONS"} or path.startswith("/api/deck")
                         or scope.get("path", "").rstrip("/") in {"/api/ai/briefing", "/api/media/lyrics", "/api/system/backup"}):
             origin = headers.get("origin")
             parsed_origin = http_origin(origin) if origin is not None else None
@@ -193,6 +196,10 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
         media = MacMediaBridge() if macos else MediaBridge()
         media_session = nullcontext
     ai_tools = AiTools(life, health, calendar, rates, store, power, media, agents)
+    deck = DeckStore(store.connect)
+    plugin_path = (config_path.parent if config_path else ROOT) / "plugins"
+    plugins = DeckPluginRegistry(plugin_path, settings.deck.enabled_plugins)
+    deck_actions = DeckActions(settings, config_path, identity["platform"], agents, power, media, plugins)
 
     def initialize_data():
         with backups.restore_on_startup():
@@ -203,7 +210,9 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
             rate_pins.initialize()
             rate_history.initialize()
             usage_ledger.initialize()
+            deck.initialize()
             agents.restore_profiles()
+        plugins.load_enabled()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -264,6 +273,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     app.include_router(ai_router(ai_state, store, power, briefing, ai_tools))
     app.include_router(usage_router(AiUsage(usage_ledger, settings.ai_usage, health.zone)))
     app.include_router(media_router(media, LyricsCache(store), agents))
+    app.include_router(deck_router(deck, deck_actions))
 
     sampling_write_lock = asyncio.Lock()
 

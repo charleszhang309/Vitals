@@ -107,7 +107,7 @@ def test_remote_permission_and_timeout_remove_the_pending_command(monkeypatch):
             assert (await client.post(route + "/error/permission", headers=TOKEN)).status_code == 204
             denied = await request
             assert denied.status_code == 403
-            assert "隐私与安全性" in denied.json()["detail"]
+            assert denied.json()["detail"] == "请给 Vitals 授予录屏权限，然后重启 Vitals。"
             assert not registry.devices["macbook"].commands
             request, _, route = await pending_command(client, registry)
             assert (await request).status_code == 504

@@ -1,0 +1,35 @@
+.app-header[data-desktop="macos"] .header-inner { padding-left: max(94px, env(safe-area-inset-left, 0px)); }
+.app-header[data-desktop="windows"] .header-inner {
+  padding-inline: clamp(16px, 2.8vw, 38px) 146px;
+  grid-template-columns: minmax(96px, 1fr) auto minmax(max-content, 1fr);
+}
+.desktop-caption-controls {
+  position: absolute;
+  inset: 0 0 auto auto;
+  display: flex;
+  height: 40px;
+  z-index: 1;
+}
+.desktop-caption-controls button {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  width: 45px;
+  min-width: 0;
+  transition: color .15s, background-color .15s;
+}
+.desktop-caption-controls button:is(:hover, :focus-visible) { color: var(--text); background: var(--track); }
+.desktop-caption-controls button[data-action="close"]:is(:hover, :focus-visible) { color: #fff; background: #c42b1c; }
+@media (max-width: 840px) {
+  .app-header[data-desktop="windows"] .header-inner {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "brand actions" "tabs tabs";
+    gap: 8px;
+  }
+  .app-header[data-desktop="windows"] .header-tabs { justify-self: center; }
+}
+@media (max-width: 420px) {
+  .header-actions { gap: 4px; }
+  .header-actions .icon-button { width: 34px; min-height: 34px; }
+  .header-actions .header-clock { min-height: 34px; padding-inline: 7px; }
+}

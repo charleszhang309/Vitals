@@ -205,6 +205,18 @@ class ScreenshotCommand(EmptyPayload):
     payload: EmptyPayload = Field(default_factory=EmptyPayload)
 
 
+class DeckKeyboardPayload(EmptyPayload):
+    shortcut: str | None = Field(default=None, max_length=48)
+    preset: str | None = Field(default=None, max_length=32)
+    text: str | None = Field(default=None, max_length=500)
+
+
+class DeckKeyboardCommand(EmptyPayload):
+    # Only the Deck engine can enqueue typed desktop input.
+    action: Literal["deck_keyboard"] = "deck_keyboard"
+    payload: DeckKeyboardPayload
+
+
 Command = Annotated[VolumeCommand | MuteCommand | AudioDeviceCommand | ButtonCommand, Field(discriminator="action")]
 
 
@@ -442,6 +454,10 @@ class AgentRegistry:
                 raise HTTPException(409, "设备已休眠或离线")
             volume = device.snapshot["volume"] or {}
             for payload in payloads:
+                if payload.action == "deck_keyboard" and (
+                    device.snapshot["os"] != "macos" or "deck_keyboard" not in device.snapshot["capabilities"]
+                ):
+                    raise HTTPException(409, "该设备不支持 Deck 键盘操作，请更新 Mac Agent")
                 if payload.action == "screenshot" and (
                     device.snapshot["os"] != "macos" or "screenshot" not in device.snapshot["capabilities"]
                 ):
@@ -490,6 +506,19 @@ class AgentRegistry:
         with self.lock:
             if device_id not in self.devices:
                 raise HTTPException(404, "找不到该设备")
+
+    def command_state(self, device_id, command_id):
+        with self.lock:
+            device = self.devices.get(device_id)
+            command = device.commands.get(command_id) if device else None
+            return command.status(monotonic()) if command else "expired", command.result if command else None
+
+    def cancel_queued(self, device_id, command_id):
+        with self.lock:
+            device = self.devices.get(device_id)
+            command = device.commands.get(command_id) if device else None
+            if command and command.sent_at is None:
+                del device.commands[command_id]
 
     async def stream(self, device_id):
         wake = asyncio.Event()

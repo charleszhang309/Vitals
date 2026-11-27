@@ -4,23 +4,24 @@ import { AnimatePresence } from 'framer-motion';
 import { Activity, ArrowDown, ArrowUp, Download, ImagePlus, Inbox, Info, LayoutGrid, Palette, RotateCcw, ServerCog, Sparkles, Upload } from 'lucide-react';
 import { httpUrl, request, sendJson } from './api.js';
 import { Button, IconButton, Modal, Segmented } from './ui.jsx';
-import { defaultCardOrder, orderedCards, overviewModules, overviewStrips, readCardOrder, readCardWidths } from './overviewCards.js';
+import { defaultCardOrder, orderedCards, overviewStrips, readCardOrder, readCardWidths, readOverviewWidgets } from './overviewCards.js';
 import { clockStyles } from './Clock.jsx';
 import { DeviceDot, HUB_DEVICE_ID } from './RemoteDevice.jsx';
 import { AboutSettings, useReleaseUpdates } from './AboutSettings.jsx';
 import SamplingModeSettings from './SamplingModeSettings.jsx';
+import { DockSetting } from './DesktopChrome.jsx';
 import { useI18n } from './i18n/index.jsx';
 const HostSetup = lazy(() => import('./HostSetup.jsx'));
 
 const STORAGE_KEY = 'pcc-appearance';
-const defaults = { theme: 'light', material: 'glass', opacity: 46, strength: 60, clockStyle: 'flip', widgets: {},
+const defaults = { theme: 'light', material: 'glass', opacity: 46, strength: 60, clockStyle: 'flip', widgets: readOverviewWidgets(null),
   cardOrder: defaultCardOrder, cardWidths: {}, defaultDevice: HUB_DEVICE_ID, autoUpdateCheck: true };
 const level = (value, fallback) => Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : fallback;
 const themes = [{ value: 'light', get label() { return t('浅色'); } }, { value: 'dark', get label() { return t('深色'); } }, { value: 'system', get label() { return t('跟随系统'); } }];
 const systemColorScheme = '(prefers-color-scheme: dark)';
 const materials = [{ value: 'glass', get label() { return t('液态玻璃'); } }, { value: 'acrylic', get label() { return t('亚克力'); } }];
 const baseCategories = [
-  { id: 'appearance', get label() { return t('外观与壁纸'); }, Icon: Palette },
+  { id: 'appearance', get label() { return t('外观'); }, Icon: Palette },
   { id: 'overview', get label() { return t('今日概览'); }, Icon: LayoutGrid },
   { id: 'scratchpad', get label() { return t('中转站'); }, Icon: Inbox },
   { id: 'ai', get label() { return t('AI 助手'); }, Icon: Sparkles },
@@ -173,7 +174,7 @@ function initialPreferences() {
       opacity: level(stored?.opacity, defaults.opacity),
       strength: level(stored?.strength, defaults.strength),
       clockStyle: clockStyles.some(({ value }) => value === stored?.clockStyle) ? stored.clockStyle : defaults.clockStyle,
-      widgets: Object.fromEntries(overviewModules.map(({ id }) => [id, stored?.widgets?.[id] !== false])),
+      widgets: readOverviewWidgets(stored),
       cardOrder: readCardOrder(stored?.cardOrder),
       cardWidths: readCardWidths(stored?.cardWidths),
       defaultDevice: typeof stored?.defaultDevice === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(stored.defaultDevice)
@@ -628,6 +629,7 @@ export function AppearanceDialog({ appearance, onClose, ai, telemetry, deviceSet
           {category === 'system' && <div className="settings-fields">
             <DesktopModeSettings />
             <DesktopLaunchAtLogin />
+            <DockSetting />
             <SystemStatus telemetry={telemetry} platform={deviceSettings.hub.platform} />
             <SamplingModeSettings />
             <DeviceSettings {...deviceSettings} />

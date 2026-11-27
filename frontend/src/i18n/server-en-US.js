@@ -200,6 +200,7 @@ export default {
   "封面过大": "The artwork file is too large.",
   "封面必须是最长边不超过 512 像素的有效 JPEG": "Upload a valid JPEG with a longest side of 512 pixels or less.",
   "Mac 当前无法截图，请在设备上登录并解锁桌面，然后重试。": "The Mac can’t take a screenshot right now. Sign in, unlock its desktop, and try again.",
+  "请给 Vitals 授予录屏权限，然后重启 Vitals。": "Allow Vitals to record the screen, then restart Vitals.",
   "Windows 当前无法截图，请在登录的桌面会话中运行 Vitals 并解锁屏幕。": "Windows can’t take a screenshot right now. Run Vitals in a signed-in desktop session and unlock the screen.",
   "截图请求已取消": "The screenshot request was canceled.",
   "截图等待超时，请重试": "The screenshot timed out. Try again.",

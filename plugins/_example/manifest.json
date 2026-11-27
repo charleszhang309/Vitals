@@ -1,0 +1,40 @@
+{
+  "id": "_example",
+  "name": {"en": "Example counter", "zh-CN": "计数器示例"},
+  "version": "1.0.0",
+  "actions": [
+    {
+      "id": "increment",
+      "name": {"en": "Increase count", "zh-CN": "增加计数"},
+      "parameters": [
+        {
+          "id": "amount",
+          "name": {"en": "Amount", "zh-CN": "增加量"},
+          "type": "integer",
+          "default": 1
+        }
+      ]
+    }
+  ],
+  "feedbacks": [
+    {
+      "id": "at-target",
+      "name": {"en": "Target reached", "zh-CN": "达到目标"},
+      "parameters": [
+        {
+          "id": "target",
+          "name": {"en": "Target", "zh-CN": "目标值"},
+          "type": "integer",
+          "default": 5
+        }
+      ]
+    }
+  ],
+  "variables": [
+    {
+      "id": "count",
+      "name": {"en": "Current count", "zh-CN": "当前计数"},
+      "type": "integer"
+    }
+  ]
+}

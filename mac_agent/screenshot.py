@@ -12,7 +12,7 @@ from PIL import Image, features
 MAX_WIDTH = 1440
 MAX_HEIGHT = 4096
 MAX_BYTES = 2 * 1024 * 1024
-SCREEN_RECORDING_HELP = "请在 Mac 的「系统设置 → 隐私与安全性 → 屏幕与系统录音」中允许 Vitals 或运行代理的 Python，然后重新启动代理。"
+SCREEN_RECORDING_HELP = "请给 Vitals 授予录屏权限，然后重启 Vitals。"
 
 
 class ScreenRecordingDenied(RuntimeError):

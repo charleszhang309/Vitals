@@ -240,6 +240,32 @@ class Launcher(ConfigModel):
         return self
 
 
+class DeckWebhook(ConfigModel):
+    id: str = Field(pattern=LAUNCHER_ID_PATTERN)
+    name: str = Field(min_length=1, max_length=64)
+    url: HttpUrl
+    method: Literal["GET", "POST"] = "POST"
+
+    @model_validator(mode="after")
+    def validate_url(self):
+        if self.url.username or self.url.password or self.url.fragment:
+            raise ValueError("Deck webhook URL 不可包含用户凭据或片段")
+        return self
+
+
+class DeckConfig(ConfigModel):
+    enabled_plugins: list[str] = Field(default_factory=list, max_length=64)
+    webhooks: list[DeckWebhook] = Field(default_factory=list, max_length=32)
+
+    @model_validator(mode="after")
+    def validate_entries(self):
+        if any(not re.fullmatch(r"(?:[a-z0-9][a-z0-9_-]{0,47}|_example)", item) for item in self.enabled_plugins):
+            raise ValueError("Deck 插件 ID 无效")
+        if len({item.id for item in self.webhooks}) != len(self.webhooks):
+            raise ValueError("Deck webhook ID 不可重复")
+        return self
+
+
 def default_modes() -> dict[str, PowerMode]:
     return {
         "silent": PowerMode(guid=UUID("a1841308-3541-4fab-bc81-f71556f20b4a")),
@@ -266,6 +292,7 @@ class Settings(ConfigModel):
     ai: AiConfig = Field(default_factory=AiConfig)
     ai_usage: AiUsageConfig = Field(default_factory=AiUsageConfig)
     launchers: list[Launcher] = Field(default_factory=list, max_length=32)
+    deck: DeckConfig = Field(default_factory=DeckConfig)
     fancontrol_mode_sensor: bool = False
     fancontrol_exe: Path | None = None
     power_modes: dict[str, PowerMode] = Field(default_factory=default_modes)

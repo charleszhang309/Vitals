@@ -76,6 +76,9 @@ class Rates:
         self.locks = defaultdict(asyncio.Lock)
         self.cache = {}
         self.expires = {}
+        self.currency_catalog = frozenset()
+        self.currency_catalog_expiry = 0.0
+        self.currency_catalog_lock = asyncio.Lock()
 
     def validate(self, base, target):
         if base not in self.currencies or target not in self.currencies:
@@ -88,6 +91,25 @@ class Rates:
                 if due:
                     await self.fetch(client, base, due)
         return {code: ({"rate": 1, "date": None, "status": "live"} if code == base else self.cache[(base, code)]) for code in targets}
+
+    async def expense_quotes(self, client, base, targets):
+        # An unrecognized quote code would invalidate the entire batch, including known currencies.
+        known = set(self.currencies)
+        if targets - known and monotonic() >= self.currency_catalog_expiry:
+            async with self.currency_catalog_lock:
+                if monotonic() >= self.currency_catalog_expiry:
+                    try:
+                        response = await asyncio.wait_for(client.get(
+                            "https://api.frankfurter.dev/v2/currencies", timeout=QUOTE_TIMEOUT,
+                        ), timeout=QUOTE_TIMEOUT)
+                        response.raise_for_status()
+                        self.currency_catalog = frozenset(entry["iso_code"] for entry in response.json())
+                    except (asyncio.TimeoutError, httpx.HTTPError, KeyError, TypeError, ValueError):
+                        self.currency_catalog_expiry = monotonic() + 60
+                    else:
+                        self.currency_catalog_expiry = monotonic() + 86_400
+        quotes = sorted(targets.intersection(known | self.currency_catalog))
+        return await self.quotes(client, base, quotes) if quotes else {}
 
     async def fetch(self, client, base, targets):
         fresh = {}

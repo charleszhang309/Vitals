@@ -15,6 +15,7 @@ from time import monotonic
 import psutil
 
 from .core_audio import CoreAudio
+from .desktop_input import dispatch_input
 from .native import apple, javascript, native
 from .playback import MEDIA_ACTIONS, MEDIA_SCRIPT, Playback
 
@@ -170,7 +171,9 @@ class Caffeinate:
 def execute_command(action: str, params: dict, *, caffeinate=None, clipboard_push=None, quick=None):
     if not isinstance(params, dict):
         raise ValueError("params 必须是对象")
-    if action == "volume_set":
+    if action == "deck_keyboard":
+        dispatch_input("macos", **params)
+    elif action == "volume_set":
         percent = params.get("percent")
         if params.keys() != {"percent"} or type(percent) is not int or not 0 <= percent <= 100:
             raise ValueError("volume_set 需要 0–100 的整数 percent")

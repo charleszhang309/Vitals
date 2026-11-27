@@ -72,7 +72,7 @@ class SnapshotPublisher:
         response = self.client.post(self.path + "/heartbeat", json={
             "name": self.device_name, "os": "macos",
             "timestamp": datetime.now(timezone.utc).isoformat(), **self.snapshot,
-            "capabilities": ["screenshot"],
+            "capabilities": ["screenshot", "deck_keyboard"],
         })
         response.raise_for_status()
         reply = response.json()

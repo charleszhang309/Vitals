@@ -1,20 +1,25 @@
 .quick-control-row.with-screenshot {
-  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 108px), 1fr));
 }
 
 .detail-dialog.screenshot-dialog {
   width: min(1080px, calc(100% - 28px));
+  overflow-x: hidden;
 }
 
 .screenshot-preview {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   min-height: min(180px, 50dvh);
+  min-width: 0;
   text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .screenshot-preview img {
   display: block;
+  min-width: 0;
   max-width: 100%;
   max-height: min(75dvh, calc(100dvh - 140px));
   object-fit: contain;

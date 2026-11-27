@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod autostart;
+#[cfg(any(test, target_os = "macos"))]
+mod dock;
 mod language;
 mod service;
 mod settings;
@@ -162,6 +164,67 @@ fn require_dashboard(
     }
 }
 
+fn permits_window_controls(
+    label: &str,
+    page: &Url,
+    active: &Mutex<Option<Url>>,
+    grants: &[Arc<String>],
+) -> bool {
+    (label == MAIN_WINDOW && is_bundled_page(page, "/index.html"))
+        || permits_dashboard_page(label, page, active, grants)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WindowAction {
+    Drag,
+    ToggleMaximize,
+    Minimize,
+    Close,
+    IsMaximized,
+}
+
+#[tauri::command]
+fn desktop_window_action(
+    window: WebviewWindow,
+    active: tauri::State<'_, DashboardOrigin>,
+    scope: CommandScope<String>,
+    action: WindowAction,
+) -> Result<Option<bool>, &'static str> {
+    let language = desktop_language(window.app_handle());
+    if !window
+        .url()
+        .is_ok_and(|page| permits_window_controls(window.label(), &page, &active, scope.allows()))
+    {
+        return Err(language.choose(
+            "Open the main Vitals desktop window to use these controls.",
+            "请在 Vitals 桌面主窗口中使用这些控件。",
+        ));
+    }
+
+    let result = match action {
+        WindowAction::Drag => window.start_dragging().map(|()| None),
+        WindowAction::ToggleMaximize => window.is_maximized().and_then(|maximized| {
+            if maximized {
+                window.unmaximize()?;
+            } else {
+                window.maximize()?;
+            }
+            Ok(Some(!maximized))
+        }),
+        WindowAction::Minimize => window.minimize().map(|()| None),
+        WindowAction::Close => window.close().map(|()| None),
+        WindowAction::IsMaximized => window.is_maximized().map(Some),
+    };
+    result.map_err(|error| {
+        eprintln!("Could not control the Vitals window: {error}");
+        language.choose(
+            "Could not update the Vitals window.",
+            "无法更新 Vitals 窗口。",
+        )
+    })
+}
+
 #[tauri::command]
 fn get_desktop_mode(
     window: WebviewWindow,
@@ -269,6 +332,52 @@ fn set_launch_at_login(
     apply_launch_at_login(window.app_handle(), enabled)
 }
 
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn get_hide_dock_icon(
+    window: WebviewWindow,
+    active: tauri::State<'_, DashboardOrigin>,
+    scope: CommandScope<String>,
+    store: tauri::State<'_, dock::DockPreference>,
+) -> Result<bool, &'static str> {
+    require_dashboard(&window, &active, &scope)?;
+    Ok(store.hidden())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn set_hide_dock_icon(
+    window: WebviewWindow,
+    active: tauri::State<'_, DashboardOrigin>,
+    scope: CommandScope<String>,
+    store: tauri::State<'_, dock::DockPreference>,
+    enabled: bool,
+) -> Result<bool, &'static str> {
+    require_dashboard(&window, &active, &scope)?;
+    let app = window.app_handle();
+    let message = desktop_language(app).choose(
+        "Could not update Hide Dock icon.",
+        "无法更新隐藏程序坞图标设置。",
+    );
+    store.set_hidden(enabled).map_err(|error| {
+        eprintln!("Could not save Vitals Dock preference: {error}");
+        message
+    })?;
+    let dock_app = app.clone();
+    app.run_on_main_thread(move || {
+        let has_window = dock_app
+            .webview_windows()
+            .values()
+            .any(|window| window.is_visible().unwrap_or(false));
+        refresh_dock_policy(&dock_app, has_window);
+    })
+    .map_err(|error| {
+        eprintln!("Could not update Vitals Dock policy: {error}");
+        message
+    })?;
+    Ok(store.hidden())
+}
+
 #[tauri::command]
 fn set_desktop_language(
     window: WebviewWindow,
@@ -322,12 +431,27 @@ fn show_or_build_window(app: &AppHandle, label: &str) -> tauri::Result<()> {
         None => build_settings_window(app)?,
     };
     #[cfg(target_os = "macos")]
-    if let Err(error) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
-        eprintln!("Could not restore Vitals Dock icon: {error}");
+    {
+        let dock_app = app.clone();
+        if let Err(error) = app.run_on_main_thread(move || refresh_dock_policy(&dock_app, true)) {
+            eprintln!("Could not update Vitals Dock policy: {error}");
+        }
     }
     window.show()?;
     window.unminimize()?;
     window.set_focus()
+}
+
+#[cfg(target_os = "macos")]
+fn refresh_dock_policy(app: &AppHandle, has_window: bool) {
+    let policy = if app.state::<dock::DockPreference>().shows_icon(has_window) {
+        tauri::ActivationPolicy::Regular
+    } else {
+        tauri::ActivationPolicy::Accessory
+    };
+    if let Err(error) = app.set_activation_policy(policy) {
+        eprintln!("Could not update Vitals Dock policy: {error}");
+    }
 }
 
 fn reopen_and_start(app: &AppHandle) {
@@ -663,6 +787,11 @@ fn allow_dashboard_ipc(app: &AppHandle, origin: &Url, registered: &mut HashSet<S
             "allow-desktop-preferences",
             vec![origin.clone()],
             Vec::<String>::new(),
+        )
+        .permission_scoped(
+            "allow-desktop-window-action",
+            vec![origin.clone()],
+            Vec::<String>::new(),
         );
     if let Err(error) = app.add_capability(capability) {
         eprintln!("Could not add Vitals dashboard permissions: {error}");
@@ -707,7 +836,7 @@ impl DashboardNavigation {
 fn build_main_window(app: &AppHandle, url: WebviewUrl) -> tauri::Result<WebviewWindow> {
     let navigation_origin = app.state::<DashboardOrigin>().inner().clone();
     let popup_origin = navigation_origin.clone();
-    WebviewWindowBuilder::new(app, MAIN_WINDOW, url)
+    let builder = WebviewWindowBuilder::new(app, MAIN_WINDOW, url)
         .title("Vitals")
         .inner_size(1280.0, 820.0)
         .min_inner_size(900.0, 640.0)
@@ -723,8 +852,20 @@ fn build_main_window(app: &AppHandle, url: WebviewUrl) -> tauri::Result<WebviewW
                 }
             }
             tauri::webview::NewWindowResponse::Deny
-        })
-        .build()
+        });
+    #[cfg(windows)]
+    let builder = builder
+        .decorations(false)
+        .shadow(true)
+        .resizable(true)
+        .initialization_script("window.__VITALS_DESKTOP_PLATFORM__ = 'windows';");
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .traffic_light_position(tauri::LogicalPosition::new(18.0, 20.0))
+        .initialization_script("window.__VITALS_DESKTOP_PLATFORM__ = 'macos';");
+    builder.build()
 }
 
 fn settings_title(language: Language) -> &'static str {
@@ -757,6 +898,8 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let (store, role) = SettingsStore::load(&home);
     app.manage(store);
     app.manage(LanguageStore::load(&home));
+    #[cfg(target_os = "macos")]
+    app.manage(dock::DockPreference::load(&home));
     let language = desktop_language(app.handle());
     app.manage::<DashboardOrigin>(Arc::new(Mutex::new(None)));
     app.manage(ManagedHub::default());
@@ -895,11 +1038,16 @@ fn main() {
             open_desktop_settings,
             read_desktop_settings,
             save_desktop_settings,
+            desktop_window_action,
             get_desktop_mode,
             set_desktop_mode,
             restart_desktop_hub,
             get_launch_at_login,
             set_launch_at_login,
+            #[cfg(target_os = "macos")]
+            get_hide_dock_icon,
+            #[cfg(target_os = "macos")]
+            set_hide_dock_icon,
             set_desktop_language
         ])
         .setup(build_app)
@@ -920,9 +1068,7 @@ fn main() {
                 .values()
                 .any(|window| window.is_visible().unwrap_or(false)) =>
             {
-                if let Err(error) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
-                    eprintln!("Could not hide Vitals Dock icon: {error}");
-                }
+                refresh_dock_policy(app, false);
             }
             _ => {}
         }
@@ -990,6 +1136,49 @@ mod tests {
             &hub_grants
         ));
         assert!(!permits_dashboard_page("main", &hub, &active, &hub_grants));
+    }
+
+    #[test]
+    fn desktop_chrome_only_accepts_the_startup_page_or_granted_dashboard() {
+        let startup = bundled_url("/index.html");
+        let settings = bundled_url("/settings.html");
+        let dashboard = Url::parse("https://vitals.example.test:8443/").unwrap();
+        let grants = [Arc::new(dashboard.origin().ascii_serialization())];
+        let active = Mutex::new(Some(dashboard.clone()));
+
+        assert!(permits_window_controls(MAIN_WINDOW, &startup, &active, &[]));
+        assert!(!permits_window_controls(
+            MAIN_WINDOW,
+            &settings,
+            &active,
+            &[]
+        ));
+        assert!(!permits_window_controls(
+            SETTINGS_WINDOW,
+            &startup,
+            &active,
+            &[]
+        ));
+        assert!(permits_window_controls(
+            MAIN_WINDOW,
+            &dashboard,
+            &active,
+            &grants
+        ));
+        assert!(!permits_window_controls(
+            MAIN_WINDOW,
+            &dashboard,
+            &active,
+            &[]
+        ));
+
+        *active.lock().unwrap() = None;
+        assert!(!permits_window_controls(
+            MAIN_WINDOW,
+            &dashboard,
+            &active,
+            &grants
+        ));
     }
 
     #[test]

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-desktop-window-action"
+description = "Use the window controls on the Vitals startup page or active dashboard."
+commands.allow = ["desktop_window_action"]

@@ -1,7 +1,7 @@
 import { t } from './i18n/messages.js';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'framer-motion';
-import { Activity, RefreshCw, Settings, Sparkles } from 'lucide-react';
+import { Activity, Grid2X2, RefreshCw, Settings, Sparkles } from 'lucide-react';
 import { AppearanceDialog, AppearanceFrame, useAppearance } from './appearance.jsx';
 import { ClockDialog, FocusNotice, HeaderClock } from './Clock.jsx';
 import ControlPage from './ControlPage.jsx';
@@ -18,9 +18,12 @@ import useOverviewResource from './useOverviewResource.js';
 import { HUB_DEVICE_ID } from './RemoteDevice.jsx';
 import { request, sendJson } from './api.js';
 import { useI18n } from './i18n/index.jsx';
+import DesktopChrome, { desktopPlatform, dragDesktop } from './DesktopChrome.jsx';
+import './desktopChrome.css';
 
 const AiChat = lazy(() => import('./AiChat.jsx'));
 const SetupWizard = lazy(() => import('./SetupWizard.jsx'));
+const DeckPage = lazy(() => import('./DeckPage.jsx'));
 const setupWizardKey = 'vitals.setup-wizard.seen';
 const views = [{ value: 'today', get label() { return t('今日概览'); } }, { value: 'control', get label() { return t('控制'); } },
   { value: 'scratchpad', get label() { return t('中转站'); } }];
@@ -69,6 +72,7 @@ export default function App() {
   const [view, setView] = useState('today');
   const [playerOpen, setPlayerOpen] = useState(false);
   const [clockOpen, setClockOpen] = useState(false);
+  const [deckOpen, setDeckOpen] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false);
   const [settings, setSettings] = useState(false);
   const [settingsCategory, setSettingsCategory] = useState('appearance');
@@ -78,14 +82,14 @@ export default function App() {
   const [offlineNotice, setOfflineNotice] = useState('');
   const [agentActive, setAgentActive] = useState(false);
   const hostUpdated = useHostUpdate();
-  const immersiveView = clockOpen ? 'clock' : view === 'control' && playerOpen ? 'player' : null;
+  const immersiveView = deckOpen ? 'deck' : clockOpen ? 'clock' : view === 'control' && playerOpen ? 'player' : null;
   const appearance = useAppearance(immersiveView);
   const { widgets, cardOrder, cardWidths, defaultDevice } = appearance.preferences;
-  const watchAgents = view === 'control' || monitorOpen || settings ||
+  const watchAgents = deckOpen || view === 'control' || monitorOpen || settings ||
     (view === 'today' && defaultDevice !== HUB_DEVICE_ID && (widgets.host !== false || widgets.media !== false));
   const info = useOverviewResource('/api/system/info', 60_000);
   const agents = useOverviewResource('/api/agents', agentActive ? 250 : 2500, watchAgents);
-  const aliasResource = useOverviewResource('/api/agents/aliases', 10_000, view !== 'scratchpad' || settings);
+  const aliasResource = useOverviewResource('/api/agents/aliases', 10_000, deckOpen || view !== 'scratchpad' || settings);
   const aliases = aliasResource.data?.aliases ?? {};
   const devices = (agents.data?.devices ?? []).map((item) => ({
     ...item,
@@ -97,7 +101,7 @@ export default function App() {
   const primaryDevice = devices.find((item) => item.device_id === defaultDevice);
   const waitingForPrimary = defaultDevice !== HUB_DEVICE_ID && !agents.data;
   const waitingForSelection = (selectedDevice ?? defaultDevice) !== HUB_DEVICE_ID && !agents.data && !agents.error;
-  const telemetry = useTelemetry(true, { activeTelemetry: monitorOpen || view === 'control' });
+  const telemetry = useTelemetry(true, { activeTelemetry: deckOpen || monitorOpen || view === 'control' });
   const platform = info.data?.platform ?? telemetry.sample?.platform;
   const hub = {
     device_id: HUB_DEVICE_ID, platform,
@@ -107,7 +111,7 @@ export default function App() {
   };
   const power = usePowerControls((view === 'control' || monitorOpen) && !device && !waitingForSelection && platform === 'windows');
   const ai = useAiSettings();
-  const media = useMedia((view === 'control' && !device && !waitingForSelection) ||
+  const media = useMedia(deckOpen || (view === 'control' && !device && !waitingForSelection) ||
     (view === 'today' && !primaryDevice && !waitingForPrimary && widgets.media !== false));
   const focusTimer = useFocusTimer();
   const [chat, setChat] = useState(false);
@@ -188,8 +192,10 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
       <AppearanceFrame appearance={appearance}>
-        <header className="app-header">
-          <div className="header-inner">
+        {!deckOpen && <>
+        <header className="app-header" data-desktop={desktopPlatform} data-tauri-drag-region={desktopPlatform ? '' : undefined}
+          onMouseDown={dragDesktop}>
+          <div className="header-inner" data-tauri-drag-region={desktopPlatform ? '' : undefined}>
             <div className="brand">
               <span className="brand-icon" aria-hidden="true"><Activity size={26} strokeWidth={2} /></span>
               <div className="brand-name"><strong lang="en">Vitals</strong></div>
@@ -198,12 +204,14 @@ export default function App() {
               <Segmented id="navigation" label={t('功能页面')} tabs options={views} value={view} onChange={navigate} />
             </nav>
             <div className="header-actions">
+              <IconButton label={t('打开 Vitals Deck')} onClick={() => setDeckOpen(true)}><Grid2X2 size={19} /></IconButton>
               <HeaderClock onOpen={() => setClockOpen(true)} />
               {ai.settings?.enabled && <IconButton label={t('打开 Vitals AI')} className="ai-trigger" aria-haspopup="dialog"
                 onClick={() => setChat(true)}><Sparkles size={21} /></IconButton>}
               <IconButton label={t('个性化设置')} onClick={() => openSettings('appearance')} aria-haspopup="dialog"><Settings size={21} /></IconButton>
             </div>
           </div>
+          <DesktopChrome />
         </header>
         <main className="main-content" id="main-content">
           {hostUpdated && <div className="host-update-notice" role="status">
@@ -231,6 +239,12 @@ export default function App() {
             </motion.section>
           </AnimatePresence>
         </main>
+        </>}
+        {deckOpen && <Suspense fallback={<p className="main-content" role="status">{t('正在加载 Deck…')}</p>}>
+          <DeckPage close={() => { setDeckOpen(false); chooseDevice(null); }} hub={hub} devices={onlineDevices}
+            defaultDevice={defaultDevice} sample={telemetry.sample} media={media.current} focus={focusTimer}
+            refreshMedia={media.reload} refreshDevices={agents.retry} />
+        </Suspense>}
         <AnimatePresence>
           {chat && ai.settings?.enabled && <Suspense key="chat" fallback={null}>
             <AiChat settings={ai.settings} onClose={() => setChat(false)} />

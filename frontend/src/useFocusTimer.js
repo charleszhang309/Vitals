@@ -96,6 +96,23 @@ export function useFocusTimer(enabled = true) {
       setTimer({ ...timer, deadline: current + timer.remaining, id: timer.id ?? sessionId() });
     }
   }
+  function control(action, minutes = timer.minutes) {
+    if (!validFocusMinutes(minutes)) return;
+    const current = Date.now();
+    setNow(current);
+    setNotice('');
+    const id = sessionId();
+    setTimer((previous) => {
+      if (action === 'reset') return initial(minutes);
+      if (previous.deadline) {
+        if (previous.deadline <= current || action === 'start') return previous;
+        return { ...previous, deadline: null, remaining: previous.deadline - current };
+      }
+      if (action === 'pause') return previous;
+      const next = previous.id && previous.minutes === minutes ? previous : initial(minutes);
+      return { ...next, id: next.id ?? id, deadline: current + next.remaining };
+    });
+  }
   return { minutes: timer.minutes, running: Boolean(deadline) && !finishing, finishing, remaining,
-    paused: !deadline && timer.id !== null, notice, record, reset, toggle };
+    paused: !deadline && timer.id !== null, notice, record, reset, toggle, control };
 }
