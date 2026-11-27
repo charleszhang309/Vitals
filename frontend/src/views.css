@@ -164,7 +164,7 @@
   border-radius: 18px 18px 6px 18px;
   color: var(--on-accent);
   border-color: transparent;
-  background: var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-solid) 86%, black);
   box-shadow: var(--shadow-accent);
 }
 .ai-bubble.ai-user :is(a, code) { color: inherit; }
