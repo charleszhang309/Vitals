@@ -19,16 +19,13 @@
 
 ## 界面预览
 
-| 今日概览（Bento 小组件） | 控制中心与硬件监控 |
+| Vitals Deck（OLED 无线控制台） | 今日概览（Bento 小组件） |
 | :---: | :---: |
-| ![今日概览](docs/screenshots/today.jpg) | ![控制中心](docs/screenshots/control.jpg) |
+| ![Vitals Deck](docs/screenshots/deck.png) | ![今日概览](docs/screenshots/today.png) |
 
-<details>
-<summary>查看更多弹窗预览（汇率换算与历史走势）</summary>
-
-![汇率弹窗](docs/screenshots/rates.jpg)
-
-</details>
+| 跨设备控制与双层音频 | 全屏播放与 AMLL 动态歌词 |
+| :---: | :---: |
+| ![控制中心](docs/screenshots/control.png) | ![全屏歌词](docs/screenshots/lyrics.png) |
 
 ---
 

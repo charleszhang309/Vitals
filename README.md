@@ -19,16 +19,13 @@ Unifies a customizable **Today Bento Dashboard**, real-time **Windows & macOS Ha
 
 ## Screenshots
 
-| Today Dashboard (Bento Widgets) | Control Center & Hardware Monitor |
+| Vitals Deck (OLED Touch Console) | Overview Dashboard (Bento Widgets) |
 | :---: | :---: |
-| ![Today Dashboard](docs/screenshots/today.jpg) | ![Control Center](docs/screenshots/control.jpg) |
+| ![Vitals Deck](docs/screenshots/deck.png) | ![Today Dashboard](docs/screenshots/today.png) |
 
-<details>
-<summary>More previews (Currency Converter & Historical Trends)</summary>
-
-![Currency Rates](docs/screenshots/rates.jpg)
-
-</details>
+| Cross-Device Control & Audio | Fullscreen Now Playing & Lyrics |
+| :---: | :---: |
+| ![Control Center](docs/screenshots/control.png) | ![Fullscreen Lyrics](docs/screenshots/lyrics.png) |
 
 ---
 
