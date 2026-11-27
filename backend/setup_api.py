@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import secrets
 import shutil
@@ -24,6 +25,9 @@ from .monitor import Rules, send_webhook, utc_now
 LOOPBACK = {"127.0.0.1", "::1"}
 PRIVATE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
+MACOS_TAILSCALE_IDS = ("io.tailscale.ipn.macos", "io.tailscale.ipn.macsys")
+MACOS_TAILSCALE_EXECUTABLE = ("Contents", "MacOS", "Tailscale")
+TAILSCALE_ERRORS = (ValueError, OSError, subprocess.TimeoutExpired)
 CALENDAR_SECRETS = {
     "icloud": ("apple_id", "app_password"),
     "google": ("client_id", "client_secret", "refresh_token"),
@@ -205,24 +209,54 @@ def write_config(path, update):
         raise HTTPException(409, "无法更新配置文件，请检查文件权限或重新打开设置") from None
 
 
-def tailscale_cli():
+def running_macos_tailscale():
+    try:
+        processes = subprocess.run(["/bin/ps", "-axww", "-o", "comm="], capture_output=True,
+                                   text=True, encoding="utf-8", errors="replace", timeout=2, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return
+    for line in processes.stdout.splitlines():
+        path = Path(line.strip())
+        if not path.is_absolute() or path.parts[-3:] != MACOS_TAILSCALE_EXECUTABLE:
+            continue
+        bundle = path.parents[2]
+        if bundle.suffix != ".app":
+            continue
+        try:
+            with (bundle / "Contents" / "Info.plist").open("rb") as source:
+                info = plistlib.load(source)
+        except (OSError, ValueError):
+            continue
+        if isinstance(info, dict) and info.get("CFBundleIdentifier") in MACOS_TAILSCALE_IDS:
+            yield path
+
+
+def tailscale_candidates():
     if sys.platform == "darwin":
-        for candidate in ("/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-                          "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"):
-            if Path(candidate).is_file() and os.access(candidate, os.X_OK):
-                return candidate
-    elif os.name == "nt":
+        app_paths = (directory.joinpath("Tailscale.app", *MACOS_TAILSCALE_EXECUTABLE)
+                     for directory in (Path("/Applications"), Path.home() / "Applications"))
+        path_entries = (Path(directory) / "tailscale" for directory in os.get_exec_path() if Path(directory).is_absolute())
+        candidates = (*running_macos_tailscale(), *app_paths, Path("/opt/homebrew/bin/tailscale"),
+                      Path("/usr/local/bin/tailscale"), *path_entries)
+        return tuple(str(path) for path in dict.fromkeys(candidates) if path.is_file() and os.access(path, os.X_OK))
+    if os.name == "nt":
         for key in ("ProgramFiles", "ProgramFiles(x86)"):
             if root := os.environ.get(key):
                 path = Path(root) / "Tailscale" / "tailscale.exe"
                 if path.is_file():
-                    return str(path)
-    return shutil.which("tailscale")
+                    return (str(path),)
+    found = shutil.which("tailscale")
+    return (found,) if found else ()
 
 
 def run_tailscale(exe, *args):
+    macos = sys.platform == "darwin"
+    # Finder launches the sidecar without shell indicators. The bundled CLI
+    # otherwise starts the GUI and may return an error as stdout with exit 0.
+    env = {**os.environ, "TAILSCALE_BE_CLI": "1"} if macos else None
+    read_only = args in {("status", "--json"), ("serve", "status", "--json")}
     return subprocess.run([exe, *args], capture_output=True, stdin=subprocess.DEVNULL,
-                          text=True, encoding="utf-8", errors="replace", timeout=15,
+                          text=True, encoding="utf-8", errors="replace", env=env, timeout=5 if macos and read_only else 15,
                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
@@ -243,21 +277,35 @@ def proxy_matches(handler, port):
                                     for host in ("127.0.0.1", "localhost") for slash in ("", "/")}
 
 
-def tailscale_status(exe, port):
-    result = {"installed": bool(exe), "logged_in": False, "ip_addresses": [], "dns_name": None,
+def tailscale_status(candidates, port):
+    result = {"installed": bool(candidates), "logged_in": False, "ip_addresses": [], "dns_name": None,
               "serve_enabled": False, "https_url": None, "blocked": False, "error": None}
-    if not exe:
-        return result
+    for exe in candidates:
+        try:
+            status = tailscale_json(exe, "status", "--json")
+            state, node, ips = status.get("BackendState"), status.get("Self"), status.get("TailscaleIPs")
+            if not isinstance(state, str) or not state or (node is not None and not isinstance(node, dict)):
+                continue
+            if ips is not None and (not isinstance(ips, list) or any(not isinstance(ip, str) for ip in ips)):
+                continue
+        except TAILSCALE_ERRORS:
+            continue
+        break
+    else:
+        if candidates:
+            result["error"] = "无法读取 Tailscale 状态，请确认本机客户端正在运行"
+        return None, result
+
+    node = node or {}
+    result["logged_in"] = state == "Running" and node.get("Online") is True
+    result["ip_addresses"] = ips or []
+    dns = node.get("DNSName")
+    dns = dns.lower().rstrip(".") if isinstance(dns, str) else ""
+    if re.fullmatch(r"[a-z0-9-]+\.[a-z0-9-]+\.ts\.net", dns):
+        result["dns_name"] = dns
+    if not result["logged_in"] or not result["dns_name"]:
+        return exe, result
     try:
-        status = tailscale_json(exe, "status", "--json")
-        node = status.get("Self") or {}
-        result["logged_in"] = status.get("BackendState") == "Running" and bool(node.get("Online"))
-        result["ip_addresses"] = status.get("TailscaleIPs") or []
-        dns = (node.get("DNSName") or "").lower().rstrip(".")
-        if dns and re.fullmatch(r"[a-z0-9-]+\.[a-z0-9-]+\.ts\.net", dns):
-            result["dns_name"] = dns
-        if not result["logged_in"] or not result["dns_name"]:
-            return result
         config = tailscale_json(exe, "serve", "status", "--json")
         authority = f"{dns}:443"
         handlers = ((config.get("Web") or {}).get(authority) or {}).get("Handlers") or {}
@@ -269,9 +317,9 @@ def tailscale_status(exe, port):
                                  or (listener and not listener.get("HTTPS")))
         if result["serve_enabled"]:
             result["https_url"] = f"https://{dns}/"
-    except (ValueError, OSError, subprocess.TimeoutExpired):
-        result["error"] = "无法读取 Tailscale 状态，请确认本机客户端正在运行"
-    return result
+    except (ValueError, OSError, subprocess.TimeoutExpired, AttributeError, TypeError):
+        result["error"] = "已连接 Tailscale，但无法读取 Serve HTTPS 设置"
+    return exe, result
 
 
 def setup_router(path: Path, running: Settings):
@@ -345,7 +393,8 @@ def setup_router(path: Path, running: Settings):
 
     @router.get("/tailscale")
     def get_tailscale():
-        return JSONResponse(tailscale_status(tailscale_cli(), running.port), headers=PRIVATE)
+        _, current = tailscale_status(tailscale_candidates(), running.port)
+        return JSONResponse(current, headers=PRIVATE)
 
     @router.post("/tailscale/serve")
     async def set_serve(request: Request):
@@ -354,8 +403,7 @@ def setup_router(path: Path, running: Settings):
             raise HTTPException(422, "enabled 须为布尔值")
         enabled = payload["enabled"]
         async with serve_lock:
-            exe = tailscale_cli()
-            current = await run_in_threadpool(tailscale_status, exe, running.port)
+            exe, current = await run_in_threadpool(lambda: tailscale_status(tailscale_candidates(), running.port))
             if not (exe and current["logged_in"] and current["dns_name"]) or current["error"]:
                 raise HTTPException(409, "请启动并登录 Tailscale，在管理后台开启 MagicDNS 和 HTTPS")
             if current["blocked"]:
@@ -364,7 +412,7 @@ def setup_router(path: Path, running: Settings):
                 args = ["serve", "--bg", str(running.port)] if enabled else ["serve", "--bg", "--https=443", "off"]
                 try:
                     result = await run_in_threadpool(run_tailscale, exe, *args)
-                    current = await run_in_threadpool(tailscale_status, exe, running.port)
+                    _, current = await run_in_threadpool(tailscale_status, (exe,), running.port)
                     if result.returncode or current["serve_enabled"] != enabled or current["error"]:
                         raise OSError("Tailscale Serve did not change")
                 except (OSError, subprocess.TimeoutExpired):

@@ -102,10 +102,40 @@ def test_setup_pairing_token_can_be_read_and_rotated_locally(tmp_path):
 ])
 def test_tailscale_discovery_on_macos_with_a_minimal_path(monkeypatch, installed):
     monkeypatch.setattr(setup_api, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(setup_api, "running_macos_tailscale", lambda: ())
+    monkeypatch.setattr(setup_api.os, "get_exec_path", lambda: [])
     monkeypatch.setattr(Path, "is_file", lambda path: path.as_posix() == installed)
-    monkeypatch.setattr(setup_api.os, "access", lambda path, mode: str(path) == installed)
-    monkeypatch.setattr(setup_api.shutil, "which", lambda _: None)
-    assert setup_api.tailscale_cli() == installed
+    monkeypatch.setattr(setup_api.os, "access", lambda path, mode: Path(path).as_posix() == installed)
+    assert tuple(Path(path).as_posix() for path in setup_api.tailscale_candidates()) == ((installed,) if installed else ())
+
+
+def test_macos_tailscale_forces_cli_mode_with_the_gui_launch_environment(monkeypatch):
+    monkeypatch.setattr(setup_api, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.delenv("TAILSCALE_BE_CLI", raising=False)
+    exe = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+
+    def run(command, **kwargs):
+        assert command == [exe, "status", "--json"]
+        assert kwargs["env"]["TAILSCALE_BE_CLI"] == "1"
+        assert kwargs["env"]["PATH"] == "/usr/bin:/bin"
+        return SimpleNamespace(returncode=0, stdout='{"BackendState":"Running"}')
+
+    monkeypatch.setattr(setup_api.subprocess, "run", run)
+    assert setup_api.tailscale_json(exe, "status", "--json")["BackendState"] == "Running"
+
+
+def test_macos_tailscale_prefers_running_bundle_and_keeps_all_path_candidates(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup_api, "sys", SimpleNamespace(platform="darwin"))
+    app = tmp_path / "Tailscale.app/Contents/MacOS/Tailscale"
+    fallback = tmp_path / "other/bin/tailscale"
+    second_fallback = tmp_path / "alternative/tailscale"
+    monkeypatch.setattr(setup_api, "running_macos_tailscale", lambda: (app,))
+    monkeypatch.setattr(setup_api.os, "get_exec_path", lambda: [str(fallback.parent), str(second_fallback.parent), str(fallback.parent)])
+    existing = (app, fallback, second_fallback)
+    monkeypatch.setattr(Path, "is_file", lambda path: path in existing)
+    monkeypatch.setattr(setup_api.os, "access", lambda path, mode: Path(path) in existing)
+    assert tuple(map(Path, setup_api.tailscale_candidates())) == existing
 
 
 def test_tailscale_writes_only_the_vitals_https_rule(tmp_path, monkeypatch):
@@ -115,6 +145,10 @@ def test_tailscale_writes_only_the_vitals_https_rule(tmp_path, monkeypatch):
     funnel = {}
 
     def tailcli(exe, *args):
+        if exe == "unusable":
+            assert args == ("status", "--json")
+            return SimpleNamespace(returncode=0, stdout="The Tailscale GUI failed to start")
+        assert exe == "tailscale"
         if args == ("status", "--json"):
             data = {"BackendState": "Running", "Self": {"Online": True, "DNSName": "vitals.example.ts.net."}}
         elif args == ("serve", "status", "--json"):
@@ -129,8 +163,9 @@ def test_tailscale_writes_only_the_vitals_https_rule(tmp_path, monkeypatch):
             data = {}
         return SimpleNamespace(returncode=0, stdout=json.dumps(data))
 
-    monkeypatch.setattr("backend.setup_api.tailscale_cli", lambda: "tailscale")
+    monkeypatch.setattr("backend.setup_api.tailscale_candidates", lambda: ("unusable", "tailscale"))
     monkeypatch.setattr("backend.setup_api.run_tailscale", tailcli)
+    assert client.get("/api/setup/tailscale").json()["dns_name"] == "vitals.example.ts.net"
     path = "/api/setup/tailscale/serve"
     assert client.post(path, json={"enabled": True}).json()["https_url"] == "https://vitals.example.ts.net/"
     assert client.post(path, json={"enabled": False}).json()["serve_enabled"] is False
