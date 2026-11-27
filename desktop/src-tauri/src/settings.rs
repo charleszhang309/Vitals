@@ -61,6 +61,13 @@ pub struct SettingsView {
     has_token: bool,
 }
 
+#[derive(Serialize)]
+pub struct DesktopModeView {
+    mode: Selection,
+    remote_url: String,
+    has_token: bool,
+}
+
 pub struct SettingsStore {
     path: PathBuf,
     settings: Mutex<Option<Settings>>,
@@ -102,6 +109,15 @@ impl SettingsStore {
             role: settings.as_ref().map(|settings| settings.role),
             url: remote.map_or_else(String::new, |remote| remote.url.clone()),
             has_token: remote.is_some(),
+        }
+    }
+
+    pub fn mode_view(&self) -> DesktopModeView {
+        let view = self.view();
+        DesktopModeView {
+            mode: view.role.unwrap_or_default(),
+            remote_url: view.url,
+            has_token: view.has_token,
         }
     }
 
@@ -166,7 +182,11 @@ fn primary_url(value: &str) -> Result<String, &'static str> {
         return Err(INVALID_URL);
     }
     let url = Url::parse(value).map_err(|_| INVALID_URL)?;
-    if url.host_str().is_none() || url.port() == Some(0) {
+    if !url.host_str().is_some_and(|host| {
+        host.bytes()
+            .all(|ch| ch.is_ascii_alphanumeric() || b".-_:[]".contains(&ch))
+    }) || url.port() == Some(0)
+    {
         return Err(INVALID_URL);
     }
     Ok(url.to_string())

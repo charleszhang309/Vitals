@@ -23,6 +23,85 @@ const baseCategories = [
   { id: 'system', label: '系统状态', Icon: Activity },
 ];
 
+const desktopModes = [
+  { value: 'hub', label: '本机主机' },
+  { value: 'remote', label: '远程客户端' },
+];
+
+function DesktopModeSettings() {
+  const invoke = window.__TAURI__?.core?.invoke;
+  const [saved, setSaved] = useState(null);
+  const [mode, setMode] = useState('hub');
+  const [remoteUrl, setRemoteUrl] = useState('');
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (typeof invoke !== 'function') return undefined;
+    let active = true;
+    invoke('get_desktop_mode').then((settings) => {
+      if (!active) return;
+      setSaved(settings);
+      setMode(settings.mode);
+      setRemoteUrl(settings.remote_url);
+    }).catch(() => {
+      // 旧版桌面应用与无权限的页面不显示桌面设置。
+    });
+    return () => { active = false; };
+  }, [invoke]);
+
+  if (!saved) return null;
+
+  let sameServer = false;
+  try {
+    sameServer = new URL(remoteUrl.trim()).href === saved.remote_url;
+  } catch {
+    // 输入未完成时等待表单校验。
+  }
+  const keepToken = sameServer && saved.has_token;
+  const unchanged = mode === saved.mode && (mode === 'hub' || (sameServer && !token.trim()));
+
+  async function save(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const settings = await invoke('set_desktop_mode', { mode, remote_url: remoteUrl.trim(), token });
+      setSaved(settings);
+      setRemoteUrl(settings.remote_url);
+      setToken('');
+    } catch (failure) {
+      setError(typeof failure === 'string' ? failure : '暂时无法保存桌面运行模式。');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <form className="settings-subsection settings-fields" onSubmit={save} aria-labelledby="desktop-mode-title">
+    <div className="settings-row">
+      <strong id="desktop-mode-title">桌面运行模式</strong>
+      <Segmented id="desktop-mode" label="桌面运行模式" options={desktopModes} value={mode}
+        onChange={setMode} disabled={busy} />
+    </div>
+    {mode === 'remote' && <div className="host-setup-grid">
+      <label className="host-setup-field">
+        <span>远程主中心 URL</span>
+        <input type="url" inputMode="url" value={remoteUrl} required disabled={busy}
+          placeholder="https://your-device.your-tailnet.ts.net" onChange={(event) => setRemoteUrl(event.target.value)} />
+      </label>
+      <label className="host-setup-field">
+        <span>配对 Token</span>
+        <input type="password" autoComplete="new-password" value={token} required={!keepToken} disabled={busy}
+          placeholder={keepToken ? '已配置，留空保留' : '输入远程主中心的配对 Token'}
+          onChange={(event) => setToken(event.target.value)} />
+      </label>
+    </div>}
+    {error && <p className="feedback error" role="alert">{error}</p>}
+    <div><Button type="submit" disabled={busy || unchanged}>{busy ? '正在切换…' : '保存并切换'}</Button></div>
+  </form>;
+}
+
 function initialPreferences() {
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
@@ -482,6 +561,7 @@ export function AppearanceDialog({ appearance, onClose, ai, telemetry, deviceSet
           {category === 'overview' && <OverviewSettings appearance={appearance} />}
           {category === 'scratchpad' && <CleanupSettings />}
           {category === 'system' && <div className="settings-fields">
+            <DesktopModeSettings />
             <SystemStatus telemetry={telemetry} platform={deviceSettings.hub.platform} />
             <DeviceSettings {...deviceSettings} />
             <BackupSettings />

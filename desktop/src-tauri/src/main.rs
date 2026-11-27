@@ -4,9 +4,11 @@ mod service;
 mod settings;
 
 use service::{desktop_home, Hub, Operation, Status, Supervisor};
-use settings::{Role, Selection, SettingsStore, SettingsView};
+use settings::{DesktopModeView, Role, Selection, SettingsStore, SettingsView};
+use std::collections::HashSet;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
+use tauri::ipc::{CapabilityBuilder, CommandScope};
 #[cfg(target_os = "macos")]
 use tauri::menu::Submenu;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
@@ -21,6 +23,7 @@ use tauri_plugin_autostart::ManagerExt;
 
 const SERVICE_UNAVAILABLE: &str = "无法连接 Vitals 服务管理器。";
 const SETTINGS_WINDOW: &str = "desktop-settings";
+type DashboardOrigin = Arc<Mutex<Option<Url>>>;
 
 fn bundled_url(path: &str) -> Url {
     let origin = if cfg!(windows) {
@@ -100,6 +103,65 @@ fn save_desktop_settings(
     let _ = window.hide();
     open_window(window.app_handle());
     Ok(())
+}
+
+fn permits_dashboard_page(
+    label: &str,
+    page: &Url,
+    active: &Mutex<Option<Url>>,
+    grants: &[Arc<String>],
+) -> bool {
+    let origin = page.origin().ascii_serialization();
+    label == "main"
+        && matches!(page.path(), "/" | "/index.html")
+        && is_allowed_origin(active, page)
+        && grants.iter().any(|grant| grant.as_str() == origin)
+}
+
+fn require_dashboard(
+    window: &WebviewWindow,
+    active: &DashboardOrigin,
+    scope: &CommandScope<String>,
+) -> Result<(), &'static str> {
+    if window
+        .url()
+        .is_ok_and(|page| permits_dashboard_page(window.label(), &page, active, scope.allows()))
+    {
+        Ok(())
+    } else {
+        Err("请在 Vitals 桌面主窗口中打开此设置。")
+    }
+}
+
+#[tauri::command]
+fn get_desktop_mode(
+    window: WebviewWindow,
+    active: tauri::State<'_, DashboardOrigin>,
+    scope: CommandScope<String>,
+    store: tauri::State<'_, SettingsStore>,
+) -> Result<DesktopModeView, &'static str> {
+    require_dashboard(&window, &active, &scope)?;
+    Ok(store.mode_view())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn set_desktop_mode(
+    window: WebviewWindow,
+    active: tauri::State<'_, DashboardOrigin>,
+    scope: CommandScope<String>,
+    store: tauri::State<'_, SettingsStore>,
+    operations: tauri::State<'_, Sender<Operation>>,
+    mode: Selection,
+    remote_url: String,
+    token: String,
+) -> Result<DesktopModeView, &'static str> {
+    require_dashboard(&window, &active, &scope)?;
+    store.apply(mode, &remote_url, &token, |role| {
+        operations
+            .send(Operation::Configure(role))
+            .map_err(|_| SERVICE_UNAVAILABLE)
+    })?;
+    Ok(store.mode_view())
 }
 
 fn show_window(app: &AppHandle, label: &str) {
@@ -320,6 +382,35 @@ fn is_allowed_origin(allowed: &Mutex<Option<Url>>, url: &Url) -> bool {
             .is_some_and(|active| active.origin() == url.origin())
 }
 
+fn allow_dashboard_ipc(app: &AppHandle, origin: &Url, registered: &mut HashSet<String>) {
+    let origin = origin.origin().ascii_serialization();
+    if registered.contains(&origin) {
+        return;
+    }
+    let pattern = format!("{origin}/*");
+    if pattern
+        .parse::<tauri::utils::acl::RemoteUrlPattern>()
+        .is_err()
+    {
+        eprintln!("Could not authorize the Vitals dashboard origin.");
+        return;
+    }
+    let capability = CapabilityBuilder::new(format!("dashboard-{}", registered.len()))
+        .local(false)
+        .remote(pattern)
+        .window("main")
+        .permission_scoped(
+            "allow-dashboard-mode",
+            vec![origin.clone()],
+            Vec::<String>::new(),
+        );
+    if let Err(error) = app.add_capability(capability) {
+        eprintln!("Could not add Vitals dashboard permissions: {error}");
+    } else {
+        registered.insert(origin);
+    }
+}
+
 fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
     app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -330,6 +421,7 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let (store, role) = SettingsStore::load(&home);
     app.manage(store);
     let allowed_origin = Arc::new(Mutex::new(None));
+    app.manage(allowed_origin.clone());
     let navigation_origin = allowed_origin.clone();
     let popup_origin = allowed_origin.clone();
     let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
@@ -448,11 +540,15 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     }
     std::thread::spawn(move || {
         let mut previous = None;
+        let mut registered = HashSet::new();
         Supervisor::new(hub, role, home).run(receive, |role, state| {
             for menu in &menus {
                 menu.update(role, state);
             }
             let (target, origin) = navigation_target(role, state, &hub_url);
+            if let Some(origin) = &origin {
+                allow_dashboard_ipc(&app, origin, &mut registered);
+            }
             *allowed_origin.lock().unwrap() = origin;
             if previous.as_ref() != Some(&target) {
                 let _ = window.navigate(target.clone());
@@ -478,7 +574,9 @@ fn main() {
             start_service,
             open_desktop_settings,
             read_desktop_settings,
-            save_desktop_settings
+            save_desktop_settings,
+            get_desktop_mode,
+            set_desktop_mode
         ])
         .setup(build_app)
         .build(tauri::generate_context!())
@@ -507,6 +605,41 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_mode_only_accepts_the_active_dashboard_and_its_grant() {
+        let hub = Url::parse("http://127.0.0.1:3993/").unwrap();
+        let remote = Url::parse("https://vitals.example.test:8443/").unwrap();
+        let hub_grants = [Arc::new(hub.origin().ascii_serialization())];
+        let remote_grants = [Arc::new(remote.origin().ascii_serialization())];
+        let active = Mutex::new(Some(hub.clone()));
+
+        assert!(permits_dashboard_page("main", &hub, &active, &hub_grants));
+        assert!(!permits_dashboard_page("main", &hub, &active, &[]));
+        assert!(!permits_dashboard_page(
+            SETTINGS_WINDOW,
+            &hub,
+            &active,
+            &hub_grants
+        ));
+        let file = hub.join("api/scratchpad/files/1").unwrap();
+        assert!(!permits_dashboard_page("main", &file, &active, &hub_grants));
+
+        *active.lock().unwrap() = Some(remote.clone());
+        assert!(permits_dashboard_page(
+            "main",
+            &remote,
+            &active,
+            &remote_grants
+        ));
+        assert!(!permits_dashboard_page(
+            "main",
+            &remote,
+            &active,
+            &hub_grants
+        ));
+        assert!(!permits_dashboard_page("main", &hub, &active, &hub_grants));
+    }
 
     #[test]
     fn remote_navigation_excludes_the_hub_and_other_origins() {

@@ -20,6 +20,7 @@ fn remote_url_requires_an_https_origin_and_keeps_token_private() {
         "http://example.test",
         "https:///example.test",
         "https://example.test:0",
+        "https://*.example.test",
         "https://user@example.test",
         "https://@example.test",
         "https://example.test?",
@@ -39,6 +40,12 @@ fn remote_url_requires_an_https_origin_and_keeps_token_private() {
     assert!(!serde_json::to_string(&store.view())
         .unwrap()
         .contains("private-test-token"));
+    assert_eq!(
+        serde_json::to_value(store.mode_view()).unwrap(),
+        serde_json::json!({
+            "mode": "remote", "remote_url": "https://example.test/", "has_token": true,
+        })
+    );
     assert!(apply("https://new.test", "").is_err());
     apply("https://example.test", "").unwrap();
     let (_, reloaded) = SettingsStore::load(home.path());

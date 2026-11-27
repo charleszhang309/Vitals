@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-dashboard-mode"
+description = "Read or change the desktop mode from the active Vitals dashboard."
+commands.allow = ["get_desktop_mode", "set_desktop_mode"]
