@@ -8,9 +8,7 @@ from hashlib import sha256
 from hmac import compare_digest
 from io import BytesIO
 import json
-import logging
 import re
-import sqlite3
 from threading import Lock
 from time import monotonic
 from typing import Annotated, Literal
@@ -37,7 +35,6 @@ DEVICE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 HASH_PATTERN = r"^[a-f0-9]{64}$"
 MAX_ARTWORK = 512 * 1024
 HUB_DEVICE_ID = "hub"
-logger = logging.getLogger(__name__)
 DeviceId = Annotated[str, Path(pattern=DEVICE_PATTERN)]
 Digest = Annotated[str, StringConstraints(pattern=HASH_PATTERN)]
 DeviceUID = Annotated[str, StringConstraints(min_length=1, max_length=256)]
@@ -246,7 +243,7 @@ class Device:
     commands: dict[UUID, AgentCommand] = field(default_factory=dict)
     artwork: tuple[str, bytes] | None = None
     stream_wake: asyncio.Event | None = None
-    persisted_at: float | None = None
+    profile_dirty: bool = False
 
     def online(self, now):
         return now - self.heartbeat_at <= OFFLINE_AFTER
@@ -265,8 +262,8 @@ class AgentRegistry:
         self.devices: dict[str, Device] = {}
         self._aliases: dict[str, str] = {}
         self.connect = connect
-        self.profiles_ready = False
         self.lock = Lock()
+        self.profile_lock = Lock()
 
     def restore_profiles(self):
         with self.connect() as db:
@@ -287,26 +284,36 @@ class AgentRegistry:
                 self.devices[device_id] = Device(snapshot, seen, float("-inf"))
                 if len(self.devices) >= MAX_DEVICES:
                     break
-            self.profiles_ready = True
 
     @staticmethod
-    def save_profile(db, device_id, device):
+    def save_profile(db, device_id, snapshot, last_seen):
         db.execute("""INSERT INTO agent_profiles(device_id,snapshot,last_seen) VALUES(?,?,?)
                       ON CONFLICT(device_id) DO UPDATE SET snapshot=excluded.snapshot,last_seen=excluded.last_seen""",
-                   (device_id, json.dumps(device.snapshot, ensure_ascii=False), device.last_seen.isoformat()))
+                   (device_id, json.dumps(snapshot, ensure_ascii=False), last_seen.isoformat()))
 
     def flush_profiles(self):
-        with self.lock, self.connect() as db:
-            for device_id, device in self.devices.items():
-                if device.persisted_at is not None:
-                    self.save_profile(db, device_id, device)
+        with self.profile_lock:
+            with self.lock:
+                profiles = [(device_id, device.snapshot, device.last_seen) for device_id, device in self.devices.items()
+                            if device.profile_dirty]
+            if not profiles:
+                return
+            # SQLite can be busy while expenses or other stores write to the same database.
+            with self.connect() as db:
+                for device_id, snapshot, last_seen in profiles:
+                    self.save_profile(db, device_id, snapshot, last_seen)
+            with self.lock:
+                for device_id, snapshot, _ in profiles:
+                    device = self.devices[device_id]
+                    if device.snapshot is snapshot:
+                        device.profile_dirty = False
 
     def aliases(self):
         with self.lock:
             return dict(self._aliases)
 
     def rename(self, payload):
-        with self.lock:
+        with self.profile_lock:
             with self.connect() as db:
                 if payload.alias is None:
                     db.execute("UPDATE agent_profiles SET alias=NULL WHERE device_id=?", (payload.device_id,))
@@ -315,27 +322,30 @@ class AgentRegistry:
                     db.execute("""INSERT INTO agent_profiles(device_id,alias) VALUES(?,?)
                                   ON CONFLICT(device_id) DO UPDATE SET alias=excluded.alias""",
                                (payload.device_id, payload.alias))
-            if payload.alias is None:
-                self._aliases.pop(payload.device_id, None)
-            else:
-                self._aliases[payload.device_id] = payload.alias
-            return dict(self._aliases)
+            with self.lock:
+                if payload.alias is None:
+                    self._aliases.pop(payload.device_id, None)
+                else:
+                    self._aliases[payload.device_id] = payload.alias
+                return dict(self._aliases)
 
     def remove(self, device_id):
         if device_id == HUB_DEVICE_ID:
             raise HTTPException(409, "不能移除本机 Hub")
-        with self.lock:
-            device = self.devices.get(device_id)
-            if device is None:
-                raise HTTPException(404, "找不到该设备")
-            if device.online(monotonic()):
-                raise HTTPException(409, "只能移除离线设备")
-            with self.connect() as db:
+        with self.profile_lock, self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            with self.lock:
+                device = self.devices.get(device_id)
+                if device is None:
+                    raise HTTPException(404, "找不到该设备")
+                if device.online(monotonic()):
+                    raise HTTPException(409, "只能移除离线设备")
                 db.execute("DELETE FROM agent_profiles WHERE device_id=?", (device_id,))
-            self._aliases.pop(device_id, None)
-            del self.devices[device_id]
-            wake, device.stream_wake = device.stream_wake, None
-            return wake
+                db.commit()
+                self._aliases.pop(device_id, None)
+                del self.devices[device_id]
+                wake, device.stream_wake = device.stream_wake, None
+                return wake
 
     def heartbeat(self, device_id, snapshot):
         if device_id == HUB_DEVICE_ID:
@@ -363,13 +373,7 @@ class AgentRegistry:
                     raise HTTPException(409, "Agent 设备数量已达上限")
                 device = self.devices[device_id] = Device(snapshot, seen, now)
             device.snapshot, device.last_seen, device.heartbeat_at = snapshot, seen, now
-            if self.profiles_ready and (device.persisted_at is None or now - device.persisted_at >= PROFILE_INTERVAL):
-                device.persisted_at = now
-                try:
-                    with self.connect() as db:
-                        self.save_profile(db, device_id, device)
-                except sqlite3.Error:
-                    logger.warning("无法持久化 Agent 快照")
+            device.profile_dirty = True
             minimum_age = STREAM_FALLBACK_DELAY if device.stream_wake is not None else 0
             commands = list(device.claim(now, minimum_age))
             media = snapshot["media"] or {}

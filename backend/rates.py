@@ -17,6 +17,7 @@ from .rate_history import HistoryRange
 
 CURRENCIES = ("CAD", "CNY", "USD", "EUR", "GBP", "JPY", "HKD", "AUD", "NZD", "CHF", "SGD", "KRW", "INR", "SEK", "NOK", "TWD", "MXN", "BRL")
 MAX_PINS = 5
+QUOTE_TIMEOUT = 6
 
 
 class Pair(BaseModel):
@@ -91,14 +92,16 @@ class Rates:
     async def fetch(self, client, base, targets):
         fresh = {}
         try:
-            reply = await client.get("https://api.frankfurter.dev/v2/rates",
-                                     params={"base": base, "quotes": ",".join(targets)}, timeout=6)
+            reply = await asyncio.wait_for(client.get(
+                "https://api.frankfurter.dev/v2/rates",
+                params={"base": base, "quotes": ",".join(targets)}, timeout=QUOTE_TIMEOUT,
+            ), timeout=QUOTE_TIMEOUT)
             reply.raise_for_status()
             for entry in reply.json():
                 code, value = entry["quote"], float(entry["rate"])
                 if code in targets and entry["base"] == base and value > 0 and math.isfinite(value):
                     fresh[code] = {"rate": value, "date": date.fromisoformat(entry["date"]).isoformat(), "status": "live"}
-        except (httpx.HTTPError, KeyError, ValueError, TypeError, OverflowError):
+        except (asyncio.TimeoutError, httpx.HTTPError, KeyError, ValueError, TypeError, OverflowError):
             pass
         for code in targets:
             key = (base, code)

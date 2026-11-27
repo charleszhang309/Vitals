@@ -21,7 +21,6 @@
 .bills-preview-split { --preview-columns: minmax(0, 1fr) minmax(0, 1.3fr); }
 
 .overview-dialog.expenses-dialog { width: min(650px, calc(100% - 28px)); }
-.bills-details > .segments { justify-self: start; }
 .bills-total, .bills-editor { padding: 14px; }
 .bills-total { display: grid; gap: 8px; }
 .bills-total > .bills-missing { font-size: 13px; overflow-wrap: anywhere; }

@@ -21,7 +21,7 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from websockets.exceptions import ConnectionClosed
 
-from .agents import AgentRegistry, agents_router, require_agent_token
+from .agents import PROFILE_INTERVAL, AgentRegistry, agents_router, require_agent_token
 from .ai import AiState, DailyBriefing, ai_router
 from .ai_tools import AiTools
 from .ai_usage import AiUsage, UsageLedger, usage_router
@@ -211,6 +211,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
                     asyncio.create_task(monitor.run(lhm_client, lambda: power.latest), name="metrics"),
                     asyncio.create_task(periodic("电源计划查询", 15, power.active_power), name="power"),
                     asyncio.create_task(periodic("中转站清理", 3600, store.cleanup), name="cleanup"),
+                    asyncio.create_task(periodic("Agent 快照保存", PROFILE_INTERVAL, agents.flush_profiles), name="agent-profiles"),
                     asyncio.create_task(rate_history.sample(external_client, rate_pins), name="rate-snapshots"),
                 ]
                 if health.export_dir is not None:

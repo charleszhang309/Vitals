@@ -41,11 +41,13 @@ Push-Location $project
 try {
     Invoke-Step $python @('-m', 'pip', 'install', 'pyinstaller==6.22.3', '-r', 'backend/requirements.txt')
     $frozen = Join-Path $build 'frozen'
+    # CalDAV loads its client through a lazy import that PyInstaller cannot detect.
     Invoke-Step $python @(
         '-m', 'PyInstaller', '--noconfirm', '--onedir', '--console', '--name', 'vitals-hub', '--paths', $project,
         '--distpath', $frozen, '--workpath', (Join-Path $build 'work'), '--specpath', $build,
         '--add-data', "$static;backend/static", '--add-data', "$(Join-Path $project 'backend/agent.md');backend",
         '--collect-submodules', 'uvicorn', '--collect-submodules', 'winrt', '--collect-submodules', 'pycaw',
+        '--hidden-import', 'caldav.davclient',
         (Join-Path $PSScriptRoot 'sidecar_entry.py')
     )
     $sidecar = Join-Path $frozen 'vitals-hub'

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Download, ExternalLink } from 'lucide-react';
 import DOMPurify from 'dompurify';
-import { fetchResponse } from './api.js';
+import { request } from './api.js';
 import { documentType, PREVIEW_LIMIT } from './previewFormat.js';
 import { Modal } from './ui.jsx';
 
@@ -34,7 +34,7 @@ function ParsedDocument({ type, url }) {
         setFile((previous) => ({ ...previous, ...data }));
       }
     };
-    fetchResponse(url, { signal: controller.signal }).then((response) => {
+    request(url, { signal: controller.signal }, (response) => {
       if (Number(response.headers.get('Content-Length')) > PREVIEW_LIMIT) throw new Error('文件超过 15 MB，请下载查看。');
       return response.arrayBuffer();
     }).then((buffer) => {

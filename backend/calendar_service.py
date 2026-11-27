@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
-from .calendar_sources import CalDAVSource, ICSFeed, OAuthSource
+from .calendar_sources import CalDAVSource, ICSFeed, OAuthSource, log_calendar_failure
 
 
 logger = logging.getLogger(__name__)
@@ -114,19 +114,21 @@ class CalendarService:
             state.status = "live"
             state.updated_at = datetime.now(timezone.utc).isoformat()
         except Exception as error:
-            # 上游 URL、认证错误详情与日程原文保留在服务端。
-            logger.info("日历同步暂不可用（%s）", type(error).__name__)
+            log_calendar_failure(logger, state.config, "同步", error)
             state.status = "stale" if state.updated_at else "unavailable"
         state.range_day = start.date()
         state.next_fetch = monotonic() + (SYNC_INTERVAL if state.status == "live" else 45)
 
     async def summary(self, client, refresh=False, now=None):
         start, end = self.bounds(now or datetime.now(timezone.utc))
+        range_day = start.date()
 
         async def ensure(state):
-            if refresh or monotonic() >= state.next_fetch or state.range_day != start.date():
+            next_fetch = state.next_fetch
+            if refresh or monotonic() >= next_fetch or state.range_day != range_day:
                 async with state.lock:
-                    if refresh or monotonic() >= state.next_fetch or state.range_day != start.date():
+                    needs_refresh = refresh and state.next_fetch == next_fetch
+                    if needs_refresh or monotonic() >= state.next_fetch or state.range_day != range_day:
                         await self.refresh_state(client, state, start, end)
 
         await asyncio.gather(*(ensure(state) for state in self.sources.values()))
@@ -219,7 +221,7 @@ class CalendarService:
                     raise HTTPException(409, "上游日程已变更，请重新同步后再试") from error
                 raise HTTPException(502, "日历更新未确认，请检查来源权限或连接") from error
             except Exception as error:
-                logger.info("日历更新未确认（%s）", type(error).__name__)
+                log_calendar_failure(logger, state.config, "更新", error)
                 raise HTTPException(502, "日历更新未确认，请检查来源权限或连接") from error
             await self.refresh_state(client, state, start, end)
             return result

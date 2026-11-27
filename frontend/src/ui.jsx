@@ -1,32 +1,42 @@
-import { useLayoutEffect, useRef } from 'react';
-import { motion, useIsPresent, useReducedMotion } from 'framer-motion';
+import { useId, useLayoutEffect, useRef } from 'react';
+import { motion, usePresence, useReducedMotion } from 'framer-motion';
 import { ChevronRight, X } from 'lucide-react';
 
-const spring = { type: 'spring', stiffness: 440, damping: 35, mass: 0.8 };
+const segmentSpring = { type: 'spring', stiffness: 420, damping: 34, mass: 0.75 };
 const easeOut = [0.22, 1, 0.36, 1];
+const modalDuration = 0.18;
 const modalStack = [];
 
-export function Button({ className = '', children, ...props }) {
-  return <motion.button type="button" className={`button ${className}`} whileTap={{ scale: 0.97 }} {...props}>{children}</motion.button>;
+export function Button({ className = '', children, disabled, ...props }) {
+  return <motion.button type="button" className={`button ${className}`} disabled={disabled}
+    whileTap={disabled ? undefined : { scale: 0.97 }} {...props}>{children}</motion.button>;
 }
 
-export function IconButton({ label, children, href, className = '', ...props }) {
-  const attributes = { className: `button icon-button ${className}`, 'aria-label': label, title: label, whileTap: { scale: 0.97 }, ...props };
-  return href
+export function IconButton({ label, children, href, className = '', disabled, ...props }) {
+  const attributes = { className: `button icon-button ${className}`, 'aria-label': label, title: label,
+    whileTap: disabled ? undefined : { scale: 0.97 }, ...props };
+  return href && !disabled
     ? <motion.a href={href} {...attributes}>{children}</motion.a>
-    : <motion.button type="button" {...attributes}>{children}</motion.button>;
+    : <motion.button type="button" disabled={disabled} {...attributes}>{children}</motion.button>;
 }
 
 export function Segmented({ id, label, options, value, onChange, tabs = false, disabled = false }) {
+  const selectionId = useId();
+  const tabStop = tabs && (options.find((option) => !option.disabled && option.value === value)
+    ?? options.find((option) => !option.disabled));
+
   function moveFocus(event) {
     const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
-    if (!tabs || !keys.includes(event.key)) return;
+    if (!tabs || disabled || !keys.includes(event.key)) return;
+    const availableTabs = [...event.currentTarget.querySelectorAll('[role="tab"]:enabled')];
+    if (!availableTabs.length) return;
     event.preventDefault();
-    const index = options.findIndex((option) => option.value === value);
-    const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
-      : (options.length + index + (event.key === 'ArrowLeft' ? -1 : 1)) % options.length;
-    event.currentTarget.querySelectorAll('[role="tab"]')[nextIndex]?.focus();
-    onChange(options[nextIndex].value);
+    const index = availableTabs.indexOf(event.target);
+    const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? availableTabs.length - 1
+      : (availableTabs.length + index + (event.key === 'ArrowLeft' ? -1 : 1)) % availableTabs.length;
+    const nextTab = availableTabs[nextIndex];
+    nextTab.focus();
+    nextTab.click();
   }
 
   return (
@@ -34,14 +44,14 @@ export function Segmented({ id, label, options, value, onChange, tabs = false, d
       {options.map((option) => {
         const selected = option.value === value;
         const state = tabs
-          ? { role: 'tab', id: `tab-${option.value}`, 'aria-selected': selected, 'aria-controls': `panel-${option.value}`, tabIndex: selected ? 0 : -1 }
+          ? { role: 'tab', id: `tab-${option.value}`, 'aria-selected': selected, 'aria-controls': `panel-${option.value}`, tabIndex: option === tabStop ? 0 : -1 }
           : { 'aria-pressed': selected };
         return (
-          <motion.button key={option.value} type="button" className="segment" disabled={disabled || option.disabled}
-            onClick={() => { if (!selected) onChange(option.value); }} whileTap={{ scale: 0.97 }} {...state}>
-            {selected && <motion.span className="segment-highlight" layoutId={`${id}-selection`} transition={spring} aria-hidden="true" />}
+          <button key={option.value} type="button" className="segment" disabled={disabled || option.disabled}
+            onClick={() => { if (!selected) onChange(option.value); }} {...state}>
+            {selected && <motion.span className="segment-highlight" layoutId={`${id}-${selectionId}-selection`} transition={segmentSpring} aria-hidden="true" />}
             <span className="segment-label">{option.label}</span>
-          </motion.button>
+          </button>
         );
       })}
     </div>
@@ -50,15 +60,20 @@ export function Segmented({ id, label, options, value, onChange, tabs = false, d
 
 export function Modal({ id, title, onClose, className = '', headerActions, style, children }) {
   const ref = useRef(null);
-  const present = useIsPresent();
+  const release = useRef(null);
+  const [present, safeToRemove] = usePresence();
   const reduced = useReducedMotion();
+  useLayoutEffect(() => () => release.current?.(), []);
   useLayoutEffect(() => {
+    if (!present || release.current) return;
     const dialog = ref.current;
     const entry = { dialog, opener: document.activeElement };
-    dialog.showModal();
+    if (!dialog.open) dialog.showModal();
     modalStack.push(entry);
-    return () => {
+    release.current = () => {
+      release.current = null;
       const index = modalStack.indexOf(entry);
+      if (index === -1) return;
       const above = modalStack[index + 1];
       if (above && dialog.contains(above.opener)) above.opener = entry.opener;
       modalStack.splice(index, 1);
@@ -71,7 +86,17 @@ export function Modal({ id, title, onClose, className = '', headerActions, style
       }
       if (next && !next.contains(document.activeElement)) next.querySelector('.modal-close')?.focus({ preventScroll: true });
     };
-  }, []);
+  }, [present]);
+
+  useLayoutEffect(() => {
+    if (present) return undefined;
+    // 退出动画被中断时也要解除浏览器的原生模态锁。
+    const timer = window.setTimeout(() => {
+      release.current?.();
+      safeToRemove?.();
+    }, reduced ? 0 : modalDuration * 1000 + 40);
+    return () => window.clearTimeout(timer);
+  }, [present, reduced, safeToRemove]);
 
   useLayoutEffect(() => {
     const dialog = ref.current;
@@ -93,8 +118,8 @@ export function Modal({ id, title, onClose, className = '', headerActions, style
     <motion.dialog ref={ref} className={`modal ${className}`} style={style} aria-labelledby={`${id}-title`}
       data-closing={!present || undefined}
       initial={reduced ? false : { opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: reduced ? 1 : 0.95 }}
-      transition={{ duration: reduced ? 0 : 0.18, ease: easeOut }}
+      animate={present ? { opacity: 1, scale: 1 } : { opacity: 0, scale: reduced ? 1 : 0.95 }}
+      transition={{ duration: reduced ? 0 : modalDuration, ease: easeOut }}
       onCancel={(event) => {
         if (event.target !== event.currentTarget) return;
         event.preventDefault();

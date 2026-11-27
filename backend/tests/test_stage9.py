@@ -1,7 +1,9 @@
 import asyncio
-from contextlib import aclosing, asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import aclosing, asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 import json
+from threading import Event
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -132,6 +134,83 @@ def test_heartbeat_authorization_and_server_offline_clock(tmp_path, monkeypatch)
             assert (await client.get("/api/agents")).json()["devices"][0]["online"]
 
     asyncio.run(verify())
+
+
+def test_v2_2_1_mac_agent_can_report_and_complete_commands(tmp_path):
+    # The v2.2.1 publisher adds name, OS and timestamp to its sample without a capabilities field.
+    previous_snapshot = {**SNAPSHOT, "caffeinate": False, "volume": {
+        **SNAPSHOT["volume"], "device_id": "built-in", "devices": [{"id": "built-in", "name": "Mac Speakers"}],
+        "input_percent": 63, "input_muted": False, "input_device_id": "built-in-mic",
+        "input_devices": [{"id": "built-in-mic", "name": "Mac Microphone"}],
+    }}
+
+    async def verify():
+        app = agent_app(tmp_path)
+        transport = httpx.ASGITransport(app=app, client=("100.64.0.23", 42000))
+        async with httpx.AsyncClient(transport=transport, base_url="https://vitals.fixture.ts.net") as client:
+            async def heartbeat():
+                response = await client.post(AGENT + "/heartbeat", json=previous_snapshot, headers=AUTH)
+                response.raise_for_status()
+                return response.json()
+
+            assert await heartbeat() == {"commands": []}
+            device = (await client.get("/api/agents")).json()["devices"][0]
+            assert device["online"] and device["snapshot"]["capabilities"] == []
+            assert (await client.post("/api/control/screenshot/macbook")).status_code == 409
+
+            commands = []
+            for action, payload in (("volume_set", {"percent": 51}), ("input_volume_mute", {"muted": True}),
+                                    ("caffeinate_toggle", {}), ("display_sleep", {})):
+                response = await client.post(AGENT + "/command", json={"action": action, "payload": payload})
+                assert response.status_code == 202
+                commands.append({"id": response.json()["id"], "action": action, "payload": payload})
+            assert await heartbeat() == {"commands": commands}
+            for command in commands:
+                receipt = await client.post(f"{AGENT}/commands/{command['id']}/result", headers=AUTH,
+                                            json={"ok": True, "message": "已完成"})
+                assert receipt.status_code == 204
+            assert await heartbeat() == {"commands": []}
+            device = (await client.get("/api/agents")).json()["devices"][0]
+            assert [command["status"] for command in device["commands"]] == ["succeeded"] * len(commands)
+
+    asyncio.run(verify())
+
+
+def test_profile_persistence_does_not_delay_heartbeats_or_commands(tmp_path, monkeypatch):
+    store = Scratchpad(tmp_path)
+    store.initialize()
+    registry = AgentRegistry(store.connect)
+    registry.restore_profiles()
+    original = Heartbeat.model_validate(SNAPSHOT)
+    changed = original.model_copy(update={"name": "Updated MacBook"})
+    registry.heartbeat("macbook", original)
+    writing, resume = Event(), Event()
+
+    @contextmanager
+    def blocked_connect():
+        writing.set()
+        assert resume.wait(3), "profile write blocked registry access"
+        with store.connect() as connection:
+            yield connection
+
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        monkeypatch.setattr(registry, "connect", blocked_connect)
+        saved = worker.submit(registry.flush_profiles)
+        try:
+            assert writing.wait(3)
+            reply = registry.enqueue("macbook", ButtonCommand(action="lock"))
+            assert registry.heartbeat("macbook", changed)["commands"] == [
+                {"id": reply["id"], "action": "lock", "payload": {}},
+            ]
+        finally:
+            resume.set()
+        saved.result(timeout=3)
+
+    monkeypatch.setattr(registry, "connect", store.connect)
+    registry.flush_profiles()
+    restored = AgentRegistry(store.connect)
+    restored.restore_profiles()
+    assert restored.list()[0]["snapshot"]["name"] == changed.name
 
 
 def test_microphone_commands_require_input_resources_and_accept_legacy_heartbeats(tmp_path):

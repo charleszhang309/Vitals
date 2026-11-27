@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.config import FinanceConfig, WebhookConfig
-from backend.expenses import ExpenseStore, SubscriptionInput, expenses_router
+from backend.expenses import ExpenseStore, ReceiptInput, SubscriptionInput, expenses_router
 from backend.rates import Rates
 from backend.scratchpad import Scratchpad
 
@@ -69,6 +69,24 @@ def test_summary_converts_known_rates_and_keeps_unavailable_amounts(ledger):
     assert reply["monthly_count"] == 4
     assert reply["totals_by_currency"] == {"CAD": "0.30", "JPY": "100", "USD": "8.00"}
     assert reply["missing_rates"] == ["JPY"]
+
+
+def test_summary_reports_unavailable_rates_when_the_request_stalls(ledger, monkeypatch):
+    monkeypatch.setattr("backend.rates.QUOTE_TIMEOUT", 0.01)
+    ledger.add_receipt(ReceiptInput(merchant="Cafe", amount="8.00", currency="USD",
+                                    occurred_at="2026-02-25T17:00:00Z"))
+
+    async def stalled_rate(request):
+        await asyncio.Event().wait()
+
+    async def verify():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(stalled_rate)) as client:
+            reply = await ledger.summary(client)
+        assert reply["month_total"] is None
+        assert reply["totals_by_currency"] == {"USD": "8.00"}
+        assert reply["missing_rates"] == ["USD"]
+
+    asyncio.run(verify())
 
 
 def test_subscription_crud_preserves_the_billing_anchor(ledger, monkeypatch):

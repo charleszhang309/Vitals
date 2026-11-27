@@ -1,6 +1,7 @@
 """日历提供方适配。OAuth 端点固定，订阅地址只能由服务器配置指定。"""
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -26,7 +27,23 @@ GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
 OUTLOOK_SCOPE = "https://graph.microsoft.com/Calendars.ReadWrite offline_access"
 RECURRENCE_SEPARATOR = "\x1e"
 CALENDAR_SEPARATOR = "\x1f"
+CALDAV_REQUEST_TIMEOUT = 8
+CALDAV_WORKERS = ThreadPoolExecutor(max_workers=4, thread_name_prefix="caldav")
 logger = logging.getLogger(__name__)
+
+# CalDAV can include response bodies and account URLs in its own diagnostic logs.
+logging.getLogger("caldav").setLevel(logging.CRITICAL + 1)
+dav_error.debug_dump_communication = False
+
+
+def log_calendar_failure(log, config, stage, error):
+    status = None
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+    elif isinstance(error, dav_error.DAVError):
+        status = getattr(error, "status", None)
+    log.info("日历来源 %s (%s)：%s 失败（%s，HTTP %s）", config.id, config.type, stage, type(error).__name__,
+             status if type(status) is int and 100 <= status <= 599 else "—")
 
 
 def secret(value):
@@ -263,16 +280,31 @@ class CalDAVSource:
         self.zone = zone
 
     @contextmanager
+    def diagnose(self, stage):
+        try:
+            yield
+        except Exception as error:
+            log_calendar_failure(logger, self.config, stage, error)
+            raise
+
+    @contextmanager
     def calendars(self):
         apple_id, password = secret(self.config.apple_id), secret(self.config.app_password)
         if not apple_id or not password:
-            raise ValueError("missing iCloud credentials")
-        with caldav.DAVClient(url="https://caldav.icloud.com", username=apple_id, password=password, timeout=8,
-                              rate_limit_handle=False, enable_rfc6764=False) as connection:
+            with self.diagnose("检查凭据"):
+                raise ValueError("missing iCloud credentials")
+        with self.diagnose("初始化 CalDAV 客户端"):
+            client = caldav.DAVClient(
+                url="https://caldav.icloud.com", username=apple_id, password=password,
+                timeout=CALDAV_REQUEST_TIMEOUT, rate_limit_handle=False, enable_rfc6764=False,
+            )
+        with client as connection:
+            with self.diagnose("查找 iCloud 日历"):
+                remote_calendars = connection.principal().calendars()
             target = self.config.calendar_id
             calendars = []
             failed = None
-            for item in connection.principal().calendars():
+            for item in remote_calendars:
                 if target and target not in {item.name, str(item.id), str(item.url)}:
                     continue
                 try:
@@ -281,14 +313,15 @@ class CalDAVSource:
                     create, edit = self.permissions(item)
                 except (dav_error.DAVError, OSError) as error:
                     failed = error
-                    logger.info("iCloud 子日历组件暂不可读（%s）", type(error).__name__)
+                    log_calendar_failure(logger, self.config, "读取子日历类型与权限", error)
                     continue
                 identifier = sha256(str(item.url).rstrip("/").encode()).hexdigest()[:32]
                 calendars.append(EventCalendar(item, identifier, create, edit))
             if failed and not calendars:
                 raise failed
             if target and not calendars:
-                raise ValueError("iCloud calendar not found")
+                with self.diagnose("匹配配置的日历"):
+                    raise ValueError("iCloud calendar not found")
             yield calendars
 
     @staticmethod
@@ -334,7 +367,7 @@ class CalDAVSource:
                     succeeded = True
                 except (dav_error.DAVError, OSError) as error:
                     failed = error
-                    logger.info("iCloud 子日历暂不可用（%s）", type(error).__name__)
+                    log_calendar_failure(logger, self.config, "读取子日历日程", error)
         if failed and not succeeded:
             raise failed
         return result
@@ -417,17 +450,21 @@ class CalDAVSource:
             document.subcomponents = [item for item in document.subcomponents if item is not component]
             resource.save(raw_data=document.to_ical(), no_create=True)
 
+    @staticmethod
+    async def run_in_worker(action, *args):
+        return await asyncio.get_running_loop().run_in_executor(CALDAV_WORKERS, action, *args)
+
     async def list(self, _client, start, end):
-        return await asyncio.to_thread(self.scan, start, end)
+        return await self.run_in_worker(self.scan, start, end)
 
     async def get(self, _client, identifier):
-        return await asyncio.to_thread(self.read_sync, identifier)
+        return await self.run_in_worker(self.read_sync, identifier)
 
     async def create(self, _client, fields):
-        return await asyncio.to_thread(self.create_sync, fields)
+        return await self.run_in_worker(self.create_sync, fields)
 
     async def update(self, _client, event, fields, changes):
-        return await asyncio.to_thread(self.update_sync, event["id"], fields, changes)
+        return await self.run_in_worker(self.update_sync, event["id"], fields, changes)
 
     async def delete(self, _client, identifier):
-        await asyncio.to_thread(self.delete_sync, identifier)
+        await self.run_in_worker(self.delete_sync, identifier)

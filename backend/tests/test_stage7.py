@@ -2,10 +2,12 @@ import asyncio
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 from uuid import uuid4
 from xml.etree.ElementTree import fromstring
 from zoneinfo import ZoneInfo
 
+from caldav.lib import error as dav_error
 from icalendar import Calendar
 import httpx
 import pytest
@@ -337,6 +339,60 @@ def test_icloud_scans_all_event_calendars_and_writes_to_owner(monkeypatch):
     assert work.calls == ["search", "lookup", "edit", "lookup", "delete"]
     single = CalDAVSource(config.model_copy(update={"calendar_id": "Work"}), zone)
     assert [event["id"] for event in single.scan(start, end)] == [identifier]
+
+
+def test_icloud_sync_failure_logs_only_safe_details(monkeypatch, caplog):
+    class Connection:
+        def principal(self):
+            logging.getLogger("caldav").warning("private provider diagnostics")
+            raise dav_error.AuthorizationError(url="https://calendar.example.invalid/private", reason="fixture password",
+                                               body="private calendar response", status=401)
+
+    def connect(**options):
+        assert options["timeout"] == 8 and not options["rate_limit_handle"]
+        return nullcontext(Connection())
+
+    monkeypatch.setattr("backend.calendar_sources.caldav.DAVClient", connect)
+    config = CalendarConfig(sources=[CalendarSource(id="apple", name="Private account", type="icloud",
+                                                    apple_id="fixture@example.invalid", app_password="fixture password")])
+    service = CalendarService(config, ZoneInfo("UTC"))
+    with caplog.at_level(logging.INFO):
+        result = asyncio.run(service.summary(None))
+
+    assert result["sources"][0]["status"] == "unavailable"
+    assert "apple (icloud)" in caplog.text and "AuthorizationError" in caplog.text and "HTTP 401" in caplog.text
+    for private in ("Private account", "calendar.example.invalid", "fixture@example.invalid", "fixture password",
+                    "private calendar response", "private provider diagnostics"):
+        assert private not in caplog.text
+
+
+def test_calendar_coalesces_overlapping_explicit_refreshes(monkeypatch):
+    config = CalendarConfig(sources=[CalendarSource(id="apple", name="iCloud", type="icloud")])
+    service = CalendarService(config, ZoneInfo("UTC"))
+
+    async def verify():
+        started, release = asyncio.Event(), asyncio.Event()
+        calls = 0
+
+        async def upstream(_client, _start, _end):
+            nonlocal calls
+            calls += 1
+            started.set()
+            await release.wait()
+            return []
+
+        monkeypatch.setattr(service.sources["apple"].adapter, "list", upstream)
+        first = asyncio.create_task(service.summary(None, refresh=True))
+        await started.wait()
+        second = asyncio.create_task(service.summary(None, refresh=True))
+        await asyncio.sleep(0)
+        release.set()
+        assert (await first) == (await second)
+        assert calls == 1
+        await service.summary(None, refresh=True)
+        assert calls == 2
+
+    asyncio.run(verify())
 
 
 def test_pinned_rates_order_limit_and_persistence(tmp_path):

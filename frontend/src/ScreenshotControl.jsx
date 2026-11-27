@@ -1,25 +1,25 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { RefreshCw, ScanLine } from 'lucide-react';
-import { fetchResponse } from './api.js';
+import { request } from './api.js';
 import { Button, IconButton, Modal } from './ui.jsx';
 import './ScreenshotControl.css';
 
 export default function ScreenshotControl({ deviceId, deviceName, disabled = false }) {
   const id = useId();
-  const request = useRef(null);
+  const captureRequest = useRef(null);
   const objectUrl = useRef(null);
   const [open, setOpen] = useState(false);
   const [view, setView] = useState({ loading: true });
 
   useLayoutEffect(() => () => {
-    request.current?.abort();
+    captureRequest.current?.abort();
     if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
   }, []);
 
   function clear() {
-    request.current?.abort();
-    request.current = null;
+    captureRequest.current?.abort();
+    captureRequest.current = null;
     if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
     objectUrl.current = null;
   }
@@ -27,18 +27,17 @@ export default function ScreenshotControl({ deviceId, deviceName, disabled = fal
   async function capture() {
     clear();
     const controller = new AbortController();
-    request.current = controller;
+    captureRequest.current = controller;
     setView({ loading: true });
     const path = deviceId ? `/api/control/screenshot/${encodeURIComponent(deviceId)}` : '/api/control/screenshot';
     try {
-      const response = await fetchResponse(path, { method: 'POST', signal: controller.signal });
-      const image = await response.blob();
-      if (controller.signal.aborted || request.current !== controller) return;
+      const image = await request(path, { method: 'POST', signal: controller.signal }, (response) => response.blob());
+      if (controller.signal.aborted || captureRequest.current !== controller) return;
       if (!['image/webp', 'image/jpeg'].includes(image.type)) throw new Error('未收到有效截图，请重试。');
       objectUrl.current = URL.createObjectURL(image);
       setView({ url: objectUrl.current });
     } catch (error) {
-      if (!controller.signal.aborted && request.current === controller) setView({ error: error.message });
+      if (!controller.signal.aborted && captureRequest.current === controller) setView({ error: error.message });
     }
   }
 

@@ -1,17 +1,20 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUp, Sparkles, Square, Trash2 } from 'lucide-react';
-import { fetchResponse, request } from './api.js';
+import { request } from './api.js';
 import { Button, IconButton, Modal } from './ui.jsx';
 import AiConfirmation, { useAiConfirmations } from './AiConfirmation.jsx';
 
 const HISTORY = '/api/ai/messages';
 const shortcuts = ['总结今日状态', '检查电脑硬件', '整理中转站最新内容'];
 
-async function streamChat(message, signal, append, toolEvent) {
-  const response = await fetchResponse('/api/ai/chat', {
-    method: 'POST', signal, body: JSON.stringify({ message }),
+function streamChat(message, signal, append, toolEvent) {
+  return request('/api/ai/chat', {
+    method: 'POST', signal, timeoutMs: 105_000, body: JSON.stringify({ message }),
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-  });
+  }, (response) => readChatStream(response, append, toolEvent));
+}
+
+async function readChatStream(response, append, toolEvent) {
   if (!response.body || !response.headers.get('Content-Type')?.includes('text/event-stream')) {
     throw new Error('服务器没有返回实时聊天流。');
   }

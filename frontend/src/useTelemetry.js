@@ -18,6 +18,17 @@ export function useTelemetry(enabled = true) {
     let attempts = 0;
     let disposed = false;
 
+    function retrySocket(current) {
+      if (disposed || socket !== current) return;
+      socket = undefined;
+      if (current.readyState < WebSocket.CLOSING) current.close();
+      setConnection('offline');
+      if (!document.hidden) {
+        retry = window.setTimeout(connect, Math.min(750 * 2 ** attempts, 10_000));
+        attempts = Math.min(attempts + 1, 4);
+      }
+    }
+
     function connect() {
       if (disposed || document.hidden || socket) return;
       retry = undefined;
@@ -58,23 +69,14 @@ export function useTelemetry(enabled = true) {
           return updated ? peaks : previous;
         });
       };
-      current.onerror = () => current.close();
-      current.onclose = () => {
-        if (disposed || socket !== current) return;
-        socket = undefined;
-        setConnection('offline');
-        if (!document.hidden) {
-          retry = window.setTimeout(connect, Math.min(750 * 2 ** attempts, 10_000));
-          attempts = Math.min(attempts + 1, 4);
-        }
-      };
+      current.onerror = current.onclose = () => retrySocket(current);
     }
 
     function checkFreshness() {
       if (document.hidden) return;
-      if (socket && socket.readyState < WebSocket.CLOSING && Date.now() - (lastFrameAt ?? startedAt) > STALE_MS) {
-        // 锁屏或网络切换后，主动结束长时间没有快照的连接。
-        socket.close();
+      if (socket && Date.now() - (lastFrameAt ?? startedAt) > STALE_MS) {
+        // 网络切换后，旧连接可能没有及时发出 close 事件。
+        retrySocket(socket);
       }
     }
 
