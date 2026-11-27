@@ -125,7 +125,6 @@ export function Modal({ id, title, onClose, className = '', headerActions, style
 
   useLayoutEffect(() => {
     if (present) return undefined;
-    // 退出动画被中断时也要解除浏览器的原生模态锁。
     const timer = window.setTimeout(() => {
       release.current?.();
       safeToRemove?.();
@@ -140,7 +139,6 @@ export function Modal({ id, title, onClose, className = '', headerActions, style
       event.preventDefault();
       if (present && !event.repeat) onClose();
     }
-    // Route Escape to one dialog even when the browser groups multiple native close requests.
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
   }, [onClose, present]);
@@ -162,7 +160,7 @@ export function Modal({ id, title, onClose, className = '', headerActions, style
       }}
       onClick={(event) => { if (event.target === event.currentTarget) dismiss(); }}>
       <div className="modal-body surface" inert={!present || undefined}>
-        <div className="modal-header flex items-center justify-between gap-4">
+        <div className="modal-header">
           <h2 id={`${id}-title`}>{title}</h2>
           <div className="modal-controls">{headerActions}<IconButton className="modal-close" label={t('关闭')} onClick={dismiss}><X size={19} aria-hidden="true" /></IconButton></div>
         </div>

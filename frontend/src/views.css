@@ -1,0 +1,199 @@
+/* ==========================================================================
+   v3.1 view restyle: Control, Scratchpad, Settings, AI Chat.
+   One shared vocabulary: wells for inputs, 12px tiles, 24px cards, one accent.
+   Imported after styles.css (main.jsx), so these rules win by source order.
+   Markup and class names are unchanged.
+   ========================================================================== */
+
+/* Shared form controls ---------------------------------------------------- */
+:is(.host-setup-field, .widget-form, .shutdown-form, .deck-field) :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"]), select, textarea),
+.settings-row > select, .settings-subsection .settings-row select, .retention-setting select, .overview-settings-card > select,
+.settings-device-actions input, .volume-device select, .widget-inline-form input {
+  min-height: 38px;
+  border: 1px solid var(--well-border);
+  border-radius: var(--radius-sm);
+  background: var(--well);
+  color: var(--text);
+  box-shadow: inset 0 1px 2px rgb(15 23 42 / 0.05);
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+:is(.host-setup-field, .widget-form, .shutdown-form, .deck-field) :is(input, select, textarea):focus-visible,
+.settings-row > select:focus-visible, .volume-device select:focus-visible, .settings-device-actions input:focus-visible,
+.composer textarea:focus-visible, .ai-composer textarea:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--blue) 60%, var(--well-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 22%, transparent);
+}
+.toggle-switch { transition: background-color var(--duration-standard) var(--ease-out); }
+.toggle-switch:checked { background: var(--accent-solid); border-color: transparent; }
+.toggle-switch:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+
+/* Panels (Control / Monitor) ---------------------------------------------- */
+.panel { padding: 18px 20px; border-radius: var(--radius-xl); }
+.panel-header h2 { font-size: var(--text-title); font-weight: 730; letter-spacing: -.015em; }
+.panel-note, .subtle-line { color: var(--muted); }
+
+/* Control page ------------------------------------------------------------ */
+.control-heading { margin-bottom: var(--space-md); }
+.host-control-grid, .media-control-grid { gap: var(--space-md); }
+.host-control-grid { margin-block: var(--space-md); }
+.control-hardware dl > div { padding-top: 9px; }
+.control-hardware dt { font-size: var(--text-caption); }
+.control-hardware dd { font-weight: 740; letter-spacing: -.02em; }
+.device-picker-select { border-radius: var(--radius-pill); }
+
+.quick-control-row { gap: var(--space-sm); }
+.quick-control-row .button {
+  min-height: 44px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--track);
+  font-weight: 650;
+  transition: background-color var(--duration-fast) ease, color var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+.quick-control-row .button:not(:disabled):is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--text) 10%, var(--track));
+}
+:is(.remote-quick-row, .mac-quick-row) .button[aria-pressed="true"] {
+  border-radius: var(--radius-md);
+  color: var(--link);
+  border-color: color-mix(in srgb, var(--blue) 28%, transparent);
+  background: color-mix(in srgb, var(--blue) 14%, var(--track));
+}
+.quick-control-row .shutdown-button { color: var(--error); background: color-mix(in srgb, var(--red) 10%, transparent); }
+.quick-control-row .shutdown-button:not(:disabled):is(:hover, :focus-visible) { background: color-mix(in srgb, var(--red) 17%, transparent); }
+
+.audio-layer + .audio-layer { margin-top: var(--space-md); padding-top: var(--space-md); }
+.volume-device { color: var(--muted); font-size: var(--text-caption); }
+.volume-device select { color: var(--text); font-size: 13px; font-weight: 600; }
+.volume-readout { font-size: 13px; }
+
+.player-track { gap: var(--space-lg); }
+.player-card .media-cover { border-radius: var(--radius-lg); box-shadow: inset 0 1px var(--glass-edge), 0 10px 24px -12px rgb(15 23 42 / .35); }
+.player-card-actions { gap: clamp(18px, 4vw, 34px); }
+
+.launcher-actions { gap: var(--space-sm); }
+.launcher-actions .button {
+  min-height: 44px;
+  border-color: transparent;
+  border-radius: var(--radius-md);
+  background: var(--track);
+  transition: background-color var(--duration-fast) ease;
+}
+.launcher-actions .button:not(:disabled):is(:hover, :focus-visible) { background: color-mix(in srgb, var(--text) 10%, var(--track)); }
+.launcher-actions .button svg { color: var(--link); }
+
+/* Scratchpad -------------------------------------------------------------- */
+.composer { padding: 18px 20px; border-radius: var(--radius-xl); }
+.composer textarea {
+  border-radius: var(--radius-md);
+  border-color: var(--well-border);
+  background: var(--well);
+  box-shadow: inset 0 1px 2px rgb(15 23 42 / 0.05);
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+.composer.drop-active {
+  border-color: var(--blue);
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 26%, transparent), var(--shadow);
+}
+.composer-hint { font-size: var(--text-caption); }
+.composer-actions { flex-wrap: wrap; }
+.scratch-grid { gap: var(--space-md); }
+.scratch-card { padding: 14px 16px; border-radius: var(--radius-xl); }
+.scratch-card-header { padding-bottom: var(--space-md); }
+.scratch-card-title h2 { font-size: 14px; font-weight: 720; }
+.scratch-card-title time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.scratch-type { border-radius: var(--radius-md); }
+.text-expand { border-radius: var(--radius-md); background: var(--well); border-color: var(--well-border); }
+.thumbnail { border-radius: var(--radius-md); box-shadow: inset 0 0 0 1px var(--border); }
+.card-tools { gap: var(--space-xs); padding-top: var(--space-sm); }
+.card-tools .icon-button { border-color: transparent; border-radius: var(--radius-md); }
+.card-tools .icon-button:not(:disabled):is(:hover, :focus-visible) { background: var(--track); }
+.pin-mark { padding: 2px 7px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--blue) 11%, transparent); }
+.empty-scratch { border-radius: var(--radius-xl); padding: 34px 16px; text-align: center; }
+.empty-scratch > svg { color: var(--link); }
+.ai-output { border-radius: var(--radius-md); }
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .scratch-card {
+    transition: translate var(--duration-standard) var(--ease-out), box-shadow var(--duration-standard) ease, border-color var(--duration-standard) ease;
+  }
+  .scratch-card:hover {
+    translate: 0 -2px;
+    border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
+    box-shadow: inset 0 1px 0 var(--glass-edge), inset 0 -1px 0 var(--glass-rim-bottom), var(--shadow-hover);
+  }
+}
+
+/* Settings ---------------------------------------------------------------- */
+.settings-dialog { border-radius: var(--radius-xl); box-shadow: var(--shadow-modal); }
+.settings-dialog > .modal-body { border-radius: inherit; }
+.settings-nav { gap: 3px; }
+.settings-nav .settings-category {
+  min-height: 38px;
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  font-weight: 640;
+  transition: background-color var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.settings-nav .settings-category:not([aria-selected="true"]):hover { color: var(--text); }
+.settings-nav .settings-category[aria-selected="true"] {
+  color: var(--link);
+  background-color: color-mix(in srgb, var(--blue) 11%, var(--track));
+  background-image: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 18%, transparent);
+}
+.settings-subsection { gap: var(--space-md); padding-top: var(--space-lg); }
+.settings-subsection h3 { font-size: 14px; font-weight: 720; }
+.settings-fields { gap: var(--space-lg); }
+.settings-row { gap: var(--space-sm) var(--space-md); min-height: 38px; }
+.settings-row > span { font-weight: 620; }
+.settings-device-row, .host-calendar-source { border-radius: var(--radius-md); }
+.overview-settings-card { min-height: 46px; }
+@media (width < 680px) {
+  .settings-nav .settings-category { border-radius: var(--radius-pill); min-height: 34px; }
+}
+
+/* AI Chat ----------------------------------------------------------------- */
+.modal.ai-chat { border-radius: var(--radius-xl); box-shadow: var(--shadow-modal); }
+.ai-chat .modal-body.surface { padding: 14px 15px; gap: var(--space-sm); }
+.ai-chat-scroll { gap: 10px; }
+.ai-quick .button { min-height: 36px; font-size: 13px; }
+.ai-bubble { border-radius: 18px 18px 18px 6px; padding: 9px 13px; }
+.ai-bubble.ai-user {
+  border-radius: 18px 18px 6px 18px;
+  color: var(--on-accent);
+  border-color: transparent;
+  background: var(--accent-solid);
+  box-shadow: var(--shadow-accent);
+}
+.ai-bubble.ai-user :is(a, code) { color: inherit; }
+.ai-bubble pre { border-radius: var(--radius-sm); }
+.ai-tool-badges > span { border-radius: var(--radius-pill); font-size: 11px; }
+.ai-confirmation, .ai-clear { border-radius: var(--radius-md); }
+.ai-composer { gap: var(--space-sm); padding-top: 10px; }
+.ai-composer textarea {
+  border-radius: var(--radius-lg);
+  border-color: var(--well-border);
+  background: var(--well);
+  padding: 9px 13px;
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+.ai-composer .icon-button {
+  border-radius: 50%;
+  border-color: transparent;
+  background: var(--accent-solid);
+  color: var(--on-accent);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .3), var(--shadow-accent);
+}
+.ai-composer .icon-button:not(:disabled):is(:hover, :focus-visible) { background: var(--accent-solid-hover); }
+.ai-composer .icon-button:disabled { opacity: .45; box-shadow: none; }
+.ai-cursor { background: var(--link); }
+@media (prefers-reduced-motion: no-preference) {
+  .ai-cursor { animation: ai-cursor-pulse 1s ease-in-out infinite; }
+}
+@keyframes ai-cursor-pulse { 50% { opacity: .3; } }
+@media (max-width: 700px) {
+  .modal.ai-chat { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
+}
+.ai-bubble.ai-user pre { background: rgb(0 0 0 / .2); border-color: rgb(255 255 255 / .18); }
