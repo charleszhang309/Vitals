@@ -19,6 +19,7 @@ MIB = 1024**2
 GIB = 1024**3
 OPENAI_MODEL = "gpt-6-luna"
 OPENAI_HOSTS = {"api.openai.com", "us.api.openai.com", "eu.api.openai.com"}
+SamplingMode = Literal["smart", "realtime", "eco"]
 _config_write_lock = Lock()
 
 
@@ -216,6 +217,7 @@ class Settings(ConfigModel):
     host: str = "0.0.0.0"
     port: int = Field(default=3993, strict=True, ge=1, le=65535)
     upload_limit_mib: int = Field(default=50, strict=True, gt=0)
+    sampling_mode: SamplingMode = "smart"
     lhm: LhmConfig = Field(default_factory=LhmConfig)
     task: TaskConfig = Field(default_factory=TaskConfig)
     alerts: AlertConfig = Field(default_factory=AlertConfig)

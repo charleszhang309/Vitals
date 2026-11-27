@@ -48,6 +48,7 @@
 
 ### 3. 硬件监控与远程控制
 - **精准传感器数据**：优先读取本地 **LibreHardwareMonitor**（CPU / GPU / 内存 / 风扇温度、功耗、频率与转速），`psutil` 补充磁盘空间、网络速率、累计流量与**内存占用 Top 5 进程**，LHM 断开时自动兜底。
+- **采样模式**：在「个性化设置 → 系统状态」切换实时（每 1 秒）、智能（默认，有客户端订阅硬件数据时每 1 秒，其余时间每 5 秒）或节能（每 5 秒）。设置保存在主机上并立即生效。
 - **实时双模曲线**：支持「占用 / 温度」分段切换，CPU / GPU / 内存 / 网络 4 张主卡片均可点击查看深度详情（含各核心负载）。
 - **白名单快捷控制**：「控制」页可展开全屏硬件监控，切换电源计划（可选联动 FanControl）、锁屏或关闭显示器。支持确认后 1 分钟关机、30 / 60 分钟预设及 1–1440 分钟自定义定时，倒计时结束前可取消。
 - **任务检测与告警推送**：支持高负载任务完工检测、高温与低磁盘空间告警，通过 Bark 或通用 JSON Webhook 推送到手机。
@@ -308,7 +309,8 @@ Apple 提醒事项 Agent 通过 `POST /api/todos/sync/reminders` 同步。请求
 
 | 方法与路径 | 说明 |
 | --- | --- |
-| `WS /ws/metrics` | 实时推送硬件快照（CPU / GPU / 内存 / 磁盘 / 网络 / 风扇 / 告警） |
+| `WS /ws/metrics` | 按当前采样间隔推送硬件快照（CPU / GPU / 内存 / 磁盘 / 网络 / 风扇 / 告警） |
+| `GET / PUT /api/system/sampling` | 查询或修改主机采样模式（`mode` 为 `realtime`、`smart` 或 `eco`） |
 | `GET / POST /api/control/power` | 查询或切换 Windows 电源计划 |
 | `POST /api/control/webhook/test` | 发送 Bark / Webhook 测试通知 |
 | `GET / POST /api/media/...` | 读取/控制 Windows SMTC 媒体会话、多源歌词与系统音量 |

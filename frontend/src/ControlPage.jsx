@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { Maximize2, MessageSquareQuote, Mic, MicOff, Music2, Volume2, VolumeX } from 'lucide-react';
 import { postJson, request } from './api.js';
 import { IconButton, Modal, ProgressBar } from './ui.jsx';
@@ -389,10 +390,12 @@ function PlaybackControls({ media, sound, open, onOpenChange, onAction, commandS
       <PlayerCard media={media} onOpen={() => onOpenChange(true)} onAction={onAction} />
       <VolumeCard sound={sound} />
     </div>
-    {open ? <NowPlaying media={media} sound={sound} lyricsPreferred={lyricsPreferred} onLyrics={setLyricsPreferred}
-      onClose={() => onOpenChange(false)} onAction={onAction} commandStatus={commandStatus} commandError={commandError} />
-      : commandError ? <p className="feedback error" role="alert">{commandError}</p>
-      : commandStatus && <p className="feedback muted" role="status">{commandStatus}</p>}
+    <AnimatePresence>
+      {open && <NowPlaying media={media} sound={sound} lyricsPreferred={lyricsPreferred} onLyrics={setLyricsPreferred}
+        onClose={() => onOpenChange(false)} onAction={onAction} commandStatus={commandStatus} commandError={commandError} />}
+    </AnimatePresence>
+    {!open && (commandError ? <p className="feedback error" role="alert">{commandError}</p>
+      : commandStatus && <p className="feedback muted" role="status">{commandStatus}</p>)}
   </>;
 }
 

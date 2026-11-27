@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { Activity, Clipboard, Coffee, LockKeyhole, MonitorOff, Moon } from 'lucide-react';
 import { postJson } from './api.js';
 import { bytes, measure, rateText, sleepTime, time } from './format.js';
@@ -340,13 +341,15 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
         unavailableLabel: offlineLabel ?? '当前输出设备未提供音量',
       },
     })}
-    {confirm && <Modal id="remote-confirm" className="detail-dialog shutdown-dialog"
-      title={`确认${actions[confirm]}`} onClose={() => setConfirm(null)}>
-      <p className="muted">确定让 {device.name} {actions[confirm]}吗？</p>
-      <div className="quick-confirm-actions">
-        <Button onClick={() => setConfirm(null)}>取消</Button>
-        <Button disabled={disabled} onClick={() => { send(confirm); setConfirm(null); }}>确认</Button>
-      </div>
-    </Modal>}
+    <AnimatePresence>
+      {confirm && <Modal id="remote-confirm" className="detail-dialog shutdown-dialog"
+        title={`确认${actions[confirm]}`} onClose={() => setConfirm(null)}>
+        <p className="muted">确定让 {device.name} {actions[confirm]}吗？</p>
+        <div className="quick-confirm-actions">
+          <Button onClick={() => setConfirm(null)}>取消</Button>
+          <Button disabled={disabled} onClick={() => { send(confirm); setConfirm(null); }}>确认</Button>
+        </div>
+      </Modal>}
+    </AnimatePresence>
   </>;
 }

@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { Activity, ArrowDown, ArrowUp, Download, ImagePlus, Inbox, Info, LayoutGrid, Palette, RotateCcw, ServerCog, Sparkles, Upload } from 'lucide-react';
 import { httpUrl, request, sendJson } from './api.js';
 import { Button, IconButton, Modal, Segmented } from './ui.jsx';
@@ -6,6 +7,7 @@ import { defaultCardOrder, orderedCards, overviewModules, overviewStrips, readCa
 import { clockStyles } from './Clock.jsx';
 import { DeviceDot, HUB_DEVICE_ID } from './RemoteDevice.jsx';
 import { AboutSettings, useReleaseUpdates } from './AboutSettings.jsx';
+import SamplingModeSettings from './SamplingModeSettings.jsx';
 const HostSetup = lazy(() => import('./HostSetup.jsx'));
 
 const STORAGE_KEY = 'pcc-appearance';
@@ -424,15 +426,17 @@ function DeviceSettings({ hub, devices, aliases, defaultDevice, error, onDefault
         onRemove={(item) => { setFeedback(''); setPendingRemoval(item); }} />)}
     </div>
     {(error || (feedback && !pendingRemoval)) && <p className="feedback error" role="alert">{feedback || error}</p>}
-    {pendingRemoval && <Modal id="remove-device" title="移除离线设备" className="detail-dialog shutdown-dialog"
-      onClose={() => !busy && setPendingRemoval(null)}>
-      <p>移除「{pendingRemoval.name}」并清除它的昵称及最后一次设备快照？</p>
-      {feedback && <p className="feedback error" role="alert">{feedback}</p>}
-      <div className="quick-confirm-actions">
-        <Button disabled={busy} onClick={() => setPendingRemoval(null)}>取消</Button>
-        <Button className="primary-button" disabled={busy} onClick={() => mutate(() => onRemove(pendingRemoval.device_id))}>确认移除</Button>
-      </div>
-    </Modal>}
+    <AnimatePresence>
+      {pendingRemoval && <Modal id="remove-device" title="移除离线设备" className="detail-dialog shutdown-dialog"
+        onClose={() => !busy && setPendingRemoval(null)}>
+        <p>移除「{pendingRemoval.name}」并清除它的昵称及最后一次设备快照？</p>
+        {feedback && <p className="feedback error" role="alert">{feedback}</p>}
+        <div className="quick-confirm-actions">
+          <Button disabled={busy} onClick={() => setPendingRemoval(null)}>取消</Button>
+          <Button className="primary-button" disabled={busy} onClick={() => mutate(() => onRemove(pendingRemoval.device_id))}>确认移除</Button>
+        </div>
+      </Modal>}
+    </AnimatePresence>
   </section>;
 }
 
@@ -472,16 +476,18 @@ function BackupSettings() {
     }} />
     {!file && feedback && <p className={feedback.error ? 'feedback error' : 'feedback'}
       role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p>}
-    {file && <Modal id="restore-backup" title="确认恢复备份" className="detail-dialog shutdown-dialog"
-      onClose={() => !busy && setFile(null)}>
-      <p className="backup-file-name">{file.name}</p>
-      <p>重启后将用备份替换本机数据库、中转站附件和壁纸。</p>
-      {feedback && <p className="feedback error" role="alert">{feedback.text}</p>}
-      <div className="quick-confirm-actions">
-        <Button disabled={busy} onClick={() => { setFile(null); setFeedback(null); }}>取消</Button>
-        <Button className="primary-button" disabled={busy} onClick={restore}>{busy ? '正在校验…' : '确认恢复'}</Button>
-      </div>
-    </Modal>}
+    <AnimatePresence>
+      {file && <Modal id="restore-backup" title="确认恢复备份" className="detail-dialog shutdown-dialog"
+        onClose={() => !busy && setFile(null)}>
+        <p className="backup-file-name">{file.name}</p>
+        <p>重启后将用备份替换本机数据库、中转站附件和壁纸。</p>
+        {feedback && <p className="feedback error" role="alert">{feedback.text}</p>}
+        <div className="quick-confirm-actions">
+          <Button disabled={busy} onClick={() => { setFile(null); setFeedback(null); }}>取消</Button>
+          <Button className="primary-button" disabled={busy} onClick={restore}>{busy ? '正在校验…' : '确认恢复'}</Button>
+        </div>
+      </Modal>}
+    </AnimatePresence>
   </section>;
 }
 
@@ -563,6 +569,7 @@ export function AppearanceDialog({ appearance, onClose, ai, telemetry, deviceSet
           {category === 'system' && <div className="settings-fields">
             <DesktopModeSettings />
             <SystemStatus telemetry={telemetry} platform={deviceSettings.hub.platform} />
+            <SamplingModeSettings />
             <DeviceSettings {...deviceSettings} />
             <BackupSettings />
           </div>}

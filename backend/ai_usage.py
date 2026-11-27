@@ -159,15 +159,24 @@ class AiUsage:
         self.locks = {provider: asyncio.Lock() for provider in ("deepseek", "openai", "anthropic")}
 
     def local_source(self, source, name, start, end, now):
+        quota = None
         try:
             if source == "vitals":
                 totals = self.ledger.daily(start, end, self.zone)
+            elif not self.local.available(source):
+                totals = None
+            elif source == "codex":
+                totals, quota = self.local.codex_daily(start, end, self.zone)
             else:
-                totals = self.local.daily(source, start, end, self.zone) if self.local.available(source) else None
+                totals = self.local.daily(source, start, end, self.zone)
         except (OSError, sqlite3.Error) as error:
             logger.info("读取 AI 用量失败（%s，%s）", source, type(error).__name__)
             totals = None
-        return week_summary(source, name, start, end, self.zone, totals=totals, updated_at=now)
+        result = week_summary(source, name, start, end, self.zone, totals=totals, updated_at=now)
+        if source == "codex":
+            quota = quota or {}
+            result["quota"] = {"five_hour": quota.get("five_hour"), "seven_day": quota.get("seven_day")}
+        return result
 
     async def provider_source(self, provider, name, setting, client, now):
         end = now.date()

@@ -325,14 +325,16 @@ export default function ScratchpadPage({ aiEnabled = false }) {
           </AnimatePresence></ul>
         </>
       )}
-      {activeImage && <Modal id="image-preview" title={activeImage.filename} className="preview-dialog" onClose={() => setActiveImage(null)}>
-        <img className="preview-image" src={fileUrl(activeImage.id)} alt={activeImage.filename} />
-        <div className="card-tools"><IconButton label="下载图片" href={fileUrl(activeImage.id, true)} download><Download size={18} /></IconButton></div>
-      </Modal>}
-      {activeDocument && <Suspense fallback={null}>
-        <DocumentPreview item={activeDocument} inline={httpUrl(`${SCRATCHPAD}/files/${activeDocument.id}?preview=true`).href}
-          download={fileUrl(activeDocument.id, true)} onClose={() => setActiveDocument(null)} />
-      </Suspense>}
+      <AnimatePresence>
+        {activeImage && <Modal key="image" id="image-preview" title={activeImage.filename} className="preview-dialog" onClose={() => setActiveImage(null)}>
+          <img className="preview-image" src={fileUrl(activeImage.id)} alt={activeImage.filename} />
+          <div className="card-tools"><IconButton label="下载图片" href={fileUrl(activeImage.id, true)} download><Download size={18} /></IconButton></div>
+        </Modal>}
+        {activeDocument && <Suspense key="document" fallback={null}>
+          <DocumentPreview item={activeDocument} inline={httpUrl(`${SCRATCHPAD}/files/${activeDocument.id}?preview=true`).href}
+            download={fileUrl(activeDocument.id, true)} onClose={() => setActiveDocument(null)} />
+        </Suspense>}
+      </AnimatePresence>
     </>
   );
 }

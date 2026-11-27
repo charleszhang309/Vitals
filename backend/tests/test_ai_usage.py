@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import httpx
+import pytest
 
 from backend.ai import complete_text
 from backend.ai_log_usage import LogUsage
@@ -14,6 +15,43 @@ from backend.config import AiUsageConfig, Settings
 from backend.main import create_app
 from backend.scratchpad import Scratchpad
 from backend.tests.test_stage10 import app_for, client_for
+
+
+def codex_quota_record(timestamp, primary, secondary, info=None):
+    return {"timestamp": timestamp, "type": "event_msg", "payload": {
+        "type": "token_count", "info": info, "rate_limits": {"primary": primary, "secondary": secondary},
+    }}
+
+
+@pytest.mark.parametrize("primary,secondary,expected", [
+    pytest.param(
+        {"used_percent": 23.7, "window_minutes": 10080, "resets_at": 1767952800}, None,
+        {"five_hour": None, "seven_day": {"remaining_percent": 76, "resets_at": 1767952800}}, id="pro",
+    ),
+    pytest.param(
+        {"used_percent": 104, "window_minutes": 300, "resets_at": 1767445200},
+        {"used_percent": -1, "window_minutes": 10080, "resets_at": 1767952800},
+        {"five_hour": {"remaining_percent": 0, "resets_at": 1767445200},
+         "seven_day": {"remaining_percent": 100, "resets_at": 1767952800}}, id="plus",
+    ),
+])
+def test_codex_usage_returns_the_latest_quota_snapshot(tmp_path, primary, secondary, expected):
+    root = tmp_path / "sessions"
+    root.mkdir()
+    old = codex_quota_record("2026-01-03T09:00:00Z", {"used_percent": 14, "window_minutes": 300}, None,
+                             {"total_token_usage": {"total_tokens": 42}})
+    valid = codex_quota_record("2026-01-03T10:00:00Z", primary, secondary)
+    invalid = codex_quota_record("2026-01-03T11:00:00Z", {"used_percent": True, "window_minutes": 300},
+                                 {"used_percent": 22, "window_minutes": 720})
+    (root / "old.jsonl").write_text(f"{json.dumps(old)}\n{json.dumps(invalid)}\n", encoding="utf-8")
+    (root / "new.jsonl").write_text(json.dumps(valid), encoding="utf-8")
+
+    client_usage = AiUsage(None, AiUsageConfig(), ZoneInfo("UTC"), local=LogUsage(root))
+    now = datetime(2026, 1, 3, 12, tzinfo=timezone.utc)
+    result = client_usage.local_source("codex", "Codex", now.date(), now.date(), now)
+
+    assert result["quota"] == expected
+    assert result["today_tokens"] == 42
 
 
 def test_vitals_counts_stream_usage_once_and_records_briefing(tmp_path, monkeypatch):
@@ -91,6 +129,7 @@ def test_cloud_usage_paginates_caches_and_distinguishes_balance(tmp_path):
     assert "fixture-" not in first.text
     result = {item["id"]: item for item in first.json()["sources"]}
     assert not result["codex"]["available"]
+    assert result["codex"]["quota"] == {"five_hour": None, "seven_day": None}
     assert result["deepseek"]["available"] and result["deepseek"]["today_tokens"] is None
     assert result["deepseek"]["balances"] == [{"currency": "USD", "amount": "9.25"}]
     assert result["openai"]["today_tokens"] == 300

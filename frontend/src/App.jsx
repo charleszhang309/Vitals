@@ -173,20 +173,23 @@ export default function App() {
             </motion.section>
           </AnimatePresence>
         </main>
-        {chat && ai.settings?.enabled && <Suspense fallback={null}>
-          <AiChat settings={ai.settings} onClose={() => setChat(false)} />
-        </Suspense>}
-        {settings && <AppearanceDialog appearance={appearance} ai={ai} telemetry={telemetry}
-          deviceSettings={{ hub, devices, aliases, defaultDevice, error: agents.error || aliasResource.error,
-            onRename: renameDevice, onRemove: removeDevice,
-            onDefault: (id) => { appearance.update('defaultDevice', id); chooseDevice(null); } }}
-          onClose={() => {
-          if (!ai.settings?.enabled) setChat(false);
-          setSettings(false);
-        }} />}
-        {monitorOpen && <MonitorPage telemetry={telemetry} dark={dark} power={power} hub={hub} onClose={() => setMonitorOpen(false)}
-          devices={onlineDevices} device={device} onDevice={chooseDevice} />}
-        {clockOpen && <ClockDialog style={appearance.preferences.clockStyle} focus={focusTimer} onClose={() => setClockOpen(false)} />}
+        <AnimatePresence>
+          {chat && ai.settings?.enabled && <Suspense key="chat" fallback={null}>
+            <AiChat settings={ai.settings} onClose={() => setChat(false)} />
+          </Suspense>}
+          {settings && <AppearanceDialog key="settings" appearance={appearance} ai={ai} telemetry={telemetry}
+            deviceSettings={{ hub, devices, aliases, defaultDevice, error: agents.error || aliasResource.error,
+              onRename: renameDevice, onRemove: removeDevice,
+              onDefault: (id) => { appearance.update('defaultDevice', id); chooseDevice(null); } }}
+            onClose={() => {
+              if (!ai.settings?.enabled) setChat(false);
+              setSettings(false);
+            }} />}
+          {monitorOpen && <MonitorPage key="monitor" telemetry={telemetry} dark={dark} power={power} hub={hub}
+            onClose={() => setMonitorOpen(false)} devices={onlineDevices} device={device} onDevice={chooseDevice} />}
+          {clockOpen && <ClockDialog key="clock" style={appearance.preferences.clockStyle} focus={focusTimer}
+            onClose={() => setClockOpen(false)} />}
+        </AnimatePresence>
         <FocusNotice notice={focusTimer.notice} clockOpen={clockOpen} />
       </AppearanceFrame>
     </MotionConfig>

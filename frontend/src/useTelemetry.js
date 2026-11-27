@@ -19,7 +19,7 @@ export function useTelemetry(enabled = true) {
     let disposed = false;
 
     function connect() {
-      if (disposed) return;
+      if (disposed || document.hidden || socket) return;
       retry = undefined;
       startedAt = Date.now();
       lastFrameAt = undefined;
@@ -28,7 +28,7 @@ export function useTelemetry(enabled = true) {
       socket = current;
 
       current.onopen = () => {
-        if (!disposed) setConnection('online');
+        if (!disposed && socket === current) setConnection('online');
       };
       current.onmessage = (event) => {
         if (disposed || socket !== current) return;
@@ -63,8 +63,10 @@ export function useTelemetry(enabled = true) {
         if (disposed || socket !== current) return;
         socket = undefined;
         setConnection('offline');
-        retry = window.setTimeout(connect, Math.min(750 * 2 ** attempts, 10_000));
-        attempts = Math.min(attempts + 1, 4);
+        if (!document.hidden) {
+          retry = window.setTimeout(connect, Math.min(750 * 2 ** attempts, 10_000));
+          attempts = Math.min(attempts + 1, 4);
+        }
       };
     }
 
@@ -76,15 +78,35 @@ export function useTelemetry(enabled = true) {
       }
     }
 
+    function disconnect() {
+      window.clearTimeout(retry);
+      retry = undefined;
+      const current = socket;
+      socket = undefined;
+      current?.close();
+    }
+
+    function visibilityChanged() {
+      if (document.hidden) {
+        // 后台标签页释放订阅，让中心端在没有查看者时降频。
+        disconnect();
+      } else if (socket) {
+        checkFreshness();
+      } else {
+        window.clearTimeout(retry);
+        attempts = 0;
+        connect();
+      }
+    }
+
     connect();
     const heartbeat = window.setInterval(checkFreshness, 2500);
-    document.addEventListener('visibilitychange', checkFreshness);
+    document.addEventListener('visibilitychange', visibilityChanged);
     return () => {
       disposed = true;
-      window.clearTimeout(retry);
       window.clearInterval(heartbeat);
-      document.removeEventListener('visibilitychange', checkFreshness);
-      socket?.close();
+      document.removeEventListener('visibilitychange', visibilityChanged);
+      disconnect();
     };
   }, [enabled]);
 

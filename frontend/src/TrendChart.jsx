@@ -14,13 +14,17 @@ export default function TrendChart({ history, gpuId, dark, mode }) {
     const unit = temperature ? '°C' : '%';
     let previous;
     for (const point of history) {
-      if (previous !== undefined && point.epoch - previous > 4500) {
-        for (const line of lines) line.push([previous + 1500, null]);
+      if (previous) {
+        const gap = point.epoch - previous.epoch;
+        const interval = Math.max(previous.sampling_interval_seconds ?? 0, point.sampling_interval_seconds ?? 0);
+        if (gap > Math.max(4500, interval * 1500)) {
+          for (const line of lines) line.push([previous.epoch + gap / 2, null]);
+        }
       }
       lines[0].push([point.epoch, point.cpu[key] ?? null]);
       lines[1].push([point.epoch, point.gpus.find((item) => item.id === gpuId)?.[key] ?? null]);
       if (!temperature) lines[2].push([point.epoch, point.memory.percent]);
-      previous = point.epoch;
+      previous = point;
     }
     return {
       ...plotStyle(dark, (value) => measure(value, unit)),

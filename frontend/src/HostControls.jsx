@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { Activity, Coffee, Lock, MonitorOff, Moon, Power, RotateCw, Timer, XCircle } from 'lucide-react';
 import { postJson, request } from './api.js';
 import { measure, rateText, time } from './format.js';
@@ -144,34 +145,36 @@ export function QuickControlCard() {
     </div>
     {deadline && <ShutdownCountdown deadline={deadline} />}
     {(busy || feedback) && <p className={`feedback ${feedback?.error ? 'error' : ''}`} role={feedback?.error ? 'alert' : 'status'}>{busy ? '正在处理…' : feedback.text}</p>}
-    {dialog === 'schedule' && <Modal id="schedule-shutdown" className="detail-dialog shutdown-dialog" title="定时关机" onClose={close}>
-      <form className="shutdown-form" onSubmit={(event) => {
-        event.preventDefault();
-        if (!unavailable && valid) run(minutes);
-      }}>
-        <div className="shutdown-presets" role="group" aria-label="关机时间预设">
-          {[30, 60].map((preset) => <Button key={preset} aria-pressed={draft === String(preset)}
-            onClick={() => setDraft(String(preset))}>{preset}分钟</Button>)}
-        </div>
-        <label>自定义关机分钟数
-          <input type="number" className="numeric" min="1" max="1440" step="1" inputMode="numeric" value={draft}
-            placeholder="1–1440 分钟" onChange={(event) => setDraft(event.target.value)} />
-        </label>
-        {valid && <p className="muted">Windows 将在 {minutes} 分钟后关机，倒计时结束前可取消。</p>}
+    <AnimatePresence>
+      {dialog === 'schedule' && <Modal key="schedule" id="schedule-shutdown" className="detail-dialog shutdown-dialog" title="定时关机" onClose={close}>
+        <form className="shutdown-form" onSubmit={(event) => {
+          event.preventDefault();
+          if (!unavailable && valid) run(minutes);
+        }}>
+          <div className="shutdown-presets" role="group" aria-label="关机时间预设">
+            {[30, 60].map((preset) => <Button key={preset} aria-pressed={draft === String(preset)}
+              onClick={() => setDraft(String(preset))}>{preset}分钟</Button>)}
+          </div>
+          <label>自定义关机分钟数
+            <input type="number" className="numeric" min="1" max="1440" step="1" inputMode="numeric" value={draft}
+              placeholder="1–1440 分钟" onChange={(event) => setDraft(event.target.value)} />
+          </label>
+          {valid && <p className="muted">Windows 将在 {minutes} 分钟后关机，倒计时结束前可取消。</p>}
+          <div className="quick-confirm-actions">
+            <Button onClick={close}>取消</Button>
+            <Button className="primary-button" type="submit" disabled={unavailable || !valid}>确认</Button>
+          </div>
+        </form>
+      </Modal>}
+      {(locked || dialog === 'immediate') && <Modal key="confirm" id="confirm-quick-control" className="detail-dialog shutdown-dialog"
+        title={locked ? '确认锁屏' : '确认 1 分钟后关机'} onClose={close}>
+        <p>{locked ? 'Windows 将锁定当前桌面，解锁需要重新验证身份。' : 'Windows 将在 1 分钟后关机，倒计时结束前可取消。'}</p>
         <div className="quick-confirm-actions">
           <Button onClick={close}>取消</Button>
-          <Button className="primary-button" type="submit" disabled={unavailable || !valid}>确认</Button>
+          <Button onClick={() => run(locked ? 'lock' : 1)} disabled={locked ? busy : unavailable}>{locked ? '确认锁屏' : '确认关机'}</Button>
         </div>
-      </form>
-    </Modal>}
-    {(locked || dialog === 'immediate') && <Modal id="confirm-quick-control" className="detail-dialog shutdown-dialog"
-      title={locked ? '确认锁屏' : '确认 1 分钟后关机'} onClose={close}>
-      <p>{locked ? 'Windows 将锁定当前桌面，解锁需要重新验证身份。' : 'Windows 将在 1 分钟后关机，倒计时结束前可取消。'}</p>
-      <div className="quick-confirm-actions">
-        <Button onClick={close}>取消</Button>
-        <Button onClick={() => run(locked ? 'lock' : 1)} disabled={locked ? busy : unavailable}>{locked ? '确认锁屏' : '确认关机'}</Button>
-      </div>
-    </Modal>}
+      </Modal>}
+    </AnimatePresence>
   </section>;
 }
 
@@ -209,12 +212,14 @@ export function MacQuickControlCard() {
     {feedback && <p className={feedback.error ? 'feedback error' : 'feedback'} role={feedback.error ? 'alert' : 'status'}>
       {feedback.text}
     </p>}
-    {confirmSleep && <Modal id="confirm-mac-sleep" className="detail-dialog" title="确认休眠" onClose={() => setConfirmSleep(false)}>
-      <p>Mac 休眠期间，Vitals 网页可能无法连接。</p>
-      <div className="quick-confirm-actions">
-        <Button onClick={() => setConfirmSleep(false)}>取消</Button>
-        <Button onClick={() => send('sleep')}>确认休眠</Button>
-      </div>
-    </Modal>}
+    <AnimatePresence>
+      {confirmSleep && <Modal id="confirm-mac-sleep" className="detail-dialog" title="确认休眠" onClose={() => setConfirmSleep(false)}>
+        <p>Mac 休眠期间，Vitals 网页可能无法连接。</p>
+        <div className="quick-confirm-actions">
+          <Button onClick={() => setConfirmSleep(false)}>取消</Button>
+          <Button onClick={() => send('sleep')}>确认休眠</Button>
+        </div>
+      </Modal>}
+    </AnimatePresence>
   </section>;
 }

@@ -13,9 +13,10 @@ import sys
 from threading import Lock, Thread
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 import httpx
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from websockets.exceptions import ConnectionClosed
@@ -26,7 +27,7 @@ from .ai_tools import AiTools
 from .ai_usage import AiUsage, UsageLedger, usage_router
 from .backup import Backups, backup_router
 from .calendar_service import CalendarService, calendar_router
-from .config import MIB, ROOT, Settings, load_settings
+from .config import ConfigModel, MIB, ROOT, SamplingMode, Settings, load_settings, update_settings_file
 from .control import MacPowerControl, PowerControl, control_router
 from .health import HealthStore, health_router
 from .life import LifeStore, life_router
@@ -48,6 +49,10 @@ DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 HTTP_AUTHORITY = re.compile(r"(?:\[[^\[\]]+\]|[^:\[\]]+)(?::[0-9]+)?")
 DISCONNECT_ERRORS = (WebSocketDisconnect, RuntimeError, OSError, ConnectionClosed)
 logger = logging.getLogger(__name__)
+
+
+class SamplingPreference(ConfigModel):
+    mode: SamplingMode
 
 
 def local_address(value: str) -> bool:
@@ -241,14 +246,36 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     app.include_router(usage_router(AiUsage(usage_ledger, settings.ai_usage, health.zone)))
     app.include_router(media_router(media, LyricsCache(store), agents))
 
+    sampling_write_lock = asyncio.Lock()
+
+    @app.get("/api/system/sampling")
+    async def get_sampling(response: Response) -> SamplingPreference:
+        response.headers["Cache-Control"] = "no-store"
+        monitor = getattr(app.state, "monitor", None)
+        mode = settings.sampling_mode if monitor is None else monitor.sampling_mode
+        return SamplingPreference(mode=mode)
+
+    @app.put("/api/system/sampling")
+    async def update_sampling(preference: SamplingPreference) -> SamplingPreference:
+        if config_path is None:
+            raise HTTPException(409, "此服务未指定配置文件，无法保存采样模式")
+        monitor = getattr(app.state, "monitor", None)
+        if monitor is None:
+            raise HTTPException(503, "硬件监控尚未启动")
+        async with sampling_write_lock:
+            try:
+                await run_in_threadpool(update_settings_file, config_path,
+                                        lambda document, _: document.update(sampling_mode=preference.mode))
+            except (OSError, ValueError):
+                raise HTTPException(409, "无法保存采样模式，请检查服务端配置文件后重试") from None
+            monitor.set_sampling_mode(preference.mode)
+        return preference
+
     @app.websocket("/ws/metrics")
     async def metrics(websocket: WebSocket):
         monitor: Monitor = websocket.app.state.monitor
-        queue = asyncio.Queue(maxsize=1)
         await websocket.accept()
-        monitor.subscribers.add(queue)
-        if monitor.latest is not None:
-            queue.put_nowait(monitor.latest)
+        queue = monitor.subscribe()
 
         async def send_snapshots():
             while True:
@@ -271,7 +298,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
                 with suppress(Exception):
                     await asyncio.wait_for(websocket.close(code=1013), timeout=2)
         finally:
-            monitor.subscribers.discard(queue)
+            monitor.unsubscribe(queue)
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)

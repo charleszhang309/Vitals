@@ -2,6 +2,7 @@
   "host": "0.0.0.0",
   "port": 3993,
   "upload_limit_mib": 50,
+  "sampling_mode": "smart",
   "weather": {
     "city_name": "伦敦",
     "latitude": 51.5074,

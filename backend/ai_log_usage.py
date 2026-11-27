@@ -1,4 +1,4 @@
-"""Read aggregate token activity from local CLI transcripts."""
+"""Read aggregate token activity and Codex quota from local CLI transcripts."""
 
 from collections import defaultdict
 from dataclasses import dataclass
@@ -6,6 +6,7 @@ from datetime import date, datetime, time, timezone
 from hashlib import blake2b
 from itertools import chain
 import json
+from math import isfinite
 import os
 from pathlib import Path
 from stat import S_ISREG
@@ -20,6 +21,7 @@ class _Usage:
     tokens: int | None
     cumulative: int | None = None
     message_key: tuple[str, str] | None = None
+    quota: dict[str, dict[str, int | None]] | None = None
 
 
 @dataclass(frozen=True)
@@ -49,7 +51,7 @@ class _FileUsage:
 
 
 class LogUsage:
-    """Index local transcripts in memory and return sparse daily token counts."""
+    """Index local transcripts in memory and return aggregate usage and quota."""
 
     def __init__(self, codex_root: Path | None = None, claude_root: Path | None = None):
         self._roots = {
@@ -67,12 +69,25 @@ class LogUsage:
 
     def daily(self, source: str, start: date, end: date, zone: ZoneInfo) -> dict[date, int]:
         """Return tokens grouped by local date between inclusive endpoints."""
+        days, _ = self._daily(source, start, end, zone)
+        return days
+
+    def codex_daily(self, start: date, end: date, zone: ZoneInfo):
+        """Return Codex daily counts and the latest usable quota snapshot together."""
+        return self._daily("codex", start, end, zone)
+
+    def _daily(self, source: str, start: date, end: date, zone: ZoneInfo):
         if start > end:
-            return {}
+            return {}, None
         with self._locks[source]:
             files = self._refresh(source, start, zone)
+            latest_quota = None
             if source == "codex":
                 usage = chain.from_iterable(_codex_usage(file.rows()) for file in files)
+                for file in files:
+                    for row in file.rows():
+                        if row.quota and (latest_quota is None or row.timestamp >= latest_quota.timestamp):
+                            latest_quota = row
             else:
                 usage = _claude_usage(chain.from_iterable(file.rows() for file in files))
             days = defaultdict(int)
@@ -83,7 +98,7 @@ class LogUsage:
                     continue
                 if start <= day <= end and tokens > 0:
                     days[day] += tokens
-            return dict(days)
+            return dict(days), latest_quota.quota if latest_quota else None
 
     def _refresh(self, source: str, start: date, zone: ZoneInfo):
         files = self._files[source]
@@ -189,6 +204,29 @@ def _codex_tokens(value):
     return None
 
 
+def _codex_quota(value):
+    quota = {}
+    limits = _object(value)
+    for slot in ("primary", "secondary"):
+        window = _object(limits.get(slot))
+        minutes = _count(window.get("window_minutes"))
+        used = window.get("used_percent")
+        if not minutes or type(used) not in (int, float) or (type(used) is float and not isfinite(used)):
+            continue
+        if minutes <= 360:
+            key = "five_hour"
+        elif minutes >= 1440:
+            key = "seven_day"
+        else:
+            continue
+        if key not in quota:
+            quota[key] = {
+                "remaining_percent": round(max(0, min(100, 100 - used))),
+                "resets_at": _count(window.get("resets_at")),
+            }
+    return quota or None
+
+
 def _codex_record(row, timestamp):
     event = _object(row.get("payload"))
     if row.get("type") != "event_msg" or event.get("type") != "token_count":
@@ -196,8 +234,9 @@ def _codex_record(row, timestamp):
     info = _object(event.get("info"))
     total = _codex_tokens(info.get("total_token_usage"))
     last = _codex_tokens(info.get("last_token_usage"))
-    if total is not None or last is not None:
-        return _Usage(timestamp, last, cumulative=total)
+    quota = _codex_quota(event.get("rate_limits"))
+    if total is not None or last is not None or quota:
+        return _Usage(timestamp, last, cumulative=total, quota=quota)
     return None
 
 

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Cloud, CloudDrizzle, CloudFog, CloudLightning, CloudRain, CloudSun, Flame, Footprints, HeartPulse, MoonStar, RotateCw, Snowflake, Sparkles, Sun } from 'lucide-react';
 import { MediaCover, playbackLabels } from './ControlPage.jsx';
 import { request } from './api.js';
@@ -233,11 +233,11 @@ function HealthPreview({ resource, wide, weekly }) {
       ([label, value, goal]) => `${label}目标 ${Number.isFinite(value) ? `${Math.round(value / goal * 100)}%` : '暂无数据'}`
     ).join('，')}>
       {rings.map(([label, value, goal, color, radius]) => {
-        const progress = Number.isFinite(value) ? Math.min(100, Math.max(0, value / goal * 100)) : 0;
+        const progress = Number.isFinite(value) ? Math.min(1, Math.max(0, value / goal)) : 0;
         return <g key={label} stroke={color}>
           <circle cx="44" cy="44" r={radius} opacity=".18" />
-          {progress > 0 && <circle cx="44" cy="44" r={radius} pathLength="100" strokeLinecap="round"
-            strokeDasharray={progress === 100 ? undefined : `${progress} 100`} transform="rotate(-90 44 44)" />}
+          {progress > 0 && <circle className="health-ring-fill" cx="44" cy="44" r={radius} pathLength="1" strokeLinecap="round"
+            strokeDasharray={`${progress} 1`} transform="rotate(-90 44 44)" />}
         </g>;
       })}
     </svg>
@@ -322,21 +322,21 @@ function Weather({ resource, dark }) {
 }
 
 function HealthTile({ title, Icon, tone, value, unit, details, onOpen }) {
-  return <motion.section className={`surface metric health-metric detail-tile tone-${tone}`} whileTap={{ scale: 0.97 }}>
+  return <section className={`surface metric health-metric detail-tile tone-${tone}`}>
     <div className="metric-header flex items-center gap-3"><span className="metric-icon"><Icon size={22} aria-hidden="true" /></span><h3>{title}</h3></div>
     <div className="metric-reading numeric">{value}{unit && value !== '—' && <span>{unit}</span>}</div>
     <dl className="metric-details">
       {details.map(([label, item]) => <div key={label} className="flex items-center gap-2"><dt>{label}</dt><dd className="numeric">{item}</dd></div>)}
     </dl>
     <DetailLink title={title} onClick={onOpen} />
-  </motion.section>;
+  </section>;
 }
 
 function VitalTile({ title, value, onOpen }) {
-  return <motion.section className="surface panel detail-tile" whileTap={{ scale: 0.97 }}>
+  return <section className="surface panel detail-tile">
     <h3>{title}</h3><div className="health-extra-value numeric">{value}</div>
     <DetailLink title={title} onClick={onOpen} />
-  </motion.section>;
+  </section>;
 }
 
 function SleepCard({ sleep }) {
@@ -417,7 +417,9 @@ function Health({ resource, weekly, dark }) {
           </div>
         </div>
       </div>
-      {detail && <Suspense fallback={null}><HealthDetails category={detail} dark={dark} onClose={() => setDetail(null)} /></Suspense>}
+      <AnimatePresence>
+        {detail && <Suspense fallback={null}><HealthDetails category={detail} dark={dark} onClose={() => setDetail(null)} /></Suspense>}
+      </AnimatePresence>
     </section>
   );
 }
@@ -471,19 +473,21 @@ export default function TodayPage({ telemetry, media, hub, primaryDevice, waitin
     {visible('briefing') && briefingEnabled && <DailyBriefing />}
     {shown.length > 0 && <div className="overview-grid">
       {shown.map(({ id, title, Icon, tone }) => (
-        <motion.section key={id} className={`surface detail-tile overview-widget tone-${tone}`} data-widget={id}
-          data-width={isWide(id) ? 'wide' : 'standard'} whileTap={{ scale: 0.98 }}>
+        <section key={id} className={`surface detail-tile overview-widget tone-${tone}`} data-widget={id}
+          data-width={isWide(id) ? 'wide' : 'standard'}>
           <header><span className="metric-icon"><Icon size={18} aria-hidden="true" /></span><h2>{title}</h2>
             {id === 'weather' && <div className="widget-aqi"><AirBadge air={weather.data?.air_quality} compact /></div>}
           </header>
           <div className="widget-content">{previews[id]}</div>
           <DetailLink title={title} onClick={() => setOpen(id)} />
-        </motion.section>
+        </section>
       ))}
     </div>}
-    {selected?.id === 'calendar' && <CalendarDetails resource={calendar} onClose={() => setOpen(null)} />}
-    {selected && selected.id !== 'calendar' && <Modal id={`overview-${selected.id}`} title={selected.id === 'weather' && weather.data?.city_name
-      ? `天气 · ${weather.data.city_name}` : selected.title} className={`detail-dialog overview-dialog ${selected.id}-dialog`}
-      onClose={() => setOpen(null)}>{details[selected.id]}</Modal>}
+    <AnimatePresence>
+      {selected?.id === 'calendar' && <CalendarDetails key="calendar" resource={calendar} onClose={() => setOpen(null)} />}
+      {selected && selected.id !== 'calendar' && <Modal key={selected.id} id={`overview-${selected.id}`}
+        title={selected.id === 'weather' && weather.data?.city_name ? `天气 · ${weather.data.city_name}` : selected.title}
+        className={`detail-dialog overview-dialog ${selected.id}-dialog`} onClose={() => setOpen(null)}>{details[selected.id]}</Modal>}
+    </AnimatePresence>
   </>;
 }

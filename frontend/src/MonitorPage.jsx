@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from 'react';
-import { motion } from 'framer-motion';
+import { AnimatePresence } from 'framer-motion';
 import { Activity, Battery, Cpu, Gpu, MemoryStick, Wifi, HardDrive, Fan, ArrowDown, ArrowUp, TriangleAlert } from 'lucide-react';
 import { bytes, duration, measure, number, rate, rateText, time } from './format.js';
 import { DetailLink, Modal, ProgressBar, Segmented } from './ui.jsx';
@@ -13,7 +13,7 @@ const fanLabels = { cpu: 'CPU 风扇', gpu: 'GPU 风扇', chassis: '机箱风扇
 
 function Metric({ title, icon: Icon, tone, display, unit, lines, choice, onOpen }) {
   return (
-    <motion.article className={`surface metric detail-tile tone-${tone}`} aria-label={title} whileTap={{ scale: 0.97 }}>
+    <article className={`surface metric detail-tile tone-${tone}`} aria-label={title}>
       <div className="metric-header flex items-center gap-3">
         <span className="metric-icon"><Icon size={23} strokeWidth={1.9} aria-hidden="true" /></span>
         <h2>{title}</h2>
@@ -29,7 +29,7 @@ function Metric({ title, icon: Icon, tone, display, unit, lines, choice, onOpen 
       </dl>
       <DetailLink title={title} onClick={onOpen} />
       {choice}
-    </motion.article>
+    </article>
   );
 }
 
@@ -149,7 +149,9 @@ function HostMonitor({ telemetry, platform, dark, power }) {
           <Disks items={sample?.disks ?? []} ready={Boolean(sample)} />
           {!mac && <Fans items={sample?.fan_summary ?? []} peaks={fanPeaks} ready={Boolean(sample)} />}
         </div>
-        {detail && <HardwareDetails category={detail} sample={sample} gpu={gpu} onClose={() => setDetail(null)} />}
+        <AnimatePresence>
+          {detail && <HardwareDetails category={detail} sample={sample} gpu={gpu} onClose={() => setDetail(null)} />}
+        </AnimatePresence>
     </>
   );
 }

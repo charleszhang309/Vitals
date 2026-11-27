@@ -18,11 +18,13 @@ from urllib.parse import quote
 import httpx
 import psutil
 
-from .config import GIB, MIB, Settings, WebhookConfig
+from .config import GIB, MIB, SamplingMode, Settings, WebhookConfig
 
 
 logger = logging.getLogger(__name__)
-INTERVAL = 1.5
+REALTIME_INTERVAL = 1.0
+ECO_INTERVAL = 5.0
+RULES_GAP_SECONDS = 10.0
 LHM_RETRY_SECONDS = 5.0
 NUMBER = re.compile(r"^\s*([-+]?\d+(?:[.,]\d+)*)\s*(.*?)\s*$")
 GROUPED_COMMAS = re.compile(r"[-+]?\d{1,3}(?:,\d{3})+")
@@ -434,7 +436,7 @@ class Rules:
     def evaluate(self, sample: Snapshot, cpu_temperatures: dict[str, float], now: float) -> list[Snapshot]:
         timestamp = sample["timestamp"]
         events = []
-        if self.previous_sample is not None and now - self.previous_sample > max(10.0, 5 * INTERVAL):
+        if self.previous_sample is not None and now - self.previous_sample > RULES_GAP_SECONDS:
             # 长时间缺样时重新计时，避免把休眠或采集停顿当作连续超阈值。
             self.high_since.clear()
             self.hot_since.clear()
@@ -531,8 +533,35 @@ class Monitor:
         self.rules = Rules(settings)
         self.latest: Snapshot | None = None
         self.subscribers: set[asyncio.Queue[Snapshot]] = set()
+        self.sampling_mode = settings.sampling_mode
+        self.sampling_changed = asyncio.Event()
         self.notifications: asyncio.Queue[Snapshot] = asyncio.Queue(maxsize=64)
         self.lhm_retry_at: float | None = None
+
+    @property
+    def sampling_interval(self) -> float:
+        if self.sampling_mode == "realtime" or (self.sampling_mode == "smart" and self.subscribers):
+            return REALTIME_INTERVAL
+        return ECO_INTERVAL
+
+    def set_sampling_mode(self, mode: SamplingMode):
+        if self.sampling_mode != mode:
+            self.sampling_mode = mode
+            self.sampling_changed.set()
+
+    def subscribe(self) -> asyncio.Queue[Snapshot]:
+        mailbox = asyncio.Queue(maxsize=1)
+        if self.latest is not None:
+            mailbox.put_nowait(self.latest)
+        self.subscribers.add(mailbox)
+        if self.sampling_mode == "smart" and len(self.subscribers) == 1:
+            self.sampling_changed.set()
+        return mailbox
+
+    def unsubscribe(self, mailbox: asyncio.Queue[Snapshot]):
+        self.subscribers.remove(mailbox)
+        if self.sampling_mode == "smart" and not self.subscribers:
+            self.sampling_changed.set()
 
     def publish(self, snapshot: Snapshot):
         self.latest = snapshot
@@ -575,7 +604,7 @@ class Monitor:
                     raise sample
                 if isinstance(hardware, BaseException):
                     raise hardware
-                sample.update(self.identity, timestamp=utc_now())
+                sample.update(self.identity, timestamp=utc_now(), sampling_interval_seconds=self.sampling_interval)
                 temperatures = merge_hardware(sample, hardware)
                 if power_snapshot is not None:
                     sample["power"] = power_snapshot()
@@ -589,7 +618,13 @@ class Monitor:
                             logger.warning("通知队列已满，跳过事件 %s", event["type"])
             except Exception:
                 logger.exception("本轮硬件采集失败")
-            await asyncio.sleep(max(0, INTERVAL - (monotonic() - started)))
+            # 以本轮开始时间为基准，订阅或模式变化只重算下一轮的等待时间。
+            while (delay := started + self.sampling_interval - monotonic()) > 0:
+                self.sampling_changed.clear()
+                try:
+                    await asyncio.wait_for(self.sampling_changed.wait(), timeout=delay)
+                except TimeoutError:
+                    pass
 
     async def send_notifications(self, client: httpx.AsyncClient):
         config = self.settings.webhook

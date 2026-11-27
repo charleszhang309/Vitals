@@ -1,8 +1,10 @@
-import { useEffect, useRef } from 'react';
-import { motion } from 'framer-motion';
+import { useLayoutEffect, useRef } from 'react';
+import { motion, useIsPresent, useReducedMotion } from 'framer-motion';
 import { ChevronRight, X } from 'lucide-react';
 
 const spring = { type: 'spring', stiffness: 440, damping: 35, mass: 0.8 };
+const easeOut = [0.22, 1, 0.36, 1];
+const modalStack = [];
 
 export function Button({ className = '', children, ...props }) {
   return <motion.button type="button" className={`button ${className}`} whileTap={{ scale: 0.97 }} {...props}>{children}</motion.button>;
@@ -48,32 +50,65 @@ export function Segmented({ id, label, options, value, onChange, tabs = false, d
 
 export function Modal({ id, title, onClose, className = '', headerActions, style, children }) {
   const ref = useRef(null);
-  useEffect(() => {
+  const present = useIsPresent();
+  const reduced = useReducedMotion();
+  useLayoutEffect(() => {
     const dialog = ref.current;
-    const previous = document.activeElement;
+    const entry = { dialog, opener: document.activeElement };
     dialog.showModal();
+    modalStack.push(entry);
     return () => {
+      const index = modalStack.indexOf(entry);
+      const above = modalStack[index + 1];
+      if (above && dialog.contains(above.opener)) above.opener = entry.opener;
+      modalStack.splice(index, 1);
       dialog.close();
-      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+      if (above) return;
+      const next = modalStack.at(-1)?.dialog;
+      const opener = entry.opener;
+      if (opener instanceof HTMLElement && opener.isConnected && (!next || next.contains(opener))) {
+        opener.focus({ preventScroll: true });
+      }
+      if (next && !next.contains(document.activeElement)) next.querySelector('.modal-close')?.focus({ preventScroll: true });
     };
   }, []);
 
+  useLayoutEffect(() => {
+    const dialog = ref.current;
+    function handleEscape(event) {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || modalStack.at(-1)?.dialog !== dialog) return;
+      event.preventDefault();
+      if (present && !event.repeat) onClose();
+    }
+    // Route Escape to one dialog even when the browser groups multiple native close requests.
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [onClose, present]);
+
+  function dismiss() {
+    if (present && modalStack.at(-1)?.dialog === ref.current) onClose();
+  }
+
   return (
-    <dialog ref={ref} className={`modal ${className}`} style={style} aria-labelledby={`${id}-title`}
+    <motion.dialog ref={ref} className={`modal ${className}`} style={style} aria-labelledby={`${id}-title`}
+      data-closing={!present || undefined}
+      initial={reduced ? false : { opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: reduced ? 1 : 0.95 }}
+      transition={{ duration: reduced ? 0 : 0.18, ease: easeOut }}
       onCancel={(event) => {
         if (event.target !== event.currentTarget) return;
         event.preventDefault();
-        onClose();
+        dismiss();
       }}
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <div className="modal-body surface">
+      onClick={(event) => { if (event.target === event.currentTarget) dismiss(); }}>
+      <div className="modal-body surface" inert={!present || undefined}>
         <div className="modal-header flex items-center justify-between gap-4">
           <h2 id={`${id}-title`}>{title}</h2>
-          <div className="modal-controls">{headerActions}<IconButton className="modal-close" label="关闭" onClick={onClose}><X size={19} aria-hidden="true" /></IconButton></div>
+          <div className="modal-controls">{headerActions}<IconButton className="modal-close" label="关闭" onClick={dismiss}><X size={19} aria-hidden="true" /></IconButton></div>
         </div>
         {children}
       </div>
-    </dialog>
+    </motion.dialog>
   );
 }
 
@@ -95,7 +130,7 @@ export function ProgressBar({ value, tone = 'green', label }) {
   return (
     <div className={`progress tone-${tone}`} role={available ? 'progressbar' : undefined} aria-hidden={!available || undefined}
       aria-label={available ? label : undefined} aria-valuenow={available ? Math.round(percent) : undefined}>
-      <span style={{ width: `${percent}%` }} />
+      <span style={{ '--progress-scale': percent / 100 }} />
     </div>
   );
 }

@@ -244,7 +244,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .fan-row { display: flex; }
 .fan-row .progress { margin-top: 6px; }
 .progress { height: 7px; border-radius: 999px; background: var(--track); overflow: hidden; min-width: 0; }
-.progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .42s cubic-bezier(.22,.61,.36,1); }
+.progress > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transform: scaleX(var(--progress-scale)); transform-origin: left center; }
+@media (prefers-reduced-motion: no-preference) {
+  .progress > span { transition: transform .48s cubic-bezier(.22, 1, .36, 1); }
+  .health-ring-fill { transition: stroke-dasharray .48s cubic-bezier(.22, 1, .36, 1); }
+  @starting-style {
+    .progress > span { transform: scaleX(0); }
+    .health-ring-fill { stroke-dasharray: 0 1; }
+  }
+}
 .section-empty, .fan-empty { font-size: 13px; color: var(--muted); }
 .fan-empty { display: flex; align-items: center; gap: 10px; padding-block: 9px 13px; }
 .fan-empty svg { color: var(--unit); flex: none; }
@@ -274,18 +282,44 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .card-tools .icon-button { width: 38px; height: 38px; min-height: 38px; }
 .empty-scratch { display: grid; justify-items: center; gap: 10px; color: var(--muted); padding: 27px 14px; font-size: 14px; }
 
-.modal { position: fixed; inset: 0; margin: auto; width: min(calc(100% - 32px), 480px); border: 0; background: transparent; color: var(--text); padding: 0; max-height: calc(100dvh - 32px); overflow: auto; border-radius: 18px; box-shadow: 0 20px 55px #0003; }
+.modal { position: fixed; inset: 0; margin: auto; width: min(calc(100% - 32px), 480px); border: 0; background: transparent; color: var(--text); padding: 0; max-height: calc(100dvh - 32px); overflow: auto; overscroll-behavior: contain; border-radius: 18px; box-shadow: 0 20px 55px #0003; }
 .modal::backdrop { background: rgba(18, 22, 30, .28); }
+:root:has(.modal[open]) { overflow: hidden; overscroll-behavior: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .modal::backdrop { opacity: 1; transition: opacity .17s cubic-bezier(.22, 1, .36, 1); }
+  .modal[data-closing]::backdrop { opacity: 0; }
+  @starting-style {
+    .modal[open]::backdrop { opacity: 0; }
+  }
+}
 .modal-body { padding: 20px; }
 .modal-header { margin-bottom: 17px; }
 .modal-header h2 { font-size: 20px; font-weight: 760; overflow-wrap: anywhere; }
 .modal-header .icon-button { min-height: 38px; width: 38px; }
 .modal-header .modal-close { border: 0; background: transparent; box-shadow: none; color: var(--muted); transition: color .18s ease; }
 .modal-header .modal-close:is(:hover, :focus-visible) { background: transparent; color: var(--text); }
-.detail-tile { position: relative; transition: translate .2s, box-shadow .2s; }
+.detail-tile { position: relative; }
 .detail-link { position: absolute; inset: 0; border-radius: inherit; text-align: right; color: var(--muted); }
 .detail-link svg { position: absolute; top: 20px; right: 16px; }
 .detail-tile .gpu-choice { position: relative; z-index: 1; }
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes card-rise {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .detail-tile { transition: translate .2s, box-shadow .2s, scale .12s ease-out; }
+  .detail-tile:has(> .detail-link:active) { scale: .985; }
+  :is(.detail-tile, .metrics-grid > .metric) {
+    animation: card-rise .24s cubic-bezier(.22, 1, .36, 1) var(--tile-entry-delay, 0s) backwards;
+  }
+  :is(.overview-grid, .metrics-grid) > :nth-child(2), .media-control-grid > .detail-tile { --tile-entry-delay: 28ms; }
+  :is(.overview-grid, .metrics-grid) > :nth-child(3) { --tile-entry-delay: 56ms; }
+  :is(.overview-grid, .metrics-grid) > :nth-child(4) { --tile-entry-delay: 84ms; }
+  .overview-grid > :nth-child(5), .health-extra-grid > :first-child { --tile-entry-delay: 112ms; }
+  .overview-grid > :nth-child(6), .health-extra-grid > :nth-child(2) { --tile-entry-delay: 140ms; }
+  .overview-grid > :nth-child(7) { --tile-entry-delay: 168ms; }
+  .settings-panel { animation: card-rise .15s cubic-bezier(.22, 1, .36, 1); }
+}
 @media (hover: hover) and (prefers-reduced-motion: no-preference) {
   .detail-tile:hover { translate: 0 -3px; border-color: color-mix(in srgb, var(--blue) 22%, var(--border)); box-shadow: inset 0 1px 0 var(--glass-edge), inset 0 -1px 0 var(--glass-rim-bottom), var(--shadow-hover); }
 }
@@ -984,7 +1018,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .remote-quick { margin-block: 14px; }
 .reminder-preview { display: flex; align-items: center; gap: 4px; }
 .reminder-source { display: inline-block; flex: 0 0 auto; margin-inline-start: 4px; color: var(--muted); white-space: nowrap; font-size: .8em; }
-:root:has(.monitor-dialog[open]) { overflow: hidden; overscroll-behavior: none; }
 .monitor-dialog {
   position: fixed; inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none;
   overflow: auto; overscroll-behavior: contain; border-radius: 0; background: var(--background);
@@ -1151,7 +1184,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 @media (prefers-reduced-motion: reduce) {
   .pulse { animation: none; }
-  .progress span { transition: none; }
   .modal-header .modal-close { transition: none; }
 }
 
