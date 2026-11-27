@@ -1,5 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { ArrowLeft, Check, ChevronLeft, ChevronRight, Download, FolderOpen, Grip, Maximize, Pencil, Plus, Upload, X } from 'lucide-react';
+import {
+  ArrowLeft, Camera, Check, ChevronLeft, ChevronRight, Cpu, Download, FolderOpen,
+  Globe, Grip, Keyboard, Layers, Lock, Maximize, MonitorOff, Pause, Pencil, Play,
+  Plus, SkipBack, SkipForward, Sliders, Sparkles, Thermometer, Timer, Upload,
+  Volume1, Volume2, VolumeX, X, Zap,
+} from 'lucide-react';
 import { AnimatePresence } from 'framer-motion';
 import { Button, IconButton, Modal } from './ui.jsx';
 import { httpUrl, request, sendJson } from './api.js';
@@ -47,6 +52,46 @@ function labelFor(tile, layout, catalog) {
   if (action?.id === 'volume') return t(action.params.step < 0 ? '音量 −' : '音量 +');
   if (action?.id === 'desktop') return t(action.params.action === 'lock' ? '锁屏' : '关闭显示器');
   return t(catalog?.actions.find((item) => item.id === action?.id)?.name ?? '动作');
+}
+
+const defaultIconMap = {
+  '🔈': 'mute', '🔇': 'mute', '🔊': 'volume', '⏱': 'focus', '⏱️': 'focus',
+  '⏹': 'screenshot', '📷': 'screenshot', '🌡': 'cpu', '🌡️': 'cpu',
+  '✦': 'ai', '✨': 'ai', '▦': 'folder', '📁': 'folder',
+};
+
+function KeyIcon({ tile, state }) {
+  if (!tile) return <span className="deck-key-badge deck-key-badge-empty"><Plus size={22} /></span>;
+  const action = tile.steps?.[0]?.action;
+  const actionId = action?.id;
+  const mapped = tile.icon ? defaultIconMap[tile.icon.trim()] : null;
+
+  if (tile.icon && !mapped) {
+    return <span className="deck-key-badge"><span className="deck-key-emoji" aria-hidden="true">{tile.icon}</span></span>;
+  }
+
+  let Icon = Zap;
+  if (tile.kind === 'folder' || mapped === 'folder') Icon = FolderOpen;
+  else if (tile.live === 'cpu' || mapped === 'cpu') Icon = Thermometer;
+  else if (tile.live === 'gpu') Icon = Cpu;
+  else if (tile.live === 'focus' || mapped === 'focus') Icon = Timer;
+  else if (tile.live === 'ai' || mapped === 'ai') Icon = Sparkles;
+  else if (actionId === 'mute' || mapped === 'mute') Icon = state.active ? VolumeX : Volume2;
+  else if (actionId === 'volume' || mapped === 'volume') Icon = action?.params?.step < 0 ? Volume1 : Volume2;
+  else if (actionId === 'media') {
+    Icon = action?.params?.action === 'next' ? SkipForward
+      : action?.params?.action === 'previous' ? SkipBack
+      : state.active ? Pause : Play;
+  }
+  else if (actionId === 'screenshot' || mapped === 'screenshot') Icon = Camera;
+  else if (actionId === 'focus') Icon = Timer;
+  else if (actionId === 'desktop') Icon = action?.params?.action === 'lock' ? Lock : MonitorOff;
+  else if (actionId === 'hotkey' || actionId === 'preset' || actionId === 'text') Icon = Keyboard;
+  else if (actionId === 'webhook') Icon = Globe;
+  else if (actionId === 'power' || actionId === 'audio_device') Icon = Sliders;
+  else if (tile.steps?.length > 1) Icon = Layers;
+
+  return <span className="deck-key-badge" aria-hidden="true"><Icon size={24} strokeWidth={2.1} /></span>;
 }
 
 function tileState(tile, { sample, audio, media, focus, ai, feedback }) {
@@ -184,6 +229,12 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
     document.addEventListener('fullscreenchange', update);
     return () => document.removeEventListener('fullscreenchange', update);
   }, []);
+
+  useEffect(() => {
+    if (!message || message.error || message.link) return undefined;
+    const timer = setTimeout(() => setMessage(null), 2200);
+    return () => clearTimeout(timer);
+  }, [message]);
 
   function leave() {
     if (document.fullscreenElement === region.current) document.exitFullscreen?.().catch(() => {});
@@ -385,99 +436,119 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
   return <section className="deck-view" ref={region} tabIndex={-1} autoFocus
     aria-label="Vitals Deck" onKeyDown={handleKeys} data-desktop={desktopPlatform}>
     <div className="deck-body">
-      <div className="deck-toolbar">
-        <div className="deck-brand"><Grip size={21} aria-hidden="true" /><h1>Vitals Deck</h1></div>
-        <label className="deck-target"><span>{t('目标主机')}</span><select aria-label={t('目标主机')} value={audioTarget}
-          disabled={busy} onChange={(event) => setSelection(event.target.value)}>
-          {[hub, ...devices.filter((device) => device.online)].map((device) =>
-            <option key={device.device_id} value={device.device_id}>{device.name}</option>)}
-        </select></label>
-        <div className="deck-toolbar-actions">
-          {saved && (draft ? <>
-            <Button disabled={busy || syncConflict} onClick={save}><Check size={16} />{t('保存')}</Button>
-            <Button disabled={busy} onClick={cancelEdit}>{t('取消')}</Button>
-          </> : <IconButton label={t('编辑 Deck')} disabled={busy} onClick={() => {
-            setMessage(null); setEditor(structuredClone(saved.layout));
-          }}><Pencil size={18} /></IconButton>)}
-          {region.current?.requestFullscreen && !fullscreen && <IconButton label={t('全屏')} onClick={() =>
-            region.current?.requestFullscreen().catch(() => {})}><Maximize size={18} /></IconButton>}
-          <IconButton label={t('退出 Deck')} onClick={leave}><X size={20} /></IconButton>
+      <header className="deck-toolbar">
+        <div className="deck-brand">
+          <span className="deck-brand-mark" aria-hidden="true"><Grip size={18} /></span>
+          <h1>Vitals Deck</h1>
         </div>
-      </div>
-      {scene ? <>
-        <div className="deck-scenes">
-          {trail.length > 0 && <IconButton label={t('返回上一级')} onClick={back}><ArrowLeft size={18} /></IconButton>}
-          {!trail.length && <IconButton label={t('上一场景')} disabled={list.length < 2} onClick={() => adjacent(-1)}><ChevronLeft size={18} /></IconButton>}
+        {scene && <div className="deck-scenes">
+          {trail.length > 0 && <IconButton label={t('返回上一级')} onClick={back}><ArrowLeft size={16} /></IconButton>}
+          {!trail.length && list.length > 1 && <IconButton label={t('上一场景')} onClick={() => adjacent(-1)}><ChevronLeft size={16} /></IconButton>}
           <div className="deck-scene-list" aria-label={t('场景')}>
-            {trail.length ? <strong>{t(scene.title)}</strong> : list.map((item) =>
-              <Button key={item.id} aria-pressed={item.id === scene.id} onClick={() => changePage(item.id)}>
-                {item.folder && <FolderOpen size={14} />}{t(item.title)}
-              </Button>)}
+            {trail.length ? <strong className="deck-folder-crumb">{t(scene.title)}</strong> : list.map((item) =>
+              <button type="button" key={item.id} className="deck-scene-pill" aria-pressed={item.id === scene.id} onClick={() => changePage(item.id)}>
+                {item.folder && <FolderOpen size={13} />}{t(item.title)}
+              </button>)}
           </div>
-          {!trail.length && <IconButton label={t('下一场景')} disabled={list.length < 2} onClick={() => adjacent(1)}><ChevronRight size={18} /></IconButton>}
-          {draft && <>
-            <IconButton label={t('导入布局')} onClick={() => fileInput.current?.click()}><Upload size={16} /></IconButton>
-            <IconButton label={t('导出布局')} onClick={exportLayout}><Download size={16} /></IconButton>
-            <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={(event) => importLayout(event.target.files[0])} />
-          </>}
+          {!trail.length && list.length > 1 && <IconButton label={t('下一场景')} onClick={() => adjacent(1)}><ChevronRight size={16} /></IconButton>}
+        </div>}
+        <div className="deck-toolbar-right">
+          <label className="deck-target">
+            <span className="deck-target-dot" aria-hidden="true" />
+            <span className="deck-target-label">{t('目标主机')}</span>
+            <select aria-label={t('目标主机')} value={audioTarget}
+              disabled={busy} onChange={(event) => setSelection(event.target.value)}>
+              {[hub, ...devices.filter((device) => device.online)].map((device) =>
+                <option key={device.device_id} value={device.device_id}>{device.name}</option>)}
+            </select>
+          </label>
+          <div className="deck-toolbar-actions">
+            {draft && <>
+              <IconButton label={t('导入布局')} onClick={() => fileInput.current?.click()}><Upload size={16} /></IconButton>
+              <IconButton label={t('导出布局')} onClick={exportLayout}><Download size={16} /></IconButton>
+              <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={(event) => importLayout(event.target.files[0])} />
+            </>}
+            {saved && (draft ? <>
+              <Button className="primary-button" disabled={busy || syncConflict} onClick={save}><Check size={16} />{t('保存')}</Button>
+              <Button disabled={busy} onClick={cancelEdit}>{t('取消')}</Button>
+            </> : <IconButton label={t('编辑 Deck')} disabled={busy} onClick={() => {
+              setMessage(null); setEditor(structuredClone(saved.layout));
+            }}><Pencil size={17} /></IconButton>)}
+            {region.current?.requestFullscreen && !fullscreen && <IconButton label={t('全屏')} onClick={() =>
+              region.current?.requestFullscreen().catch(() => {})}><Maximize size={17} /></IconButton>}
+            <IconButton label={t('退出 Deck')} onClick={leave}><X size={19} /></IconButton>
+          </div>
         </div>
+      </header>
+      {scene ? <>
         {draft && <SceneEditor scene={scene} set={updateScene} add={addScene} remove={removeScene}
           canAdd={draft.scenes.length < 16} canRemove={scene.folder || draft.scenes.filter((item) => !item.folder).length > 1}
           hasFolder={draft.scenes.some((item) => item.tiles.some((tile) => tile?.page === scene.id))} />}
         {syncConflict && draft && <p className="feedback" role="status">{t('Deck 已在另一台设备修改，请重新载入后再保存')}
           <Button onClick={cancelEdit}>{t('重新载入')}</Button></p>}
         <div className="deck-layout" data-editing={editing} data-has-editor={editing && entry !== null}>
-          <div className="deck-grid" style={{ '--deck-cols': columns }}>
-            {Array.from({ length: columns * rows }, (_, index) => {
-              const tile = scene.tiles[index];
-              const state = tileState(tile, { sample: localTarget ? sample : target.snapshot, audio,
-                media: localTarget ? media : target.snapshot?.media, focus, ai, feedback: feedback[index] });
-              const label = tile ? labelFor(tile, layout, catalog) : t('添加按键');
-              const isButton = editing || tile?.kind === 'folder' || Boolean(tile?.steps.length);
-              const classes = 'deck-key surface';
-              const content = <>
-                {tile?.icon ? <span className="deck-key-icon" aria-hidden="true">{tile.icon}</span>
-                  : tile?.kind === 'folder' ? <FolderOpen size={24} /> : !tile && editing ? <Plus size={22} /> : null}
-                {state.value && <strong className="deck-key-value numeric">{state.value}</strong>}
-                {(tile || editing) && <span className="deck-key-name">{label}</span>}
-              </>;
-              return <div key={index} data-deck-slot={index} className="deck-slot">
-                {isButton ? <button type="button" className={classes} title={label}
-                  data-deck-color={tile?.color} data-active={Boolean(state.active)} data-selected={editing && entry === index}
-                  data-empty={!tile} disabled={busy && !editing} aria-pressed={tile?.kind === 'toggle' ? Boolean(state.active) : undefined}
-                  onClick={() => pressTile(index, tile)}>{content}</button>
-                  : <div className={classes} data-empty={!tile} data-deck-color={tile?.color} data-active={Boolean(state.active)}>{content}</div>}
-                {editing && tile && <button className="deck-grip" type="button" aria-label={t('移动按键')} aria-pressed={moveFrom === index}
-                  onClick={() => {
-                    if (!skipDragClick.current) setMoveFrom(moveFrom === index ? null : index);
-                    skipDragClick.current = false;
-                  }}
-                  onPointerDown={(event) => {
-                    skipDragClick.current = false;
-                    drag.current = { index, x: event.clientX, y: event.clientY };
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                  }}
-                  onPointerCancel={() => { drag.current = null; }}
-                  onPointerUp={(event) => {
-                    const start = drag.current;
-                    drag.current = null;
-                    if (!start || Math.hypot(start.x - event.clientX, start.y - event.clientY) < 8) return;
-                    skipDragClick.current = true;
-                    const end = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-deck-slot]');
-                    if (end) moveTile(start.index, Number(end.dataset.deckSlot));
-                  }}><Grip size={17} /></button>}
-              </div>;
-            })}
+          <div className="deck-stage">
+            <div className="deck-board" style={{ '--deck-cols': columns, '--deck-rows': rows }}>
+              <div className="deck-grid">
+                {Array.from({ length: columns * rows }, (_, index) => {
+                  const tile = scene.tiles[index];
+                  const state = tileState(tile, { sample: localTarget ? sample : target.snapshot, audio,
+                    media: localTarget ? media : target.snapshot?.media, focus, ai, feedback: feedback[index] });
+                  const label = tile ? labelFor(tile, layout, catalog) : t('添加按键');
+                  const isButton = editing || tile?.kind === 'folder' || Boolean(tile?.steps.length);
+                  const classes = 'deck-key';
+                  const hasLed = tile && (tile.kind === 'toggle' || Boolean(tile.feedback));
+                  const content = <>
+                    {hasLed && <span className="deck-key-led" data-active={Boolean(state.active)} aria-hidden="true" />}
+                    {state.value ? <>
+                      <div className="deck-key-metric-top"><KeyIcon tile={tile} state={state} /></div>
+                      <strong className="deck-key-value numeric">{state.value}</strong>
+                      <span className="deck-key-name">{label}</span>
+                    </> : <>
+                      <KeyIcon tile={tile} state={state} />
+                      {(tile || editing) && <span className="deck-key-name">{label}</span>}
+                    </>}
+                  </>;
+                  return <div key={index} data-deck-slot={index} className="deck-slot">
+                    {isButton ? <button type="button" className={classes} title={label}
+                      data-deck-color={tile?.color || 'slate'} data-kind={tile?.kind} data-active={Boolean(state.active)} data-selected={editing && entry === index}
+                      data-empty={!tile} disabled={busy && !editing} aria-pressed={tile?.kind === 'toggle' ? Boolean(state.active) : undefined}
+                      onClick={() => pressTile(index, tile)}>{content}</button>
+                      : <div className={classes} data-empty={!tile} data-kind={tile?.kind} data-deck-color={tile?.color || 'slate'} data-active={Boolean(state.active)}>{content}</div>}
+                    {editing && tile && <button className="deck-grip" type="button" aria-label={t('移动按键')} aria-pressed={moveFrom === index}
+                      onClick={() => {
+                        if (!skipDragClick.current) setMoveFrom(moveFrom === index ? null : index);
+                        skipDragClick.current = false;
+                      }}
+                      onPointerDown={(event) => {
+                        skipDragClick.current = false;
+                        drag.current = { index, x: event.clientX, y: event.clientY };
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                      }}
+                      onPointerCancel={() => { drag.current = null; }}
+                      onPointerUp={(event) => {
+                        const start = drag.current;
+                        drag.current = null;
+                        if (!start || Math.hypot(start.x - event.clientX, start.y - event.clientY) < 8) return;
+                        skipDragClick.current = true;
+                        const end = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-deck-slot]');
+                        if (end) moveTile(start.index, Number(end.dataset.deckSlot));
+                      }}><Grip size={15} /></button>}
+                  </div>;
+                })}
+              </div>
+            </div>
           </div>
           {editing && entry !== null && scene.tiles[entry] && <TileEditor tile={scene.tiles[entry]} scene={scene} scenes={draft.scenes}
             set={(tile) => updateScene(changeTile(entry, tile))} ensureFolder={addFolder} catalog={catalog} audio={audio}
             onClose={() => setEntry(null)} onRemove={() => { updateScene(changeTile(entry, null)); setEntry(null); }} />}
         </div>
-      </> : !message && <p role="status">{t('正在加载 Deck…')}</p>}
-      {message && <p className={`feedback ${message.error ? 'error' : ''}`} role={message.error ? 'alert' : 'status'}>
+      </> : !message && <p className="deck-loading" role="status">{t('正在加载 Deck…')}</p>}
+      {message && <div className={`deck-toast ${message.error ? 'is-error' : ''}`} role={message.error ? 'alert' : 'status'}>
+        {!message.error && <Check size={14} aria-hidden="true" />}
         {message.link ? <a href={httpUrl(`/api/control/launchers/${encodeURIComponent(message.link)}/open`).href}
-          target="_blank" rel="noreferrer">{message.text}</a> : message.text}
-      </p>}
+          target="_blank" rel="noreferrer">{message.text}</a> : <span>{message.text}</span>}
+      </div>}
       <div className="deck-screenshot">
         <ScreenshotControl key={audioTarget} deviceId={localTarget ? null : audioTarget} deviceName={target.name} controlRef={screenshot} />
       </div>
