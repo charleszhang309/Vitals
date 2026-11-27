@@ -15,6 +15,13 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt;
 
+#[tauri::command]
+fn start_service(operations: tauri::State<'_, Sender<Operation>>) -> Result<(), &'static str> {
+    operations
+        .send(Operation::Start)
+        .map_err(|_| "无法连接 Vitals 服务管理器。")
+}
+
 fn open_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         #[cfg(target_os = "macos")]
@@ -24,6 +31,13 @@ fn open_window(app: &AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+    }
+}
+
+fn reopen_and_start(app: &AppHandle) {
+    open_window(app);
+    if let Some(operations) = app.try_state::<Sender<Operation>>() {
+        let _ = operations.send(Operation::Start);
     }
 }
 
@@ -122,6 +136,14 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let hub = Hub::new(app.handle())?;
     let origin: Url = hub.url().parse()?;
     let allowed_origin = origin.origin();
+    // A newly created WebView can still report about:blank.
+    let startup: Url = if cfg!(windows) {
+        "http://tauri.localhost/"
+    } else {
+        "tauri://localhost/"
+    }
+    .parse()?;
+    let startup_origin = startup.clone();
     let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("Vitals")
         .inner_size(1280.0, 820.0)
@@ -129,8 +151,9 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .visible(false)
         .on_navigation(move |url| {
             url.origin() == allowed_origin
-                || url.scheme() == "tauri"
-                || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
+                || (url.scheme() == startup_origin.scheme()
+                    && url.host_str() == startup_origin.host_str()
+                    && url.port() == startup_origin.port())
         })
         .on_new_window(|url, _| {
             let path = url.path().to_ascii_lowercase();
@@ -149,7 +172,6 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .build()?;
-    let startup = window.url()?;
     let closing = window.clone();
     window.on_window_event(move |event| {
         if let WindowEvent::CloseRequested { api, .. } = event {
@@ -242,23 +264,29 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let app = app.handle().clone();
     let background = std::env::args_os().any(|arg| arg == "--background");
+    if !background {
+        open_window(&app);
+    }
     std::thread::spawn(move || {
-        let mut initial = true;
         hub.run(receive, |state| {
             for menu in &menus {
                 menu.update(state);
             }
-            if matches!(state, Status::Running | Status::External) {
-                let _ = window.navigate(origin.clone());
-            } else if !matches!(state, Status::Starting) {
-                let _ = window.navigate(startup.clone());
-            }
-            if initial && !matches!(state, Status::Starting) {
-                initial = false;
-                if !background {
-                    open_window(&app);
+            let target = match state {
+                Status::Running | Status::External => origin.clone(),
+                _ => {
+                    let status = match state {
+                        Status::Starting => "starting",
+                        Status::Stopped => "stopped",
+                        Status::Occupied => "occupied",
+                        _ => "failed",
+                    };
+                    let mut url = startup.clone();
+                    url.query_pairs_mut().append_pair("status", status);
+                    url
                 }
-            }
+            };
+            let _ = window.navigate(target);
         });
         app.exit(0);
     });
@@ -268,13 +296,14 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            open_window(app)
+            reopen_and_start(app)
         }))
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .arg("--background")
                 .build(),
         )
+        .invoke_handler(tauri::generate_handler![start_service])
         .setup(build_app)
         .build(tauri::generate_context!())
         .expect("could not initialize Vitals");
@@ -285,7 +314,7 @@ fn main() {
             ..
         } = &event
         {
-            open_window(app);
+            reopen_and_start(app);
         }
         if let RunEvent::ExitRequested {
             api, code: None, ..

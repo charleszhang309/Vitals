@@ -13,7 +13,9 @@ fn tray_owned_hub_lifecycle() {
         .join(".build/smoke")
         .join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&home).unwrap();
-    fs::write(home.join("config.json"), br#"{"host":"127.0.0.1"}"#).unwrap();
+    let config = home.join("config.json");
+    let valid_config = br#"{"host":"127.0.0.1"}"#;
+    fs::write(&config, valid_config).unwrap();
     let socket = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = socket.local_addr().unwrap().port();
     drop(socket);
@@ -69,6 +71,13 @@ fn tray_owned_hub_lifecycle() {
     send.send(Operation::Stop).unwrap();
     wait(Status::Stopped);
     assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err());
+    fs::write(&config, b"{invalid").unwrap();
+    for _ in 0..2 {
+        send.send(Operation::Start).unwrap();
+        wait(Status::Starting);
+        wait(Status::Failed);
+    }
+    fs::write(&config, valid_config).unwrap();
     send.send(Operation::Start).unwrap();
     wait(Status::Starting);
     wait(Status::Running);

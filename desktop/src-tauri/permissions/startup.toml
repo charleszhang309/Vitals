@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-start-service"
+description = "Start the local Vitals hub from its bundled waiting page."
+commands.allow = ["start_service"]

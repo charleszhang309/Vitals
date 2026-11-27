@@ -180,12 +180,12 @@ impl Hub {
     }
 
     fn start(&mut self, report: &mut impl FnMut(Status)) -> Status {
+        report(Status::Starting);
         match self.probe() {
             Probe::Vitals(_) => return Status::External,
             Probe::Busy => return Status::Occupied,
             Probe::Free => {}
         }
-        report(Status::Starting);
         let instance = uuid::Uuid::new_v4().to_string();
         match self.spawn(&instance) {
             Ok(child) => self.child = Some(child),
@@ -244,7 +244,10 @@ impl Hub {
                     self.stop();
                     return;
                 }
-                Ok(Operation::Start) if status != Status::Running => self.start(&mut report),
+                Ok(Operation::Start) if !matches!(status, Status::Running | Status::External) => {
+                    status = Status::Starting;
+                    self.start(&mut report)
+                }
                 Ok(Operation::Stop) if status == Status::Running => {
                     self.stop();
                     Status::Stopped

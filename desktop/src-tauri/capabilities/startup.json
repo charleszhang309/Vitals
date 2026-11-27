@@ -1,0 +1,7 @@
+{
+  "identifier": "startup",
+  "description": "Allow the bundled Vitals waiting page to start the local hub.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": ["allow-start-service"]
+}

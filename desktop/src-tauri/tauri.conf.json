@@ -6,7 +6,8 @@
   "build": { "frontendDist": "../startup" },
   "app": {
     "windows": [],
-    "security": { "csp": "default-src 'none'; style-src 'unsafe-inline'" }
+    "withGlobalTauri": true,
+    "security": { "csp": "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src ipc: http://ipc.localhost" }
   },
   "bundle": {
     "active": true,
