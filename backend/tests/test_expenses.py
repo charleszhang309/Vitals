@@ -1,0 +1,123 @@
+import asyncio
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from backend.config import FinanceConfig, WebhookConfig
+from backend.expenses import ExpenseStore, SubscriptionInput, expenses_router
+from backend.rates import Rates
+from backend.scratchpad import Scratchpad
+
+
+@pytest.fixture
+def ledger(tmp_path, monkeypatch):
+    scratchpad = Scratchpad(tmp_path)
+    scratchpad.initialize()
+    rates = Rates(FinanceConfig())
+    store = ExpenseStore(scratchpad.connect, ZoneInfo("America/New_York"), rates)
+    store.initialize()
+    monkeypatch.setattr(store, "local_date", lambda now=None: date(2026, 2, 26) if now is None else now.astimezone(store.zone).date())
+    return store
+
+
+def test_apple_pay_ingest_and_monthly_receipt_crud(ledger):
+    app = FastAPI()
+    app.include_router(expenses_router(ledger))
+    client = TestClient(app)
+    payment = {"merchant": "Cafe", "card": "Visa", "amount": "$12.50", "occurred_at": "2026-03-01T04:59:59Z"}
+    key = {"Idempotency-Key": "wallet-123"}
+    created = client.post("/api/expenses/ingest", json=payment, headers=key)
+    assert created.status_code == 201
+    receipt = created.json()
+    assert (receipt["amount"], receipt["currency"], receipt["card"], receipt["source"]) == ("12.50", "CAD", "Visa", "apple_pay")
+    assert client.post("/api/expenses/ingest", json=payment, headers=key).json()["id"] == receipt["id"]
+    for amount in ("1.201", "1.00000000000000000000000000000000001"):
+        invalid = client.post("/api/expenses", json={"merchant": "Cafe", "amount": amount})
+        assert invalid.status_code == 422
+    client.post("/api/expenses", json={"merchant": "Next month", "amount": 8, "occurred_at": "2026-03-01T05:00:00Z"})
+    assert client.get("/api/expenses").json()["items"] == [receipt]
+    path = f"/api/expenses/{receipt['id']}"
+    updated = client.patch(path, json={"category": "餐饮", "amount": "15.00"})
+    assert updated.json()["merchant"] == "Cafe"
+    assert updated.json()["category"] == "餐饮"
+    assert updated.json()["amount"] == "15.00"
+    assert client.delete(path).status_code == 204
+    assert client.get(path).status_code == 404
+
+
+def test_summary_converts_known_rates_and_keeps_unavailable_amounts(ledger):
+    app = FastAPI()
+    app.include_router(expenses_router(ledger))
+
+    def exchange_rates(request):
+        assert request.url.params["base"] == "CAD"
+        return httpx.Response(200, json=[{"base": "CAD", "quote": "USD", "rate": 0.8, "date": "2026-02-25"}])
+
+    app.state.external_client = httpx.AsyncClient(transport=httpx.MockTransport(exchange_rates))
+    client = TestClient(app)
+    for amount, currency in [("0.10", "CAD"), ("0.20", "CAD"), ("8", "USD"), ("100", "JPY")]:
+        receipt = client.post("/api/expenses", json={"merchant": currency, "amount": amount, "currency": currency,
+                                                   "occurred_at": "2026-02-25T17:00:00Z"})
+        assert receipt.status_code == 201
+    reply = client.get("/api/expenses/summary").json()
+    assert reply["base_currency"] == "CAD"
+    assert reply["month_total"] == "10.30"
+    assert reply["monthly_count"] == 4
+    assert reply["totals_by_currency"] == {"CAD": "0.30", "JPY": "100", "USD": "8.00"}
+    assert reply["missing_rates"] == ["JPY"]
+
+
+def test_subscription_crud_preserves_the_billing_anchor(ledger, monkeypatch):
+    app = FastAPI()
+    app.include_router(expenses_router(ledger))
+    client = TestClient(app)
+    reply = client.post("/api/subscriptions", json={"name": "Service", "amount": "12.99", "currency": "usd",
+                                                    "cycle": "month", "next_billing_date": "2026-01-31"})
+    assert reply.status_code == 201
+    created = reply.json()
+    assert created["next_billing_date"] == "2026-02-28"
+    assert created["currency"] == "USD"
+    path = f"/api/subscriptions/{created['id']}"
+    updated = client.patch(path, json={"next_billing_date": created["next_billing_date"], "active": False})
+    assert updated.status_code == 200
+    assert not updated.json()["active"]
+    monkeypatch.setattr(ledger, "local_date", lambda now=None: date(2026, 3, 1))
+    assert client.get(path).json()["next_billing_date"] == "2026-03-31"
+    assert len(client.get("/api/subscriptions").json()["items"]) == 1
+    assert client.delete(path).status_code == 204
+    assert client.get(path).status_code == 404
+
+
+def test_subscriptions_recur_and_retry_bark_only_until_success(ledger):
+    annual = ledger.add_subscription(SubscriptionInput(name="Annual", amount="1", cycle="year",
+                                                        next_billing_date=date(2024, 2, 29)))
+    monthly = ledger.add_subscription(SubscriptionInput(name="Monthly", amount="8", cycle="month",
+                                                         next_billing_date=date(2026, 1, 31)))
+    assert annual["next_billing_date"] == monthly["next_billing_date"] == "2026-02-28"
+    ledger.add_subscription(SubscriptionInput(name="Paused", amount="3", cycle="month", active=False,
+                                               next_billing_date=date(2026, 2, 27)))
+    urls = []
+
+    def bark(request):
+        urls.append(request.url.path)
+        return httpx.Response(200, json={"code": 500 if len(urls) == 1 else 200})
+
+    async def remind():
+        webhook = WebhookConfig(kind="bark", bark_url_template="https://bark.test/device/{title}/{body}")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(bark)) as client:
+            now = datetime(2026, 2, 26, 12, tzinfo=timezone.utc)
+            await ledger.bark_if_due(client, webhook, now)
+            assert ledger.get_subscription(annual["id"])["reminded_date"] is None
+            assert ledger.get_subscription(monthly["id"])["reminded_date"] == "2026-02-28"
+            await asyncio.gather(ledger.bark_if_due(client, webhook, now), ledger.bark_if_due(client, webhook, now))
+            assert ledger.get_subscription(annual["id"])["reminded_date"] == "2026-02-28"
+            await ledger.bark_if_due(client, webhook, datetime(2026, 3, 28, 12, tzinfo=timezone.utc))
+
+    asyncio.run(remind())
+    assert len(urls) == 4
+    assert "Annual" in urls[0] and "Monthly" in urls[1] and "Annual" in urls[2] and "Monthly" in urls[3]
+    assert "2026-03-31" in urls[3]

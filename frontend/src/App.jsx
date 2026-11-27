@@ -18,6 +18,8 @@ import { HUB_DEVICE_ID } from './RemoteDevice.jsx';
 import { request, sendJson } from './api.js';
 
 const AiChat = lazy(() => import('./AiChat.jsx'));
+const SetupWizard = lazy(() => import('./SetupWizard.jsx'));
+const setupWizardKey = 'vitals.setup-wizard.seen';
 const views = [{ value: 'today', label: '今日概览' }, { value: 'control', label: '控制' },
   { value: 'scratchpad', label: '中转站' }];
 
@@ -39,12 +41,36 @@ function useHostUpdate() {
   return available;
 }
 
+function setupWizardSeen() {
+  try {
+    return localStorage.getItem(setupWizardKey) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function rememberSetupWizard() {
+  try {
+    const previous = localStorage.getItem(setupWizardKey);
+    localStorage.setItem(setupWizardKey, 'true');
+    return () => {
+      if (previous === null) localStorage.removeItem(setupWizardKey);
+    };
+  } catch {
+    // 存储不可用时仍可以使用设置向导。
+    return () => {};
+  }
+}
+
 export default function App() {
   const [view, setView] = useState('today');
   const [playerOpen, setPlayerOpen] = useState(false);
   const [clockOpen, setClockOpen] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false);
   const [settings, setSettings] = useState(false);
+  const [settingsCategory, setSettingsCategory] = useState('appearance');
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [setupDesktop, setSetupDesktop] = useState(null);
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [offlineNotice, setOfflineNotice] = useState('');
   const [agentActive, setAgentActive] = useState(false);
@@ -88,6 +114,26 @@ export default function App() {
   const { data: agentData, error: agentsError } = agents;
   const updatePreference = appearance.update;
   useEffect(() => {
+    const invoke = window.__TAURI__?.core?.invoke;
+    if (window.location.hostname !== '127.0.0.1' || typeof invoke !== 'function') return undefined;
+    const controller = new AbortController();
+    async function checkDesktopSetup() {
+      try {
+        const desktop = await invoke('get_desktop_mode');
+        if (controller.signal.aborted || desktop.mode !== 'hub') return;
+        setSetupDesktop(desktop);
+        if (setupWizardSeen()) return;
+        const state = await request('/api/setup/wizard', { signal: controller.signal });
+        if (controller.signal.aborted || state.initialized !== false || setupWizardSeen()) return;
+        setWizardOpen(true);
+      } catch {
+        // 旧版桌面应用或不可用的主机配置仍可打开仪表板。
+      }
+    }
+    checkDesktopSetup();
+    return () => controller.abort();
+  }, []);
+  useEffect(() => {
     if (!agentData || agentsError) return;
     const exists = (id) => id === HUB_DEVICE_ID || agentData.devices.some((item) => item.device_id === id);
     if (!exists(defaultDevice)) updatePreference('defaultDevice', HUB_DEVICE_ID);
@@ -127,6 +173,16 @@ export default function App() {
     setView(next);
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
+  function openSettings(category) {
+    setSettingsCategory(category);
+    setSettings(true);
+  }
+
+  function closeWizard() {
+    rememberSetupWizard();
+    setWizardOpen(false);
+  }
+
   return (
     <MotionConfig reducedMotion="user">
       <AppearanceFrame appearance={appearance}>
@@ -143,7 +199,7 @@ export default function App() {
               <HeaderClock onOpen={() => setClockOpen(true)} />
               {ai.settings?.enabled && <IconButton label="打开 Vitals AI" className="ai-trigger" aria-haspopup="dialog"
                 onClick={() => setChat(true)}><Sparkles size={21} /></IconButton>}
-              <IconButton label="个性化设置" onClick={() => setSettings(true)} aria-haspopup="dialog"><Settings size={21} /></IconButton>
+              <IconButton label="个性化设置" onClick={() => openSettings('appearance')} aria-haspopup="dialog"><Settings size={21} /></IconButton>
             </div>
           </div>
         </header>
@@ -178,6 +234,7 @@ export default function App() {
             <AiChat settings={ai.settings} onClose={() => setChat(false)} />
           </Suspense>}
           {settings && <AppearanceDialog key="settings" appearance={appearance} ai={ai} telemetry={telemetry}
+            initialCategory={settingsCategory} onOpenWizard={() => setWizardOpen(true)} wizardOpen={wizardOpen}
             deviceSettings={{ hub, devices, aliases, defaultDevice, error: agents.error || aliasResource.error,
               onRename: renameDevice, onRemove: removeDevice,
               onDefault: (id) => { appearance.update('defaultDevice', id); chooseDevice(null); } }}
@@ -185,6 +242,12 @@ export default function App() {
               if (!ai.settings?.enabled) setChat(false);
               setSettings(false);
             }} />}
+          {wizardOpen && <Suspense key="setup-wizard" fallback={null}>
+            <SetupWizard desktop={setupDesktop} onClose={closeWizard} onRemember={rememberSetupWizard} onOpenHost={() => {
+              openSettings('host');
+              closeWizard();
+            }} />
+          </Suspense>}
           {monitorOpen && <MonitorPage key="monitor" telemetry={telemetry} dark={dark} power={power} hub={hub}
             onClose={() => setMonitorOpen(false)} devices={onlineDevices} device={device} onDevice={chooseDevice} />}
           {clockOpen && <ClockDialog key="clock" style={appearance.preferences.clockStyle} focus={focusTimer}

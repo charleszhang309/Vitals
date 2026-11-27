@@ -6,6 +6,7 @@ mod settings;
 use service::{desktop_home, Hub, Operation, Status, Supervisor};
 use settings::{DesktopModeView, Role, Selection, SettingsStore, SettingsView};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use tauri::ipc::{CapabilityBuilder, CommandScope};
@@ -26,6 +27,9 @@ const SERVICE_UNAVAILABLE: &str = "无法连接 Vitals 服务管理器。";
 const MAIN_WINDOW: &str = "main";
 const SETTINGS_WINDOW: &str = "desktop-settings";
 type DashboardOrigin = Arc<Mutex<Option<Url>>>;
+
+#[derive(Default)]
+struct ManagedHub(AtomicBool);
 
 fn bundled_url(path: &str) -> Url {
     let origin = if cfg!(windows) {
@@ -164,6 +168,30 @@ fn set_desktop_mode(
             .map_err(|_| SERVICE_UNAVAILABLE)
     })?;
     Ok(store.mode_view())
+}
+
+fn is_local_hub_page(page: &Url) -> bool {
+    page.scheme() == "http" && page.host_str() == Some("127.0.0.1")
+}
+
+#[tauri::command]
+fn restart_desktop_hub(
+    window: WebviewWindow,
+    active: tauri::State<'_, DashboardOrigin>,
+    scope: CommandScope<String>,
+    managed_hub: tauri::State<'_, ManagedHub>,
+    operations: tauri::State<'_, Sender<Operation>>,
+) -> Result<(), &'static str> {
+    require_dashboard(&window, &active, &scope)?;
+    if !window.url().is_ok_and(|page| is_local_hub_page(&page)) {
+        return Err("请在本机主中心重启服务。");
+    }
+    if !managed_hub.inner().0.load(Ordering::Acquire) {
+        return Err("请使用当前的服务启动方式重启 Vitals。");
+    }
+    operations
+        .send(Operation::Restart)
+        .map_err(|_| SERVICE_UNAVAILABLE)
 }
 
 fn open_window(app: &AppHandle, label: &'static str) {
@@ -498,6 +526,7 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let (store, role) = SettingsStore::load(&home);
     app.manage(store);
     app.manage::<DashboardOrigin>(Arc::new(Mutex::new(None)));
+    app.manage(ManagedHub::default());
     let initial_status = if role == Role::Unconfigured {
         Status::Unconfigured
     } else {
@@ -591,7 +620,12 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     }
     std::thread::spawn(move || {
         let navigation = app.state::<Mutex<DashboardNavigation>>();
+        let managed_hub = app.state::<ManagedHub>();
         Supervisor::new(hub, role, home).run(receive, |role, state| {
+            managed_hub.inner().0.store(
+                matches!(role, Role::Hub) && state == Status::Running,
+                Ordering::Release,
+            );
             for menu in &menus {
                 menu.update(role, state);
             }
@@ -621,7 +655,8 @@ fn main() {
             read_desktop_settings,
             save_desktop_settings,
             get_desktop_mode,
-            set_desktop_mode
+            set_desktop_mode,
+            restart_desktop_hub
         ])
         .setup(build_app)
         .build(tauri::generate_context!())
@@ -663,6 +698,20 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wizard_restart_only_accepts_the_local_hub_address() {
+        assert!(is_local_hub_page(
+            &Url::parse("http://127.0.0.1:3993/").unwrap()
+        ));
+        for remote in [
+            "https://vitals.example.test/",
+            "https://127.0.0.1:3993/",
+            "http://127.0.0.2/",
+        ] {
+            assert!(!is_local_hub_page(&Url::parse(remote).unwrap()));
+        }
+    }
 
     #[test]
     fn desktop_mode_only_accepts_the_active_dashboard_and_its_grant() {

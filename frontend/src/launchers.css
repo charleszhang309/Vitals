@@ -1,0 +1,18 @@
+.launcher-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 9.5rem), 1fr));
+  gap: 8px;
+}
+
+.launcher-actions .button {
+  justify-content: flex-start;
+  min-width: 0;
+  padding-inline: 12px;
+  text-align: start;
+}
+
+.launcher-actions .button svg { flex-shrink: 0; }
+.launcher-actions .button span { overflow-wrap: anywhere; }
+.launcher-settings-item { min-inline-size: 0; display: grid; gap: 8px; border: 0; padding: 10px 0; }
+.launcher-settings-item + .launcher-settings-item { border-top: 1px solid var(--border); }
+.launcher-config-target { grid-column: 1 / -1; }

@@ -10,10 +10,12 @@ import secrets
 import shutil
 import subprocess
 import sys
+from typing import Literal
 from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, HTTPException, Query, Request
 import httpx
+import psutil
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
@@ -76,10 +78,10 @@ class CityMatch(BaseModel):
         return HealthConfig.check_timezone(value)
 
 
-async def city_matches(client, query):
+async def city_matches(client, query, language="zh"):
     try:
         response = await asyncio.wait_for(client.get(
-            GEOCODING_URL, params={"name": query, "count": 6, "language": "zh", "format": "json"}, timeout=5,
+            GEOCODING_URL, params={"name": query, "count": 6, "language": language, "format": "json"}, timeout=5,
         ), timeout=6)
         response.raise_for_status()
         document = response.json()
@@ -100,6 +102,7 @@ async def city_matches(client, query):
 
 def config_view(settings: Settings, running: Settings):
     return {
+        "launchers": [launcher.model_dump() for launcher in settings.launchers],
         "weather": settings.weather.model_dump(),
         "health": {"timezone": settings.health.timezone},
         "ai": {"model": settings.ai.model, "base_url": str(settings.ai.base_url),
@@ -139,6 +142,9 @@ async def json_object(request):
 
 def section_patch(document, patch):
     for section, values in patch.items():
+        if section == "launchers" and isinstance(values, list):
+            document["launchers"] = values
+            continue
         if section not in SECTION_FIELDS or not isinstance(values, dict) or values.keys() - SECTION_FIELDS[section]:
             raise HTTPException(422, "包含不支持的配置项")
         current = document.setdefault(section, {})
@@ -212,7 +218,8 @@ def write_config(path, update):
     except ValidationError as error:
         # Avoid returning the submitted values or user-defined dictionary keys.
         section = error.errors(include_input=False)[0]["loc"]
-        label = {"weather": "天气", "health": "时区", "ai": "AI", "webhook": "Bark", "calendar": "日历"}.get(
+        label = {"weather": "天气", "health": "时区", "ai": "AI", "webhook": "Bark", "calendar": "日历",
+                 "launchers": "快捷启动"}.get(
             section[0] if section else None, "主机")
         raise HTTPException(422, f"{label}配置无效，请检查必填项和格式") from None
     except (ValueError, OSError):
@@ -332,6 +339,29 @@ def tailscale_status(candidates, port):
     return exe, result
 
 
+def lhm_status(platform, monitor):
+    if platform != "windows":
+        return "not_applicable"
+    latest = getattr(monitor, "latest", None)
+    if latest and latest.get("lhm_connected"):
+        return "connected"
+    try:
+        for process in psutil.process_iter(["name"]):
+            if (process.info["name"] or "").casefold() == "librehardwaremonitor.exe":
+                return "running"
+    except (psutil.Error, OSError):
+        return "unknown"
+    return "not_running"
+
+
+def save_agent_token(path, *, overwrite):
+    def update(document, previous):
+        if overwrite or not previous.agents.token:
+            document.setdefault("agents", {})["token"] = secrets.token_urlsafe(32)
+
+    return write_config(path, update)
+
+
 def setup_router(path: Path, running: Settings):
     router = APIRouter(prefix="/api/setup", include_in_schema=False)
     serve_lock = asyncio.Lock()
@@ -349,16 +379,40 @@ def setup_router(path: Path, running: Settings):
     def status():
         return JSONResponse({"service": "Vitals", "instance": os.environ.get("VITALS_DESKTOP_INSTANCE")}, headers=PRIVATE)
 
+    @router.get("/wizard")
+    def wizard_status(request: Request):
+        state = request.app.state
+        settings = read_config()
+        defaults = Settings()
+        return JSONResponse({
+            "initialized": settings != defaults,
+            "has_token": bool(settings.agents.token),
+            "lhm": lhm_status(state.host_platform, getattr(state, "monitor", None)),
+            "weather": settings.weather.model_dump(),
+            "weather_is_default": settings.weather == defaults.weather,
+            "timezone": settings.health.timezone,
+            "timezone_is_default": settings.health.timezone == defaults.health.timezone,
+        }, headers=PRIVATE)
+
+    @router.post("/wizard/provision")
+    async def wizard_provision(request: Request):
+        if await json_object(request):
+            raise HTTPException(422, "初始化请求须为空对象")
+        settings = await run_in_threadpool(save_agent_token, path, overwrite=False)
+        return JSONResponse({"has_token": bool(settings.agents.token),
+                             "restart_required": settings.agents != running.agents}, headers=PRIVATE)
+
     @router.get("/config")
     def get_config():
         return view(read_config())
 
     @router.get("/geocode")
-    async def geocode(request: Request, q: str = Query(max_length=100)) -> list[CityMatch]:
+    async def geocode(request: Request, q: str = Query(max_length=100),
+                      language: Literal["zh", "en"] = "zh") -> list[CityMatch]:
         query = q.strip()
         if not query:
             raise HTTPException(422, "请输入城市名")
-        return await city_matches(request.app.state.external_client, query)
+        return await city_matches(request.app.state.external_client, query, language)
 
     @router.patch("/config")
     async def patch_config(request: Request):
@@ -379,9 +433,7 @@ def setup_router(path: Path, running: Settings):
         if set(payload) != {"regenerate"} or type(payload["regenerate"]) is not bool:
             raise HTTPException(422, "regenerate 须为布尔值")
         if payload["regenerate"]:
-            token = secrets.token_urlsafe(32)
-            settings = await run_in_threadpool(write_config, path, lambda document, _:
-                                                document.setdefault("agents", {}).update(token=token))
+            settings = await run_in_threadpool(save_agent_token, path, overwrite=True)
         else:
             settings = await run_in_threadpool(read_config)
         token = settings.agents.token

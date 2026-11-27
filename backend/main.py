@@ -29,8 +29,10 @@ from .backup import Backups, backup_router
 from .calendar_service import CalendarService, calendar_router
 from .config import ConfigModel, MIB, ROOT, SamplingMode, Settings, load_settings, update_settings_file
 from .control import MacPowerControl, PowerControl, control_router
+from .expenses import ExpenseStore, expenses_router
 from .health import HealthStore, health_router
 from .life import LifeStore, life_router
+from .launchers import launchers_router
 from .lyrics import LyricsCache
 from .media import MacMediaBridge, MediaBridge, media_router
 from .monitor import Monitor, host_identity
@@ -38,6 +40,7 @@ from .rates import RatePins, Rates, rates_router
 from .rate_history import RateHistory
 from .scratchpad import Scratchpad, scratchpad_router
 from .setup_api import direct_setup_request, setup_router
+from .screenshot import screenshot_router
 from .updates import updates_router
 from .wallpaper import wallpaper_router
 from .weather import Weather, weather_router
@@ -164,6 +167,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     agent_auth = require_agent_token(settings.agents)
     agents = AgentRegistry(store.connect)
     rates = Rates(settings.finance)
+    expenses = ExpenseStore(store.connect, health.zone, rates)
     rate_pins = RatePins(store.connect, settings.finance)
     rate_history = RateHistory(rates, store.connect)
     sensor_file = data_dir / "fancontrol-mode.sensor" if settings.fancontrol_mode_sensor else None
@@ -187,6 +191,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
             store.initialize()
             health.initialize()
             life.initialize()
+            expenses.initialize()
             rate_pins.initialize()
             rate_history.initialize()
             usage_ledger.initialize()
@@ -214,6 +219,8 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
                     workers.append(asyncio.create_task(calendar.run(external_client), name="calendar-sync"))
                 if settings.webhook.kind != "disabled":
                     workers.append(asyncio.create_task(monitor.send_notifications(external_client), name="webhook"))
+                if settings.webhook.kind == "bark":
+                    workers.append(asyncio.create_task(expenses.run_bark(external_client, settings.webhook), name="subscription-bark"))
                 if settings.webhook.kind == "bark" and settings.webhook.daily_briefing_time:
                     workers.append(asyncio.create_task(briefing.run_bark(external_client, ai_state, settings.webhook), name="daily-briefing-bark"))
                 try:
@@ -232,6 +239,8 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     if config_path is not None:
         app.include_router(setup_router(config_path, settings))
     app.include_router(control_router(power))
+    app.include_router(launchers_router(config_path, settings.launchers, identity["platform"]))
+    app.include_router(screenshot_router(agents, agent_auth, identity["platform"]))
     app.include_router(scratchpad_router(store, settings.upload_limit_mib * MIB))
     app.include_router(wallpaper_router(data_dir, wallpaper_lock))
     app.include_router(backup_router(backups, identity))
@@ -242,6 +251,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     app.include_router(agents_router(agents, agent_auth))
     app.include_router(life_router(life, agent_auth))
     app.include_router(rates_router(rates, rate_pins, rate_history))
+    app.include_router(expenses_router(expenses))
     app.include_router(ai_router(ai_state, store, power, briefing, ai_tools))
     app.include_router(usage_router(AiUsage(usage_ledger, settings.ai_usage, health.zone)))
     app.include_router(media_router(media, LyricsCache(store), agents))

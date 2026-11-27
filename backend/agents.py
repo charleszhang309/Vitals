@@ -203,6 +203,11 @@ class ConfirmedShutdownCommand(EmptyPayload):
     payload: EmptyPayload = Field(default_factory=EmptyPayload)
 
 
+class ScreenshotCommand(EmptyPayload):
+    action: Literal["screenshot"] = "screenshot"
+    payload: EmptyPayload = Field(default_factory=EmptyPayload)
+
+
 Command = Annotated[VolumeCommand | MuteCommand | AudioDeviceCommand | ButtonCommand, Field(discriminator="action")]
 
 
@@ -415,7 +420,7 @@ class AgentRegistry:
                  "commands": [{"id": str(identifier), "action": command.action, "status": command.status(now),
                                **(command.result.model_dump() if command.result else {}),
                                **({"completed_at": command.completed_at.isoformat()} if command.completed_at else {})}
-                              for identifier, command in device.commands.items()]}
+                              for identifier, command in device.commands.items() if command.action != "screenshot"]}
                 for device_id, device in self.devices.items()
             ]
 
@@ -433,6 +438,10 @@ class AgentRegistry:
                 raise HTTPException(409, "设备已休眠或离线")
             volume = device.snapshot["volume"] or {}
             for payload in payloads:
+                if payload.action == "screenshot" and (
+                    device.snapshot["os"] != "macos" or "screenshot" not in device.snapshot["capabilities"]
+                ):
+                    raise HTTPException(409, "该设备不支持截图，请更新 Mac Agent")
                 if payload.action in {"audio_device_set", "input_audio_device_set"}:
                     is_input = payload.action == "input_audio_device_set"
                     devices = volume.get("input_devices" if is_input else "devices", [])
@@ -458,6 +467,20 @@ class AgentRegistry:
             if device.stream_wake is not None:
                 device.stream_wake.set()
             return queued
+
+    def require_screenshot_delivery(self, device_id, cmd_id):
+        with self.lock:
+            device = self.devices.get(device_id)
+            command = device.commands.get(cmd_id) if device else None
+            if command is None or command.action != "screenshot" or command.status(monotonic()) != "delivered":
+                raise HTTPException(404, "截图请求已失效")
+
+    def discard_screenshot(self, device_id, cmd_id):
+        with self.lock:
+            device = self.devices.get(device_id)
+            command = device.commands.get(cmd_id) if device else None
+            if command and command.action == "screenshot":
+                del device.commands[cmd_id]
 
     def require_device(self, device_id):
         with self.lock:
@@ -505,7 +528,7 @@ class AgentRegistry:
         with self.lock:
             device = self.devices.get(device_id)
             command = device.commands.get(cmd_id) if device else None
-            if command is None or command.sent_at is None:
+            if command is None or command.sent_at is None or command.action == "screenshot":
                 raise HTTPException(404, "找不到该设备的已下发指令")
             if command.result is not None and command.result != result:
                 raise HTTPException(409, "已记录该指令的结果")

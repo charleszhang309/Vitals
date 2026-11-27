@@ -3,6 +3,7 @@ import { AnimatePresence } from 'framer-motion';
 import { Activity, Coffee, Lock, MonitorOff, Moon, Power, RotateCw, Timer, XCircle } from 'lucide-react';
 import { postJson, request } from './api.js';
 import { measure, rateText, time } from './format.js';
+import ScreenshotControl from './ScreenshotControl.jsx';
 import { Button, DetailLink, IconButton, Modal, Segmented } from './ui.jsx';
 import useResource from './useOverviewResource.js';
 
@@ -136,12 +137,13 @@ export function QuickControlCard() {
   const close = () => setDialog(null);
   return <section className="surface panel quick-card" aria-labelledby="quick-control-heading">
     <div className="panel-header"><h2 id="quick-control-heading">主机快捷控制</h2></div>
-    <div className="quick-control-row" role="group" aria-label="主机操作">
+    <div className="quick-control-row with-screenshot" role="group" aria-label="主机操作">
       <Button onClick={() => setDialog('lock')} disabled={busy} aria-haspopup="dialog"><Lock size={15} /><span>锁屏</span></Button>
       <Button onClick={() => run('display-off')} disabled={busy}><MonitorOff size={15} /><span>关闭显示器</span></Button>
       <Button className="shutdown-button" onClick={() => setDialog('immediate')} disabled={unavailable} aria-haspopup="dialog"><Power size={15} /><span>立即关机</span></Button>
       <Button onClick={() => { setDraft(''); setDialog('schedule'); }} disabled={unavailable} aria-haspopup="dialog"><Timer size={15} /><span>定时关机</span></Button>
       <Button className="cancel-shutdown" onClick={() => run('cancel')} disabled={busy || !deadline}><XCircle size={15} /><span>取消关机</span></Button>
+      <ScreenshotControl disabled={busy} />
     </div>
     {deadline && <ShutdownCountdown deadline={deadline} />}
     {(busy || feedback) && <p className={`feedback ${feedback?.error ? 'error' : ''}`} role={feedback?.error ? 'alert' : 'status'}>{busy ? '正在处理…' : feedback.text}</p>}
@@ -202,12 +204,13 @@ export function MacQuickControlCard() {
 
   return <section className="surface panel quick-card" aria-labelledby="quick-control-heading">
     <div className="panel-header"><h2 id="quick-control-heading">主机快捷控制</h2></div>
-    <div className="quick-control-row mac-quick-row" role="group" aria-label="主机操作">
+    <div className="quick-control-row mac-quick-row with-screenshot" role="group" aria-label="主机操作">
       <Button onClick={() => send('display-off')} disabled={busy}><MonitorOff size={15} />息屏</Button>
       <Button onClick={() => setConfirmSleep(true)} disabled={busy} aria-haspopup="dialog"><Moon size={15} />休眠</Button>
       <Button onClick={() => send('caffeinate-toggle')} disabled={busy || !quick.data} aria-pressed={quick.data?.caffeinate ?? false}>
         <Coffee size={15} />保持唤醒
       </Button>
+      <ScreenshotControl disabled={busy} />
     </div>
     {feedback && <p className={feedback.error ? 'feedback error' : 'feedback'} role={feedback.error ? 'alert' : 'status'}>
       {feedback.text}

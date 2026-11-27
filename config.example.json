@@ -3,6 +3,7 @@
   "port": 3993,
   "upload_limit_mib": 50,
   "sampling_mode": "smart",
+  "launchers": [],
   "weather": {
     "city_name": "伦敦",
     "latitude": 51.5074,

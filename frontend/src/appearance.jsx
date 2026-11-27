@@ -491,9 +491,9 @@ function BackupSettings() {
   </section>;
 }
 
-export function AppearanceDialog({ appearance, onClose, ai, telemetry, deviceSettings }) {
+export function AppearanceDialog({ appearance, onClose, ai, telemetry, deviceSettings, initialCategory, onOpenWizard, wizardOpen }) {
   const input = useRef(null);
-  const [category, setCategory] = useState('appearance');
+  const [category, setCategory] = useState(initialCategory);
   const [hostConfig, setHostConfig] = useState(null);
   const categories = [
     ...baseCategories,
@@ -502,12 +502,12 @@ export function AppearanceDialog({ appearance, onClose, ai, telemetry, deviceSet
   ];
   const { preferences, busy, appearanceError, update, changeWallpaper } = appearance;
   useEffect(() => {
-    if (!['127.0.0.1', '[::1]'].includes(window.location.hostname)) return undefined;
+    if (wizardOpen || !['127.0.0.1', '[::1]'].includes(window.location.hostname)) return undefined;
     const controller = new AbortController();
     request('/api/setup/config', { signal: controller.signal })
-      .then(setHostConfig).catch(() => {});
+      .then((config) => { if (!controller.signal.aborted) setHostConfig(config); }).catch(() => {});
     return () => controller.abort();
-  }, []);
+  }, [wizardOpen]);
   function changeTab(event) {
     const offset = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[event.key];
     if (!offset && event.key !== 'Home' && event.key !== 'End') return;
@@ -573,9 +573,11 @@ export function AppearanceDialog({ appearance, onClose, ai, telemetry, deviceSet
             <DeviceSettings {...deviceSettings} />
             <BackupSettings />
           </div>}
-          {category === 'host' && hostConfig && <Suspense fallback={<p className="muted" role="status">正在加载主机配置…</p>}>
-            <HostSetup config={hostConfig} onConfig={setHostConfig} />
-          </Suspense>}
+          {category === 'host' && (hostConfig
+            ? <Suspense fallback={<p className="muted" role="status">正在加载主机配置…</p>}>
+              <HostSetup config={hostConfig} onConfig={setHostConfig} onOpenWizard={onOpenWizard} />
+            </Suspense>
+            : <p className="muted" role="status">正在加载主机配置…</p>)}
           {category === 'about' && <AboutSettings updates={appearance.updates} enabled={preferences.autoUpdateCheck}
             onToggle={(value) => update('autoUpdateCheck', value)} />}
           {category === 'ai' && <div className="settings-switches">

@@ -10,6 +10,7 @@ import useResource from './useOverviewResource.js';
 import { orderedCards } from './overviewCards.js';
 import { AiUsageDetails, AiUsagePreview } from './AiUsageWidget.jsx';
 import { CalendarDetails, CalendarPreview } from './CalendarWidget.jsx';
+import { ExpensesDetails, ExpensesPreview } from './ExpensesWidget.jsx';
 import { CountdownDetails, CountdownPreview, RateDetails, RatePreview, TasksDetails, TasksPreview } from './LifeWidgets.jsx';
 import './overviewWidgets.css';
 
@@ -440,6 +441,7 @@ export default function TodayPage({ telemetry, media, hub, primaryDevice, waitin
   const countdowns = useResource('/api/countdowns', 30_000, visible('countdowns'));
   const rates = useResource('/api/rates', 60_000, visible('rates'));
   const aiUsage = useResource('/api/ai/usage', 300_000, visible('ai-usage'));
+  const expenses = useResource('/api/expenses/summary', 30_000, visible('expenses'));
   useEffect(() => {
     if (aiUsage.data) setUsageReadAt(Date.now());
   }, [aiUsage.data]);
@@ -452,12 +454,14 @@ export default function TodayPage({ telemetry, media, hub, primaryDevice, waitin
     countdowns: <CountdownPreview resource={countdowns} wide={isWide('countdowns')} />,
     rates: <RatePreview resource={rates} wide={isWide('rates')} />,
     'ai-usage': <AiUsagePreview resource={aiUsage} wide={isWide('ai-usage')} preferredSource={usageSource} />,
+    expenses: <ExpensesPreview resource={expenses} wide={isWide('expenses')} />,
   };
   const details = {
     weather: <Weather resource={weather} dark={dark} />, health: <Health resource={health} weekly={healthWeek} dark={dark} />,
     tasks: <TasksDetails todos={todos} habits={habits} />,
     countdowns: <CountdownDetails resource={countdowns} />, rates: <RateDetails resource={rates} dark={dark} />,
     'ai-usage': <AiUsageDetails resource={aiUsage} preferredSource={usageSource} onSource={setUsageSource} readAt={usageReadAt} />,
+    expenses: <ExpensesDetails resource={expenses} />,
   };
   const shown = orderedCards(cardOrder).filter(({ id }) => visible(id));
   const selected = shown.find(({ id }) => id === open);

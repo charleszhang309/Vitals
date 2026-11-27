@@ -2,7 +2,7 @@
 
 import ipaddress
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 from string import Formatter
 from tempfile import NamedTemporaryFile
@@ -20,6 +20,7 @@ GIB = 1024**3
 OPENAI_MODEL = "gpt-6-luna"
 OPENAI_HOSTS = {"api.openai.com", "us.api.openai.com", "eu.api.openai.com"}
 SamplingMode = Literal["smart", "realtime", "eco"]
+LAUNCHER_ID_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}$"
 _config_write_lock = Lock()
 
 
@@ -204,6 +205,41 @@ class AiUsageConfig(ConfigModel):
     anthropic_admin_key: SecretStr | None = None
 
 
+class Launcher(ConfigModel):
+    id: str = Field(pattern=LAUNCHER_ID_PATTERN)
+    name: str = Field(min_length=1, max_length=64)
+    kind: Literal["app", "url"]
+    target: str = Field(min_length=1, max_length=2048)
+
+    @field_validator("name", "target", mode="before")
+    @classmethod
+    def normalize_text(cls, value):
+        if not isinstance(value, str):
+            return value
+        value = value.strip()
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("启动项不可包含控制字符")
+        return value
+
+    @model_validator(mode="after")
+    def check_target(self):
+        if self.kind == "url":
+            url = HttpUrl(self.target)
+            if url.username or url.password:
+                raise ValueError("启动链接不可包含用户名或密码")
+            self.target = str(url)
+        else:
+            windows = PureWindowsPath(self.target)
+            mac = PurePosixPath(self.target)
+            windows_ok = (windows.is_absolute() and re.fullmatch(r"[A-Za-z]:", windows.drive)
+                          and windows.suffix.lower() == ".exe" and ".." not in windows.parts
+                          and not any(set(part) & set('<>:"|?*') for part in windows.parts[1:]))
+            mac_ok = (mac.anchor == "/" and mac.suffix == ".app" and ".." not in mac.parts and "\\" not in self.target)
+            if not (windows_ok or mac_ok):
+                raise ValueError("应用启动项必须指定本地 .exe 或 .app 的绝对路径")
+        return self
+
+
 def default_modes() -> dict[str, PowerMode]:
     return {
         "silent": PowerMode(guid=UUID("a1841308-3541-4fab-bc81-f71556f20b4a")),
@@ -229,6 +265,7 @@ class Settings(ConfigModel):
     finance: FinanceConfig = Field(default_factory=FinanceConfig)
     ai: AiConfig = Field(default_factory=AiConfig)
     ai_usage: AiUsageConfig = Field(default_factory=AiUsageConfig)
+    launchers: list[Launcher] = Field(default_factory=list, max_length=32)
     fancontrol_mode_sensor: bool = False
     fancontrol_exe: Path | None = None
     power_modes: dict[str, PowerMode] = Field(default_factory=default_modes)
@@ -239,6 +276,13 @@ class Settings(ConfigModel):
         if host != "localhost":
             ipaddress.ip_address(host)
         return host
+
+    @field_validator("launchers")
+    @classmethod
+    def unique_launcher_ids(cls, launchers: list[Launcher]) -> list[Launcher]:
+        if len({launcher.id for launcher in launchers}) != len(launchers):
+            raise ValueError("启动项 ID 不可重复")
+        return launchers
 
     @field_validator("fancontrol_exe")
     @classmethod

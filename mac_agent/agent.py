@@ -16,9 +16,11 @@ import subprocess
 import sys
 from threading import Event, Lock, Thread
 from time import monotonic, time
+from uuid import UUID
 
 import httpx
 import psutil
+from PIL import Image
 
 if __package__ in ("", None):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -29,6 +31,7 @@ from mac_agent.macos import Caffeinate, Sampler, execute_command
 from mac_agent.playback import MEDIA_ACTIONS, read_playback
 from mac_agent.quick_controls import QuickControls, ScriptError
 from mac_agent.reminders import sync_once
+from mac_agent.screenshot import ScreenRecordingDenied, capture_mac
 from mac_agent.state import load_state, save_state, single_instance, state_directory
 
 HEARTBEAT_SECONDS = 3
@@ -69,6 +72,7 @@ class SnapshotPublisher:
         response = self.client.post(self.path + "/heartbeat", json={
             "name": self.device_name, "os": "macos",
             "timestamp": datetime.now(timezone.utc).isoformat(), **self.snapshot,
+            "capabilities": ["screenshot"],
         })
         response.raise_for_status()
         reply = response.json()
@@ -166,6 +170,37 @@ def listen_commands(config, stopped, inbox):
             retry = min(retry + 1, len(STREAM_BACKOFF) - 1)
 
 
+def process_screenshot(client, device_id, command_id, payload):
+    try:
+        if payload != {} or str(UUID(command_id)) != command_id:
+            return
+    except ValueError:
+        return
+
+    route = f"/api/agents/{device_id}/commands/{command_id}/screenshot"
+    try:
+        response = client.post(route + "/start")
+        if response.status_code != 204:
+            return
+    except httpx.HTTPError:
+        return
+
+    try:
+        media_type, contents = capture_mac()
+        response = client.post(route, content=contents, headers={"Content-Type": media_type})
+        if response.status_code not in (404, 410):
+            response.raise_for_status()
+        return
+    except ScreenRecordingDenied:
+        code = "permission"
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError, subprocess.TimeoutExpired, Image.DecompressionBombError):
+        code = "capture"
+    try:
+        client.post(route + "/error/" + code)
+    except httpx.HTTPError:
+        pass
+
+
 def process_commands(client, config, commands, directory, caffeinate, quick, publisher, media_refresh):
     path = directory / "command-receipts.json"
     now = time()
@@ -193,6 +228,9 @@ def process_commands(client, config, commands, directory, caffeinate, quick, pub
         command_id = command.get("id")
         if not isinstance(command_id, str) or not COMMAND_ID.fullmatch(command_id):
             logger.warning("忽略没有有效 ID 的指令")
+            continue
+        if command.get("action") == "screenshot":
+            process_screenshot(client, config.device_id, command_id, command.get("payload", {}))
             continue
         if command_id in receipts:
             continue

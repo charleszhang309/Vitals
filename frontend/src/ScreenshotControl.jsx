@@ -1,0 +1,73 @@
+import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { AnimatePresence } from 'framer-motion';
+import { RefreshCw, ScanLine } from 'lucide-react';
+import { fetchResponse } from './api.js';
+import { Button, IconButton, Modal } from './ui.jsx';
+import './ScreenshotControl.css';
+
+export default function ScreenshotControl({ deviceId, deviceName, disabled = false }) {
+  const id = useId();
+  const request = useRef(null);
+  const objectUrl = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [view, setView] = useState({ loading: true });
+
+  useLayoutEffect(() => () => {
+    request.current?.abort();
+    if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
+  }, []);
+
+  function clear() {
+    request.current?.abort();
+    request.current = null;
+    if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
+    objectUrl.current = null;
+  }
+
+  async function capture() {
+    clear();
+    const controller = new AbortController();
+    request.current = controller;
+    setView({ loading: true });
+    const path = deviceId ? `/api/control/screenshot/${encodeURIComponent(deviceId)}` : '/api/control/screenshot';
+    try {
+      const response = await fetchResponse(path, { method: 'POST', signal: controller.signal });
+      const image = await response.blob();
+      if (controller.signal.aborted || request.current !== controller) return;
+      if (!['image/webp', 'image/jpeg'].includes(image.type)) throw new Error('未收到有效截图，请重试。');
+      objectUrl.current = URL.createObjectURL(image);
+      setView({ url: objectUrl.current });
+    } catch (error) {
+      if (!controller.signal.aborted && request.current === controller) setView({ error: error.message });
+    }
+  }
+
+  function close() {
+    clear();
+    setOpen(false);
+    setView({ loading: true });
+  }
+
+  function openPreview() {
+    setOpen(true);
+    capture();
+  }
+
+  return <>
+    <Button onClick={openPreview} disabled={disabled} aria-haspopup="dialog">
+      <ScanLine size={15} aria-hidden="true" /><span>截图</span>
+    </Button>
+    <AnimatePresence>
+      {open && <Modal id={id} className="detail-dialog screenshot-dialog" title={deviceName ? `${deviceName} 截图` : '主屏截图'}
+        onClose={close} headerActions={<IconButton label="重新截图" disabled={disabled || view.loading} onClick={capture}>
+          <RefreshCw size={17} aria-hidden="true" />
+        </IconButton>}>
+        <div className="screenshot-preview" aria-busy={Boolean(view.loading)}>
+          {view.loading && <p className="muted" role="status">正在截取主屏…</p>}
+          {view.error && <p className="feedback error" role="alert">{view.error}</p>}
+          {view.url && <img src={view.url} alt={deviceName ? `${deviceName} 的主屏截图` : '本机主屏截图'} />}
+        </div>
+      </Modal>}
+    </AnimatePresence>
+  </>;
+}

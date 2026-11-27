@@ -3,6 +3,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -26,6 +27,8 @@ def test_setup_requires_direct_loopback(tmp_path, peer, headers, expected):
     if expected == 403:
         assert client.post("/api/setup/agents/token", headers=headers, json={"regenerate": False}).status_code == 403
         assert client.post("/api/setup/tailscale/serve", headers=headers, json={"enabled": False}).status_code == 403
+        assert client.get("/api/setup/wizard", headers=headers).status_code == 403
+        assert client.post("/api/setup/wizard/provision", headers=headers, json={}).status_code == 403
 
 
 def setup_client(tmp_path, config):
@@ -92,6 +95,65 @@ def test_setup_pairing_token_can_be_read_and_rotated_locally(tmp_path):
     assert content["token"] != "old-token" and len(content["token"]) >= 32
     assert content["restart_required"] is True
     assert json.loads(path.read_text(encoding="utf-8"))["agents"]["token"] == content["token"]
+
+
+def test_wizard_prepares_a_token_once_without_returning_it(tmp_path):
+    client, path = setup_client(tmp_path, {})
+    status = client.get("/api/setup/wizard")
+    assert status.json()["initialized"] is False
+    assert status.json()["has_token"] is False
+    assert status.headers["cache-control"] == "no-store"
+    assert client.post("/api/setup/wizard/provision", json={"token": "invalid"}).status_code == 422
+
+    created = client.post("/api/setup/wizard/provision", json={})
+    assert created.json() == {"has_token": True, "restart_required": True}
+    saved = path.read_bytes()
+    token = json.loads(saved)["agents"]["token"]
+    assert len(token) >= 32
+    assert client.post("/api/setup/wizard/provision", json={}).json() == created.json()
+    assert path.read_bytes() == saved
+    status = client.get("/api/setup/wizard")
+    assert status.json()["initialized"] is True
+    assert status.json()["has_token"] is True
+    assert token not in status.text
+
+
+def test_wizard_detects_windows_lhm_and_keeps_configured_location(tmp_path, monkeypatch):
+    client, _ = setup_client(tmp_path, {
+        "agents": {"token": "existing-token"},
+        "weather": {"city_name": "Montréal", "latitude": 45.5, "longitude": -73.56},
+        "health": {"timezone": "America/Toronto"},
+    })
+    client.app.state.host_platform = "windows"
+    monkeypatch.setattr(setup_api.psutil, "process_iter", lambda attrs: [
+        SimpleNamespace(info={"name": "LibreHardwareMonitor.exe"}),
+    ])
+    status = client.get("/api/setup/wizard").json()
+    assert status["lhm"] == "running"
+    assert status["weather"]["city_name"] == "Montréal"
+    assert status["weather_is_default"] is False
+    assert status["timezone"] == "America/Toronto"
+    assert status["timezone_is_default"] is False
+    client.app.state.monitor = SimpleNamespace(latest={"lhm_connected": True})
+    assert client.get("/api/setup/wizard").json()["lhm"] == "connected"
+    assert client.post("/api/setup/wizard/provision", json={}).json() == {"has_token": True, "restart_required": False}
+    assert client.post("/api/setup/agents/token", json={"regenerate": False}).json()["token"] == "existing-token"
+
+
+def test_wizard_geocoding_can_match_an_english_timezone_city(tmp_path):
+    client, _ = setup_client(tmp_path, {})
+
+    async def get(url, *, params, timeout):
+        assert url == setup_api.GEOCODING_URL
+        assert params["language"] == "en"
+        return httpx.Response(200, request=httpx.Request("GET", url), json={"results": [
+            {"name": "Toronto", "latitude": 43.7, "longitude": -79.4, "timezone": "America/Toronto"},
+        ]})
+
+    client.app.state.external_client = SimpleNamespace(get=get)
+    matches = client.get("/api/setup/geocode", params={"q": "Toronto", "language": "en"}).json()
+    assert matches[0]["name"] == "Toronto"
+    assert matches[0]["timezone"] == "America/Toronto"
 
 
 def test_setup_usage_keys_merge_without_exposing_values(tmp_path):

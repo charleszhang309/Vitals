@@ -1,4 +1,4 @@
-import { CalendarDays, CircleDollarSign, CloudSun, HeartPulse, ListTodo, CalendarClock, ChartNoAxesColumnIncreasing } from 'lucide-react';
+import { CalendarDays, CircleDollarSign, CloudSun, HeartPulse, ListTodo, CalendarClock, ChartNoAxesColumnIncreasing, Receipt } from 'lucide-react';
 
 export const overviewStrips = [
   { id: 'host', title: '主机状态条' },
@@ -14,6 +14,7 @@ export const overviewCards = [
   { id: 'countdowns', title: '倒数日', Icon: CalendarClock, tone: 'purple' },
   { id: 'rates', title: '汇率', Icon: CircleDollarSign, tone: 'blue' },
   { id: 'ai-usage', title: 'AI 用量', Icon: ChartNoAxesColumnIncreasing, tone: 'green' },
+  { id: 'expenses', title: '账单', Icon: Receipt, tone: 'purple' },
 ];
 
 export const overviewModules = [...overviewStrips, ...overviewCards];

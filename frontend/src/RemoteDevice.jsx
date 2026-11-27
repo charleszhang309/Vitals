@@ -3,6 +3,7 @@ import { AnimatePresence } from 'framer-motion';
 import { Activity, Clipboard, Coffee, LockKeyhole, MonitorOff, Moon } from 'lucide-react';
 import { postJson } from './api.js';
 import { bytes, measure, rateText, sleepTime, time } from './format.js';
+import ScreenshotControl from './ScreenshotControl.jsx';
 import { Button, DetailLink, DetailValues, Modal, ProgressBar, Segmented } from './ui.jsx';
 
 export const HUB_DEVICE_ID = 'hub';
@@ -331,6 +332,8 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
           <Button disabled={disabled || awaiting('clipboard_push')} title="发送 Mac 剪贴板内容到中转站"
             onClick={() => send('clipboard_push')}><Clipboard size={15} /><span>推剪贴板</span></Button>
         </>}
+        {device.os === 'macos' && device.snapshot.capabilities?.includes('screenshot') &&
+          <ScreenshotControl deviceId={device.device_id} deviceName={device.name} disabled={disabled} />}
       </div>
     </section>
     {children({

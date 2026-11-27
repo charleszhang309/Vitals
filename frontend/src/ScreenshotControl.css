@@ -1,0 +1,22 @@
+.quick-control-row.with-screenshot {
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+}
+
+.detail-dialog.screenshot-dialog {
+  width: min(1080px, calc(100% - 28px));
+}
+
+.screenshot-preview {
+  display: grid;
+  place-items: center;
+  min-height: min(180px, 50dvh);
+  text-align: center;
+}
+
+.screenshot-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: min(75dvh, calc(100dvh - 140px));
+  object-fit: contain;
+  border-radius: 12px;
+}

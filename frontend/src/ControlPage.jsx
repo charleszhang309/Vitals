@@ -6,6 +6,7 @@ import { IconButton, Modal, ProgressBar } from './ui.jsx';
 import { artworkUrl } from './useMedia.js';
 import { HardwareSummary, MacQuickControlCard, PowerCard, QuickControlCard } from './HostControls.jsx';
 import { DevicePicker, RemoteControl } from './RemoteDevice.jsx';
+import Launchers from './Launchers.jsx';
 
 export const playbackLabels = { playing: '播放中', paused: '已暂停', stopped: '已停止', offline: '设备离线' };
 const volumePath = '/api/media/volume';
@@ -409,6 +410,7 @@ function HostControl({ sample, platform, power, onMonitor, media, ...player }) {
       <PowerCard controller={power} />
       <QuickControlCard />
     </div>}
+    <Launchers />
     <PlaybackControls sound={sound} media={{ ...media, reason }} {...player} />
   </>;
 }
