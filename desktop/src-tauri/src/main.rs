@@ -17,6 +17,10 @@ use tauri_plugin_autostart::ManagerExt;
 
 fn open_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        #[cfg(target_os = "macos")]
+        if let Err(error) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
+            eprintln!("Could not restore Vitals Dock icon: {error}");
+        }
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -112,6 +116,9 @@ fn install_macos_menu(app: &AppHandle) -> tauri::Result<TrayMenu<tauri::Wry>> {
 }
 
 fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
     let hub = Hub::new(app.handle())?;
     let origin: Url = hub.url().parse()?;
     let allowed_origin = origin.origin();
@@ -147,7 +154,17 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     window.on_window_event(move |event| {
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
-            let _ = closing.hide();
+            if let Err(error) = closing.hide() {
+                eprintln!("Could not hide Vitals window: {error}");
+                return;
+            }
+            #[cfg(target_os = "macos")]
+            if let Err(error) = closing
+                .app_handle()
+                .set_activation_policy(tauri::ActivationPolicy::Accessory)
+            {
+                eprintln!("Could not hide Vitals Dock icon: {error}");
+            }
         }
     });
 
