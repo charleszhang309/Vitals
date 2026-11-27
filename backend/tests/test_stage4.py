@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import httpx
+import pytest
 
 from backend.ai import ChatHistory
 from backend.config import HealthConfig, Settings
@@ -247,3 +248,70 @@ def test_sleep_hourly_uses_observed_segments_without_double_counting(tmp_path):
     ]}]}}, 2)
     sleep = health.detail("sleep", datetime(2026, 1, 3, 17, tzinfo=timezone.utc))
     assert [hour["sleep_minutes"] for hour in sleep["hourly"]] == [15, 45, 15]
+
+
+def sleep_export(*entries):
+    return {"data": {"metrics": [{"name": "sleep_analysis", "units": "min", "data": list(entries)}]}}
+
+
+def sleep_export_part(start, end, minutes):
+    return {"date": "2026-01-03 00:00:00 -0500", "sleepStart": start, "sleepEnd": end,
+            "totalSleep": minutes, "core": minutes}
+
+
+@pytest.mark.parametrize("split_push", [False, True])
+def test_same_date_sleep_fragments_survive_import_and_count_only_measured_minutes(tmp_path, split_push):
+    store = Scratchpad(tmp_path)
+    store.initialize()
+    health = HealthStore(store.connect, HealthConfig())
+    health.initialize()
+    early = sleep_export_part("2026-01-03 02:00:00 -0500", "2026-01-03 04:30:00 -0500", 135)
+    late = sleep_export_part("2026-01-03 05:00:00 -0500", "2026-01-03 08:30:00 -0500", 200)
+    pushes = [sleep_export(early), sleep_export(late)] if split_push else [sleep_export(early, late)]
+    assert sum(health.ingest(document, 2) for document in pushes) == 2
+    assert health.ingest(sleep_export(late), 2) == 0
+    now = datetime(2026, 1, 3, 16, tzinfo=timezone.utc)
+    detail = health.detail("sleep", now)
+    sleep = detail["sleep"]
+    assert sleep["start"] == "2026-01-03T07:00:00.000000+00:00"
+    assert sleep["end"] == "2026-01-03T13:30:00.000000+00:00"
+    assert sleep["total_minutes"] == 335
+    assert sleep["in_bed_minutes"] == 360
+    assert detail["hourly"] == []
+    assert detail["weekly"][-1]["total_minutes"] == 335
+    assert health.summary(now)["sleep"]["total_minutes"] == 335
+    assert health.last_night_minutes(now) == 335
+
+
+def test_sleep_overlap_does_not_double_count_legacy_summaries_or_merge_separate_naps(tmp_path):
+    store = Scratchpad(tmp_path)
+    store.initialize()
+    health = HealthStore(store.connect, HealthConfig())
+    health.initialize()
+    morning = sleep_export_part("2026-01-03 02:00:00 -0500", "2026-01-03 08:30:00 -0500", 370)
+    partial = sleep_export_part("2026-01-03 05:00:00 -0500", "2026-01-03 08:30:00 -0500", 200)
+    nap = sleep_export_part("2026-01-03 14:00:00 -0500", "2026-01-03 14:30:00 -0500", 30)
+    health.ingest(sleep_export(partial), 2)
+    with store.connect() as db:
+        # 模拟升级前以本地零点作为键的记录。
+        db.execute("UPDATE health_samples SET at = ? WHERE metric = 'sleep_analysis'",
+                   ("2026-01-03T05:00:00.000000+00:00",))
+    health.ingest(sleep_export(morning), 2)
+    now = datetime(2026, 1, 3, 16, tzinfo=timezone.utc)
+    assert health.summary(now)["sleep"]["total_minutes"] == 370
+    health.ingest(sleep_export(nap), 2)
+    detail = health.detail("sleep", datetime(2026, 1, 3, 21, tzinfo=timezone.utc))
+    assert detail["sleep"]["total_minutes"] == 30
+    assert detail["weekly"][-1]["total_minutes"] == 370
+
+
+def test_unsummarized_apple_unspecified_sleep_is_counted_in_hourly_chart(tmp_path):
+    store = Scratchpad(tmp_path)
+    store.initialize()
+    health = HealthStore(store.connect, HealthConfig())
+    health.initialize()
+    assert health.ingest(sleep_export({"date": "2026-01-03 01:45:00 -0500",
+        "endDate": "2026-01-03 02:30:00 -0500", "value": "Unspecified"}), 2) == 1
+    sleep = health.detail("sleep", datetime(2026, 1, 3, 16, tzinfo=timezone.utc))
+    assert sleep["sleep"]["total_minutes"] == 45
+    assert [hour["sleep_minutes"] for hour in sleep["hourly"]] == [15, 30]

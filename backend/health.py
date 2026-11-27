@@ -1,5 +1,6 @@
 """合并 Apple 与 Android 健康数据，生成本地时区的健康概览。"""
 
+from bisect import bisect_right
 from collections import defaultdict
 import csv
 from datetime import datetime, time, timedelta, timezone
@@ -35,7 +36,10 @@ TREND_METRICS = {"heart": ("heart_rate", {"24h": 1, "7d": 7}),
 ALIASES = {"heart_rate_variability_sdnn": "heart_rate_variability", "active_energy_burned": "active_energy",
            "basal_energy": "basal_energy_burned"}
 KNOWN = {*LATEST, *(name for group in DETAIL_METRICS.values() for name in group if name != "sleep_segment")}
-STAGES = {"deep": "deep", "rem": "rem", "core": "core", "awake": "awake", "asleep": "asleep", "inbed": "in_bed"}
+STAGES = {"deep": "deep", "rem": "rem", "core": "core", "awake": "awake", "asleep": "asleep",
+          "unspecified": "asleep", "inbed": "in_bed"}
+SLEEP_PHASES = ("awake", "deep", "rem", "core", "asleep")
+SLEEP_SESSION_GAP = timedelta(hours=2)
 
 
 def iso(value: datetime) -> str:
@@ -142,7 +146,8 @@ def parse_apple(metrics, zone: ZoneInfo) -> dict[tuple[str, str], dict]:
                 end = timestamp(entry.get("sleepEnd"), zone)
                 bed_start = timestamp(entry.get("inBedStart"), zone)
                 bed_end = timestamp(entry.get("inBedEnd"), zone)
-                mark = mark or end or start or bed_end
+                # date 是汇总日的零点。同一天内的不同睡眠应以实际起点区分。
+                mark = start or bed_start or end or bed_end or mark
                 factor = 1 if unit in {"min", "minutes"} else 1 / 60 if unit in {"s", "sec", "seconds"} else 60
 
                 def minutes(key):
@@ -363,7 +368,7 @@ def sleep_sessions(rows):
     start = None
     for segment in segments:
         beginning, end = map(datetime.fromisoformat, segment[:2])
-        if start is not None and start - end > timedelta(hours=2):
+        if start is not None and start - end > SLEEP_SESSION_GAP:
             yield measure_sleep(session)
             session = []
             start = None
@@ -378,12 +383,11 @@ def sleep_intervals(segments):
     for beginning, end, stage in segments:
         changes[beginning].append((stage, 1))
         changes[end].append((stage, -1))
-    phases = ("awake", "deep", "rem", "core", "asleep")
     active = defaultdict(int)
     previous = None
     for instant in sorted(changes):
         if previous is not None and any(active.values()):
-            stage = next((phase for phase in phases if active[phase]), None)
+            stage = next((phase for phase in SLEEP_PHASES if active[phase]), None)
             yield previous, instant, stage
         for stage, delta in changes[instant]:
             active[stage] += delta
@@ -391,7 +395,6 @@ def sleep_intervals(segments):
 
 
 def measure_sleep(segments):
-    phases = ("awake", "deep", "rem", "core", "asleep")
     measured = defaultdict(float)
     first_asleep = last_asleep = None
     for beginning, end, stage in sleep_intervals(segments):
@@ -402,7 +405,7 @@ def measure_sleep(segments):
             if stage != "awake":
                 first_asleep = first_asleep or beginning
                 last_asleep = end
-    return normalize_sleep({key: measured.get(key) for key in phases}, None, measured["in_bed"],
+    return normalize_sleep({key: measured.get(key) for key in SLEEP_PHASES}, None, measured["in_bed"],
                            first_asleep, last_asleep, min(part[0] for part in segments), max(part[1] for part in segments))
 
 
@@ -422,12 +425,71 @@ def hourly_sleep(rows, start, end):
     return [{"time": iso(at), "sleep_minutes": value} for at, value in sorted(hours.items())]
 
 
+def merge_sleep_periods(periods):
+    # 汇总和逐段数据可能覆盖同一时段。选出睡眠分钟最多的一组不重叠记录。
+    ordered = sorted(periods, key=lambda part: part[1])
+    finishes = [part[1] for part in ordered]
+    best, choices = [0], []
+    for index, (first, _, _, record) in enumerate(ordered):
+        previous = bisect_right(finishes, first, hi=index)
+        minutes = best[previous] + record["total_minutes"]
+        choices.append(previous if minutes >= best[-1] else None)
+        best.append(max(minutes, best[-1]))
+
+    selected = []
+    index = len(ordered)
+    while index:
+        previous = choices[index - 1]
+        if previous is None:
+            index -= 1
+            continue
+        selected.append(ordered[index - 1])
+        index = previous
+    if len(selected) == 1:
+        return selected[0][2:]
+
+    records = [record for _, _, _, record in selected]
+
+    def known_sum(values):
+        known = [value for value in values if value is not None]
+        return sum(known) if known else None
+
+    return max(part[2] for part in selected), {
+        "start": min((record["start"] for record in records if record["start"]), default=None),
+        "end": max((record["end"] for record in records if record["end"]), default=None),
+        "in_bed_start": min(part[0] for part in selected),
+        "in_bed_end": max(part[1] for part in selected),
+        # 分段记录之间缺少测量值，空档不计为在床或睡眠。
+        "in_bed_minutes": known_sum(record["in_bed_minutes"] for record in records),
+        "total_minutes": best[-1],
+        "stages": {stage: known_sum(record["stages"].get(stage) for record in records) for stage in SLEEP_PHASES},
+        "adjusted": any(record["adjusted"] for record in records),
+    }
+
+
 def sleep_options(summaries, segments):
-    for row in summaries:
-        record = json.loads(row["payload"])
-        yield record["end"] or record["in_bed_end"] or row["at"], record
-    for record in sleep_sessions(segments):
-        yield record["end"] or record["in_bed_end"], record
+    candidates = [(row["at"], json.loads(row["payload"])) for row in summaries]
+    candidates.extend((None, record) for record in sleep_sessions(segments))
+    periods = []
+    for mark, record in candidates:
+        wake = record["end"] or record["in_bed_end"] or mark
+        first = record["in_bed_start"] or record["start"]
+        last = record["in_bed_end"] or record["end"]
+        if first and last and first < last and record["total_minutes"] is not None:
+            periods.append((first, last, wake, record))
+        else:
+            yield wake, record
+
+    session, finish = [], None
+    for part in sorted(periods, key=lambda period: period[0]):
+        first, last = map(datetime.fromisoformat, part[:2])
+        if finish is not None and first - finish > SLEEP_SESSION_GAP:
+            yield merge_sleep_periods(session)
+            session, finish = [], None
+        session.append(part)
+        finish = max(finish, last) if finish is not None else last
+    if session:
+        yield merge_sleep_periods(session)
 
 
 def heart_summary(values):
