@@ -44,7 +44,7 @@
 ### 2. 控制中心（支持 Windows & MacBook 多设备切换）
 - **Mac 轻量探针接入（`mac_agent/`）**：通过出站 SSE 实时指令通道接入 Hub。在「控制」中切换设备，查看 CPU、内存、主盘空间、内存占用前 5 进程和可用的电池数据，也可远程控制息屏、休眠、保持唤醒、音量与输出设备，或一键推送剪贴板。支持 **Apple 提醒事项与 Vitals 待办双向同步**。
 - **跨播放器媒体控制**：Windows 基于原生 **SMTC**（支持 Apple Music / QQ 音乐 / 网易云 / Spotify / 浏览器），MacBook 基于 AppleScript；卡片内直接支持快捷切歌与进度条，点击进入 **Apple Music 风格全屏播放 + AMLL 动态歌词**。
-- **系统音量与输出设备**：实时调节 Windows / MacBook 主音量、一键静音及切换音频输出设备。
+- **系统音量与音频设备**：调节 Windows / MacBook 扬声器与麦克风的音量和静音，切换系统默认输入或输出设备。
 
 ### 3. 硬件监控与远程控制
 - **精准传感器数据**：优先读取本地 **LibreHardwareMonitor**（CPU / GPU / 内存 / 风扇温度、功耗、频率与转速），`psutil` 补充磁盘空间、网络速率、累计流量与**内存占用 Top 5 进程**，LHM 断开时自动兜底。
@@ -73,7 +73,7 @@
 
 ### Windows 桌面版
 
-运行 `.exe`（NSIS）或 `.msi` 安装包，再从开始菜单打开 **Vitals**。托盘图标左键显示窗口，关闭窗口会将其隐藏到托盘。右键菜单提供本机服务的启动、停止、重启、登录自启与退出。登录自启在该 Windows 用户登录时启动托盘程序。若需要登录前运行，继续使用现有任务计划程序方式。
+运行 `.exe`（NSIS）或 `.msi` 安装包，再从开始菜单打开 **Vitals**。关闭窗口会释放 WebView，服务继续在托盘运行。左键单击托盘图标重新打开窗口。右键菜单提供本机服务的启动、停止、重启、登录自启与退出。登录自启在该 Windows 用户登录时启动托盘程序。若需要登录前运行，继续使用现有任务计划程序方式。
 
 在桌面版「个性化设置 → 系统状态 → 桌面运行模式」中选择「本机主机」或「远程客户端」，然后点「保存并切换」。远程模式填写中心端的 HTTPS 地址和 Agent Token，同一个地址可以留空保留已保存的 Token。托盘和等待页也可切换运行模式。本机已有的主机数据保留在原目录。Windows 远程模式提供客户端界面，Mac 远程模式还会启动内置 Agent，将本机注册到中心端。
 
@@ -158,7 +158,7 @@ Pop-Location
 
 打开 `http://127.0.0.1:3993/`。脚本会创建 `.venv`、安装后端依赖、初始化 `config.json` 并按需构建前端。需要隔离测试或迁移时，可以指定 `--host`、`--port`、`--data-dir`、`--config`。通过 Tailscale Serve 访问时，请将代理指向本机 3993 端口。
 
-macOS 作为 Hub 时，控制页提供息屏、休眠和保持唤醒。电池信息仅在检测到电池时显示，Mac mini、Mac Studio 和 iMac 会自动省略此项。保持唤醒使用系统自带的 `caffeinate -dimsu`。原生媒体支持已运行的 Apple Music 或 Spotify，使用时请允许 Vitals 的终端或 Python 获得 macOS 自动化授权。安装可选的 `SwitchAudioSource` 后，控制页会提供音频输出设备切换。
+macOS 作为 Hub 时，控制页提供息屏、休眠和保持唤醒。电池信息仅在检测到电池时显示，Mac mini、Mac Studio 和 iMac 会自动省略此项。保持唤醒使用系统自带的 `caffeinate -dimsu`。原生媒体支持已运行的 Apple Music 或 Spotify，使用时请允许 Vitals 的终端或 Python 获得 macOS 自动化授权。安装可选的 `SwitchAudioSource` 后，可切换默认音频输入与输出设备。麦克风静音取决于设备提供的系统静音能力。远程 Mac 需要更新 Agent 才能使用麦克风控制。
 
 以当前登录用户安装 LaunchAgent，无需 `sudo`。
 
@@ -278,7 +278,7 @@ Vitals 默认仅允许本机回环与 Tailscale 私有网络访问（内置 `Pri
 
 - **OpenAI 助手**：在 `config.json` 中配置 `ai.api_key`（默认 `gpt-6-luna`，官方端点 `https://api.openai.com/v1`），在网页右上角「个性化设置」中控制总开关与实时状态联动开关。编辑 `backend/agent.md` 可热加载自定义角色人设。
 - **AI 技能**：在聊天里直接说明希望查询或执行的操作。待办、日历、中转站和媒体等操作会显示状态标签。锁屏、熄屏、睡眠和关机需要在 60 秒内点击一次「确认执行」。MacBook 关机需要支持关机能力的 Agent 和 macOS 自动化许可。若到点时 MacBook 不在线，中心端放弃本次关机。
-- **云端 AI 用量（可选）**：在「主机配置 → AI 用量」填写对应密钥后重启，或直接维护 `config.json` 的 `ai_usage`。DeepSeek API Key 用于查余额。OpenAI Admin Key 和 Anthropic Admin Key 用于查询组织级日用量，按 UTC 日期展示。汇总结果可通过 `GET /api/ai/usage` 读取，密钥仅由中心端用于各自提供商的 API。
+- **云端 AI 用量（可选）**：在「主机配置 → AI 用量统计」填写对应密钥后重启，或直接维护 `config.json` 的 `ai_usage`。DeepSeek API Key 用于查余额。OpenAI Admin Key 和 Anthropic Admin Key 用于查询组织级日用量，按 UTC 日期展示。汇总结果可通过 `GET /api/ai/usage` 读取，密钥仅由中心端用于各自提供商的 API。
 - **Bark 推送**：在 `config.json` 中将 `webhook.kind` 设为 `"bark"`，将 `bark_url_template` 设为 `https://api.day.app/<YOUR_DEVICE_KEY>/{title}/{body}`，重启后可通过 `POST /api/control/webhook/test` 测试连通性。
 - **iPhone 快捷指令**：在「快捷指令」中新建共享表单指令，文本/URL `POST` JSON `{"text": ...}` 至 `/api/scratchpad/text`，图片/文件 `POST` 表单字段 `file` 至 `/api/scratchpad/file`。
 - **任务计划程序开机自启**：创建计划任务，程序填 `powershell.exe`，参数填 `-NoProfile -NonInteractive -WindowStyle Hidden -File "<项目路径>\start_vitals_autorun.ps1"`，起始于项目根目录，并启用 Tailscale 的 **Run unattended**。
@@ -295,7 +295,7 @@ Vitals 默认仅允许本机回环与 Tailscale 私有网络访问（内置 `Pri
 - 音量支持 `percent`、`muted`、`device_id` 和 `devices: [{id, name}]`。全屏播放器读取媒体的 `title`、`artist`、`album`、`status`、`player`、`position_seconds`、`duration_seconds`、`track_id` 和 `artwork_version`，用与 Windows 相同的歌词服务。若心跳返回 `artwork_needed: true`，Agent 使用 `POST /api/agents/{device_id}/artwork?version=…` 上传最长边不超过 512 像素、最大 512 KiB 的 JPEG 封面。
 - 心跳响应为 `{"commands":[{"id":"…","action":"volume_set","payload":{"percent":40}}]}`。已下发的指令不会重复发送。Agent 完成后向 `POST /api/agents/{device_id}/commands/{cmd_id}/result` 回报 `{"ok":true,"message":"已完成"}`。心跳超过 15 秒未到达时，网页保留最近快照、标为离线并禁用操作。指令队列存于中心端内存，最近快照定期写入 SQLite。
 - 已注册的 Agent 可通过带 Bearer 密钥的 `GET /api/agents/{device_id}/commands/stream` 接收 SSE 指令。中心端发送 `command` 事件与 20 秒保活注释。指令流断开或迟滞时，心跳可领取仍在队列中的指令。同一条指令最多下发一次，执行结果由 Agent 单独回报。
-- 浏览器通过 `GET /api/agents` 查看 `devices`，通过 `POST /api/agents/{device_id}/command` 入队。音量指令 `volume_set` 接收 `{"percent":40}`，`volume_mute` 接收 `{"muted":true}`，`audio_device_set` 接收已上报设备的 `{"device_id":"…"}`。播放、息屏锁屏、休眠和保持唤醒操作使用空载荷。点击「推剪贴板」会将 Mac 剪贴板的图片或文字发送到中转站。
+- 浏览器通过 `GET /api/agents` 查看 `devices`，通过 `POST /api/agents/{device_id}/command` 入队。音量指令 `volume_set` 接收 `{"percent":40}`，`volume_mute` 接收 `{"muted":true}`，`audio_device_set` 接收已上报设备的 `{"device_id":"…"}`。麦克风分别使用 `input_volume_set`、`input_volume_mute` 和 `input_audio_device_set`，载荷格式相同。播放、息屏锁屏、休眠和保持唤醒操作使用空载荷。点击「推剪贴板」会将 Mac 剪贴板的图片或文字发送到中转站。
 
 Apple 提醒事项 Agent 通过 `POST /api/todos/sync/reminders` 同步。请求包含 `items` 和 `acknowledgements` 数组，两者均可为空。每条事项提供 `external_id`、时间戳 `updated_at`（含时区）、`title`、`done`，删除时发送 `deleted: true`。缺席的条目视为本次未同步。两端时钟需要同步，中心端以较新的版本为准。
 

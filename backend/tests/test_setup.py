@@ -94,6 +94,25 @@ def test_setup_pairing_token_can_be_read_and_rotated_locally(tmp_path):
     assert json.loads(path.read_text(encoding="utf-8"))["agents"]["token"] == content["token"]
 
 
+def test_setup_usage_keys_merge_without_exposing_values(tmp_path):
+    old_keys = {"deepseek_api_key": "fixture-deepseek", "openai_admin_key": "fixture-openai",
+                "anthropic_admin_key": "fixture-anthropic"}
+    client, path = setup_client(tmp_path, {"ai_usage": old_keys})
+    configured = {f"has_{name}": True for name in old_keys}
+    assert client.get("/api/setup/config").json()["ai_usage"] == configured
+    response = client.patch("/api/setup/config", json={"ai_usage": {
+        "deepseek_api_key": " \t", "openai_admin_key": " fixture-new-key ", "anthropic_admin_key": "",
+    }})
+    assert response.status_code == 200
+    assert response.json()["ai_usage"] == configured
+    assert response.json()["restart_required"] is True
+    assert "fixture-" not in response.text
+    assert json.loads(path.read_text(encoding="utf-8"))["ai_usage"] == {
+        **old_keys, "openai_admin_key": "fixture-new-key",
+    }
+    assert client.patch("/api/setup/config", json={"ai_usage": {"openai_admin_key": True}}).status_code == 422
+
+
 @pytest.mark.parametrize("installed", [
     "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
     "/opt/homebrew/bin/tailscale",

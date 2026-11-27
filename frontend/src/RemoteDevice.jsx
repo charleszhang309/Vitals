@@ -135,6 +135,7 @@ export function RemoteHardware({ device }) {
 const actions = {
   lock: '锁屏', display_sleep: '息屏', display_lock: '息屏', sleep: '休眠', volume_set: '调整音量',
   volume_mute: '切换静音', audio_device_set: '切换输出设备', caffeinate_toggle: '保持唤醒', clipboard_push: '推送剪贴板',
+  input_volume_set: '调整麦克风音量', input_volume_mute: '切换麦克风静音', input_audio_device_set: '切换输入设备',
   media_previous: '上一首', media_play_pause: '播放或暂停', media_next: '下一首',
 };
 const results = { queued: '等待设备接收', delivered: '等待设备回报', succeeded: '已执行', failed: '执行失败', expired: '等待超时' };
@@ -148,17 +149,17 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
   const [error, setError] = useState('');
   const [optimistic, setOptimistic] = useState({});
   const volumeTimer = useRef(null);
-  const pendingVolume = useRef(null);
+  const pendingVolume = useRef(new Map());
   const volumeWriting = useRef(false);
 
   useEffect(() => () => {
     window.clearTimeout(volumeTimer.current);
-    pendingVolume.current = null;
+    pendingVolume.current.clear();
   }, []);
   useEffect(() => {
     if (!device.online) {
       window.clearTimeout(volumeTimer.current);
-      pendingVolume.current = null;
+      pendingVolume.current.clear();
     }
   }, [device.online]);
 
@@ -208,9 +209,6 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
   const received = playingOverride?.received ?? sampledAt;
   const offlineLabel = device.online ? undefined : `${device.name} 已休眠或离线`;
   const playback = { track, sessions: [], received, reload: onCommand, offlineLabel };
-  const switching = !device.online || awaiting('audio_device_set');
-  const canAdjust = device.online && Number.isFinite(volume?.percent);
-  const canMute = device.online && typeof volume?.muted === 'boolean' && !awaiting('volume_mute');
 
   function predict(action, value) {
     const token = Symbol(action);
@@ -250,25 +248,53 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
 
   async function flushVolume() {
     window.clearTimeout(volumeTimer.current);
-    const change = pendingVolume.current;
-    if (volumeWriting.current || !change) return;
-    pendingVolume.current = null;
+    if (volumeWriting.current || !pendingVolume.current.size) return;
+    const [action, change] = pendingVolume.current.entries().next().value;
+    pendingVolume.current.delete(action);
     volumeWriting.current = true;
     try {
-      await send('volume_set', { percent: change.percent }, change.token);
+      await send(action, change.payload, change.token);
     } finally {
       volumeWriting.current = false;
-      if (pendingVolume.current) flushVolume();
+      if (pendingVolume.current.size) flushVolume();
     }
   }
 
-  function queueVolume(change) {
-    if (Object.hasOwn(change, 'device_id')) return send('audio_device_set', change, predict('audio_device_set', change.device_id));
-    if (Object.hasOwn(change, 'muted')) return send('volume_mute', change, predict('volume_mute', change.muted));
-    pendingVolume.current = { percent: change.percent, token: predict('volume_set', change.percent) };
+  function queueVolume(change, prefix, immediate) {
+    const field = Object.keys(change)[0];
+    const action = prefix + { device_id: 'audio_device_set', muted: 'volume_mute', percent: 'volume_set' }[field];
+    if (field === 'device_id') {
+      for (const verb of ['volume_set', 'volume_mute']) {
+        const key = prefix + verb;
+        const queued = pendingVolume.current.get(key);
+        if (queued) settle(key, queued.token);
+        pendingVolume.current.delete(key);
+      }
+    }
+    pendingVolume.current.set(action, { payload: change, token: predict(action, change[field]) });
     window.clearTimeout(volumeTimer.current);
-    volumeTimer.current = window.setTimeout(flushVolume, 80);
+    if (immediate) flushVolume();
+    else volumeTimer.current = window.setTimeout(flushVolume, 80);
   }
+
+  function audioChannel(prefix) {
+    const value = (key) => volume?.[prefix + key];
+    const writing = (verb) => awaiting(prefix + verb);
+    const predicted = (verb) => optimistic[prefix + verb]?.value;
+    return {
+      available: device.online && Boolean(volume),
+      canAdjust: device.online && Number.isFinite(value('percent')),
+      canMute: device.online && typeof value('muted') === 'boolean' && !writing('volume_mute'),
+      switching: !device.online || writing('audio_device_set'),
+      percent: predicted('volume_set') ?? (Number.isFinite(value('percent')) ? Math.round(value('percent')) : null),
+      muted: predicted('volume_mute') ?? value('muted'),
+      devices: value('devices') ?? [], deviceId: predicted('audio_device_set') ?? value('device_id') ?? '',
+      queue: (change, immediate) => queueVolume(change, prefix, immediate),
+      flush: flushVolume,
+    };
+  }
+  const hasInput = Boolean(volume?.input_devices?.length || volume?.input_device_id
+    || Number.isFinite(volume?.input_percent) || typeof volume?.input_muted === 'boolean');
 
   function controlPlayback(operation) {
     const action = transportActions[operation];
@@ -310,13 +336,8 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
       media: playback, onAction: controlPlayback,
       commandStatus: '', commandError: error || (commandFailed ? commandText : ''),
       sound: {
-        available: device.online && Boolean(volume),
-        canAdjust, canMute, switching, percent: optimistic.volume_set?.value
-          ?? (Number.isFinite(volume?.percent) ? Math.round(volume.percent) : null),
-        muted: optimistic.volume_mute?.value ?? volume?.muted,
-        devices: volume?.devices ?? [], output: optimistic.audio_device_set?.value ?? volume?.device_id ?? '',
+        ...audioChannel(''), input: hasInput ? audioChannel('input_') : null,
         unavailableLabel: offlineLabel ?? '当前输出设备未提供音量',
-        queue: queueVolume, flush: flushVolume,
       },
     })}
     {confirm && <Modal id="remote-confirm" className="detail-dialog shutdown-dialog"

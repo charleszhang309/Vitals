@@ -60,8 +60,11 @@ class UpgradeTests(unittest.TestCase):
 
     @patch("mac_agent.macos.audio_tool", return_value=None)
     def test_missing_audio_tool_keeps_mute_and_volume(self, _):
-        with patch("mac_agent.macos.apple", return_value="output volume:70, output muted:true"):
-            self.assertEqual(macos.volume(), {"percent": 70, "muted": True, "devices": [], "device_id": None})
+        with (patch("mac_agent.macos.apple", return_value="output volume:70, input volume:40, output muted:true"),
+              patch("mac_agent.macos.read_input_mute", return_value=True)):
+            self.assertEqual(macos.volume(), {"percent": 70, "muted": True, "devices": [], "device_id": None,
+                                              "input_percent": 40, "input_muted": True, "input_devices": [],
+                                              "input_device_id": None})
 
     @patch("mac_agent.macos.native")
     def test_display_lock_uses_pmset(self, native):

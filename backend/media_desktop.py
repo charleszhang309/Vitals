@@ -247,39 +247,58 @@ class WindowsAudio:
             self.audio_errors = NATIVE_ERRORS + (COMError,)
             self.initialize, self.uninitialize, self.speakers = CoInitialize, CoUninitialize, AudioUtilities.GetSpeakers
             self.outputs = lambda: AudioUtilities.GetAllDevices(EDataFlow.eRender.value, DEVICE_STATE.ACTIVE.value)
+            self.microphone = lambda: AudioUtilities.CreateDevice(AudioUtilities.GetMicrophone())
+            self.inputs = lambda: AudioUtilities.GetAllDevices(EDataFlow.eCapture.value, DEVICE_STATE.ACTIVE.value)
             self.switch = lambda device_id: AudioUtilities.SetDefaultDevice(device_id, [ERole.eConsole, ERole.eMultimedia])
 
     @staticmethod
     def device_key(device):
         return sha256(device.id.encode()).hexdigest()
 
-    def current_volume(self, change):
-        devices = {self.device_key(device): device for device in self.outputs()}
-        active_outputs = [{"id": key, "name": device.FriendlyName or "音频输出"} for key, device in devices.items()]
+    def endpoint_volume(self, enumerate_devices, default_device, label, *, device_id=None, percent=None, muted=None):
+        active = []
+        requested = any(value is not None for value in (device_id, percent, muted))
         current = None
-        if devices:
-            with suppress(*self.endpoint_errors):
-                current = self.speakers()
-        if change is not None and change.device_id is not None:
-            target = devices.get(change.device_id)
-            if target is None:
-                raise HTTPException(409, "该输出设备已断开或不可用")
-            if current is None or self.device_key(current) != change.device_id:
-                self.switch(target.id)
-                current = self.speakers()
-                if current is None or self.device_key(current) != change.device_id:
-                    raise HTTPException(409, "Windows 尚未确认输出设备切换")
-        if current is None:
-            if change is not None:
-                raise HTTPException(503, "Windows 默认音频设备不可用")
-            return {**EMPTY_VOLUME, "devices": active_outputs}
-        endpoint = current.EndpointVolume
-        if change is not None and change.percent is not None:
-            endpoint.SetMasterVolumeLevelScalar(change.percent / 100, None)
-        if change is not None and change.muted is not None:
-            endpoint.SetMute(int(change.muted), None)
-        return {"available": True, "percent": round(endpoint.GetMasterVolumeLevelScalar() * 100),
-                "muted": bool(endpoint.GetMute()), "device_id": self.device_key(current), "devices": active_outputs}
+        try:
+            devices = {self.device_key(device): device for device in enumerate_devices()}
+            active = [{"id": key, "name": device.FriendlyName or f"音频{label}"} for key, device in devices.items()]
+            if devices:
+                with suppress(*self.endpoint_errors):
+                    current = default_device()
+            if device_id is not None:
+                target = devices.get(device_id)
+                if target is None:
+                    raise HTTPException(409, f"该{label}设备已断开或不可用")
+                if current is None or self.device_key(current) != device_id:
+                    self.switch(target.id)
+                    current = default_device()
+                    if current is None or self.device_key(current) != device_id:
+                        raise HTTPException(409, f"Windows 尚未确认{label}设备切换")
+            if current is not None:
+                endpoint = current.EndpointVolume
+                if percent is not None:
+                    endpoint.SetMasterVolumeLevelScalar(percent / 100, None)
+                if muted is not None:
+                    endpoint.SetMute(int(muted), None)
+                return {"available": True, "percent": round(endpoint.GetMasterVolumeLevelScalar() * 100),
+                        "muted": bool(endpoint.GetMute()), "device_id": self.device_key(current), "devices": active}
+        except self.audio_errors:
+            if requested:
+                raise HTTPException(503, f"Windows 默认音频{label}设备不可用") from None
+        if requested:
+            raise HTTPException(503, f"Windows 默认音频{label}设备不可用")
+        return {"available": False, "percent": None, "muted": None,
+                "device_id": self.device_key(current) if current is not None else None, "devices": active}
+
+    def current_volume(self, change):
+        fields = {} if change is None else change.model_dump(exclude_none=True)
+        output = self.endpoint_volume(self.outputs, self.speakers, "输出",
+                                      **{key: value for key, value in fields.items() if not key.startswith("input_")})
+        capture = self.endpoint_volume(self.inputs, self.microphone, "输入",
+                                       **{key.removeprefix("input_"): value for key, value in fields.items()
+                                          if key.startswith("input_")})
+        return {**output, "muted": bool(output["muted"]), "input_devices": capture["devices"],
+                "input_device_id": capture["device_id"], "input_percent": capture["percent"], "input_muted": capture["muted"]}
 
     def volume(self, change=None):
         if self.speakers is None:

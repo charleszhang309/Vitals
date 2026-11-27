@@ -1,0 +1,444 @@
+.overview-widget[data-width="wide"] > .widget-content:has(.preview-split) {
+  flex: 1;
+  align-content: stretch;
+}
+
+.overview-widget .preview-split {
+  display: grid;
+  grid-template-columns: var(--preview-columns, minmax(0, 1fr) minmax(0, 1fr));
+  align-items: center;
+  min-width: 0;
+  gap: 14px;
+}
+
+.overview-widget .preview-primary {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.overview-widget .preview-secondary {
+  min-width: 0;
+  border-inline-start: 1px solid var(--border);
+  padding-inline-start: 14px;
+}
+
+.overview-widget .preview-rows {
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+}
+
+.overview-widget .preview-rows li {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+  line-height: 1.25;
+}
+
+.preview-rows li > :last-child {
+  flex: none;
+  margin-inline-start: auto;
+}
+
+.preview-rows small {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.tasks-preview-rows svg {
+  color: var(--muted);
+  flex: none;
+}
+
+.tasks-preview-rows svg[data-done] {
+  color: color-mix(in srgb, var(--green) 80%, var(--text));
+}
+
+.widget-weather-location {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.widget-weather-location > svg {
+  color: var(--link);
+  flex: none;
+}
+
+.weather-preview-split {
+  --preview-columns: minmax(0, 1fr) minmax(0, 1.12fr);
+}
+
+.weather-preview-split > .weather-preview {
+  align-self: stretch;
+}
+
+.weather-preview-days {
+  display: grid;
+  gap: 7px;
+}
+
+.weather-preview-days li {
+  display: grid;
+  grid-template-columns: max-content auto max-content minmax(6px, 1fr) max-content;
+  gap: 5px;
+  align-items: center;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.weather-preview-days svg {
+  color: var(--link);
+}
+
+.weather-preview-days .temperature-track {
+  height: 5px;
+}
+
+.calendar-preview-split {
+  --preview-columns: minmax(0, .55fr) minmax(0, 1.45fr);
+}
+
+.calendar-preview-split .calendar-preview-date {
+  justify-content: center;
+}
+
+.overview-widget .calendar-preview-split .calendar-preview-events {
+  gap: 8px;
+}
+
+.overview-widget .calendar-preview-split .calendar-preview-event {
+  grid-template-columns: fit-content(48%) minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  padding-top: 0;
+  border: 0;
+}
+
+.calendar-preview-split .calendar-preview-event > p:first-child {
+  font-size: 11px;
+}
+
+.overview-widget .health-preview-split {
+  --preview-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+}
+
+.overview-widget .health-preview-split .widget-health dl {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.health-preview-split .widget-health dd {
+  font-size: clamp(11px, 1.38vw, 15px);
+}
+
+.health-preview-details {
+  display: grid;
+  gap: 6px;
+}
+
+.preview-caption {
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 680;
+  line-height: 1.2;
+}
+
+.health-preview-details .sleep-track {
+  height: 5px;
+  margin-bottom: 4px;
+  gap: 1px;
+}
+
+.health-preview-stages, .health-preview-trends {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 7px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.health-preview-stages li {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.health-preview-stages i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+}
+
+.health-preview-trends li {
+  background: var(--track);
+  border-radius: 5px;
+  padding: 2px 4px;
+}
+
+.health-preview-stages strong, .health-preview-trends strong {
+  color: var(--text);
+}
+
+.overview-widget[data-width="wide"][data-widget="ai-usage"] .usage-preview {
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+}
+
+.overview-widget[data-width="wide"][data-widget="ai-usage"] .usage-preview.preview-split {
+  grid-template-columns: minmax(0, 3fr) minmax(0, 5fr);
+}
+
+.usage-preview-totals {
+  display: grid;
+  gap: 3px 7px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.15;
+}
+
+.usage-preview-totals > div {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px;
+}
+
+.usage-preview-totals dd {
+  color: var(--text);
+  font-weight: 680;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-count-compact {
+  display: none;
+}
+
+.usage-heatmap.usage-heatmap-v2, .usage-periods {
+  --heat-0: #e9edf1;
+  --heat-1: #d0ebff;
+  --heat-2: #9ed6ff;
+  --heat-3: #65b8fa;
+  --heat-4: #3295ee;
+  --heat-5: #1772d3;
+  --heat-border: #162b521e;
+  --heat-peak: #fff;
+}
+
+:root[data-theme="dark"] .usage-heatmap.usage-heatmap-v2,
+:root[data-theme="dark"] .usage-periods {
+  --heat-0: #2b333d;
+  --heat-1: #163951;
+  --heat-2: #205981;
+  --heat-3: #2679b4;
+  --heat-4: #3ca8eb;
+  --heat-5: #83d9ff;
+  --heat-border: #c3def128;
+  --heat-peak: #092742;
+}
+
+.usage-preview .usage-heatmap.usage-heatmap-v2 {
+  pointer-events: none;
+}
+
+.usage-preview .usage-heatmap-v2 button.usage-day {
+  pointer-events: auto;
+}
+
+.usage-heatmap-v2 .usage-heatmap-grid, .usage-periods-grid {
+  position: relative;
+}
+
+.usage-heatmap-v2 .usage-day {
+  position: relative;
+}
+
+.usage-heatmap-v2 .usage-day[data-level="1"] { --heat-fill: var(--heat-1); }
+.usage-heatmap-v2 .usage-day[data-level="2"] { --heat-fill: var(--heat-2); }
+.usage-heatmap-v2 .usage-day[data-level="3"] { --heat-fill: var(--heat-3); }
+.usage-heatmap-v2 .usage-day[data-level="4"] { --heat-fill: var(--heat-4); }
+
+.usage-heatmap-v2 .usage-day:is([data-level="1"], [data-level="2"], [data-level="3"], [data-level="4"]) {
+  box-shadow: 0 0 3px color-mix(in srgb, var(--heat-fill) 32%, transparent);
+}
+
+.usage-heatmap-v2 .usage-day[data-level="5"] {
+  background: var(--heat-5);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--heat-5) 45%, transparent);
+}
+
+.usage-heatmap-v2 .usage-day[data-peak]::after {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 4px;
+  height: 4px;
+  background: var(--heat-peak);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.usage-heatmap-v2 button.usage-day:hover, .usage-heatmap-v2 button.usage-day:focus-visible,
+.usage-heatmap-v2 button.usage-day[aria-pressed="true"] {
+  border-color: var(--text);
+  z-index: 1;
+}
+
+.usage-preview .usage-heatmap-v2.usage-heatmap-full {
+  width: 100%;
+  border-inline-start: 1px solid var(--border);
+  padding-inline-start: 12px;
+}
+
+.usage-point-popup {
+  position: absolute;
+  z-index: 3;
+  left: clamp(min(75px, 50%), var(--point-x), max(calc(100% - 75px), 50%));
+  width: min(150px, 100%);
+  display: grid;
+  gap: 2px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 3px 12px #10182530;
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.usage-point-popup > span {
+  color: var(--muted);
+}
+
+.usage-heatmap-v2 .usage-point-popup {
+  top: calc(var(--heat-label-row) + var(--heat-gap) * 2 + var(--heat-height) +
+    var(--point-row) * (var(--heat-height) + var(--heat-gap)));
+}
+
+.usage-point-popup[data-side="above"] {
+  transform: translate(-50%, -100%);
+}
+
+.usage-heatmap-v2 .usage-point-popup[data-side="above"] {
+  top: calc(var(--heat-label-row) + var(--point-row) * (var(--heat-height) + var(--heat-gap)));
+}
+
+.usage-view-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+
+.usage-details .usage-heatmap.usage-heatmap-full {
+  width: 100%;
+}
+
+.usage-details .usage-heatmap-caption {
+  min-height: 19px;
+  justify-content: flex-end;
+}
+
+.usage-details .usage-heatmap-caption .usage-legend:first-child:not(:last-child) {
+  margin-inline-end: auto;
+}
+
+.usage-periods {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.usage-periods-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: end;
+  gap: 3px;
+  padding-bottom: 15px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.usage-periods-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-rows: 90px 13px;
+  gap: 3px;
+  background: linear-gradient(var(--border), var(--border)) 0 90px / 100% 1px no-repeat;
+}
+
+.usage-periods-grid .usage-month {
+  grid-row: 2;
+  align-self: center;
+  padding: 0;
+}
+
+.usage-periods-grid .usage-point-popup {
+  top: 68px;
+  left: clamp(min(105px, 50%), var(--point-x), max(calc(100% - 105px), 50%));
+  width: min(210px, 100%);
+}
+
+.usage-period {
+  display: flex;
+  align-items: end;
+  min-width: 0;
+  padding: 0 3px;
+  border-radius: 4px;
+  grid-row: 1;
+}
+
+.usage-period:is(:hover, :focus-visible, [aria-pressed="true"]) {
+  background: var(--track);
+}
+
+.usage-period-bar {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+  background: linear-gradient(to top, var(--heat-3), var(--heat-5));
+}
+
+.usage-period-bar[data-zero] {
+  background: var(--heat-0);
+}
+
+@media (max-width: 620px) {
+  .overview-widget .preview-split { gap: 8px; }
+  .overview-widget .preview-secondary { padding-inline-start: 8px; }
+  .overview-widget .preview-rows { font-size: 12px; }
+  .overview-widget .preview-rows li { gap: 4px; }
+  .usage-preview .usage-heatmap-v2.usage-heatmap-full { padding-inline-start: 7px; }
+  .health-preview-split .widget-health { grid-template-columns: minmax(25px, 30%) minmax(0, 1fr); }
+  .overview-widget .health-preview-split .widget-health dl { gap: 4px; }
+  .weather-preview-days li { font-size: 11px; gap: 3px; }
+  .weather-preview-days svg { width: 14px; height: 14px; }
+  .usage-period { padding-inline: 2px; }
+}
+
+@media (max-width: 440px) {
+  .overview-widget .usage-count-full { display: none; }
+  .overview-widget .usage-count-compact { display: inline; }
+}
+
+@media (max-width: 370px) {
+  .overview-widget .health-preview-split { --preview-columns: minmax(0, .9fr) minmax(0, 1.1fr); }
+  .overview-widget .health-preview-split .widget-health dl { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .health-preview-split .widget-health dd { overflow-wrap: normal; }
+  .health-preview-details { gap: 4px; }
+  .health-preview-stages, .health-preview-trends { gap: 2px 4px; font-size: 9px; }
+}

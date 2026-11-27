@@ -460,11 +460,20 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .media-range:disabled { opacity: .6; cursor: default; }
 .volume-controls .icon-button { border-radius: 50%; }
 .volume-controls { display: flex; align-items: center; gap: 12px; }
-.volume-readout { font-weight: 720; color: var(--link); }
-.volume-device { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 12px;
-  padding-top: 12px; border-top: 1px solid var(--border); font-size: 13px; }
+.volume-card .volume-controls { display: grid; grid-template-columns: auto minmax(0, 1fr) 4.4ch; }
+.volume-card .volume-controls .icon-button { width: 38px; height: 38px; }
+.volume-card .media-range::-webkit-slider-runnable-track { height: 4px; }
+.volume-card .media-range::-webkit-slider-thumb { margin-top: -7.5px; }
+.volume-card .media-range::-moz-range-track, .volume-card .media-range::-moz-range-progress { height: 4px; }
+.volume-readout { font-weight: 720; color: var(--link); text-align: end; }
+.audio-layer { display: grid; gap: 9px; padding-block: 4px; min-width: 0; }
+.audio-layer + .audio-layer { border-top: 1px solid var(--border); margin-top: 9px; padding-top: 11px; }
+.volume-device { display: grid; gap: 6px; min-width: 0; font-size: 13px; font-weight: 650; }
 .volume-device select { width: 100%; min-width: 0; min-height: 38px; padding: 5px 9px; color: var(--text);
   border: 1px solid var(--field-border); border-radius: 11px; background: var(--track); text-overflow: ellipsis; }
+.host-update-notice { display: flex; justify-content: center; margin: 0 0 16px; }
+.host-update-notice button { border-radius: 99px; color: var(--link); background: var(--surface);
+  box-shadow: inset 0 1px var(--glass-edge), var(--shadow); }
 
 /* iOS 可能从弹窗外的页面画布取色来绘制状态栏。 */
 :root[data-immersive-open] {

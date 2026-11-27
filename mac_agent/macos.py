@@ -1,5 +1,6 @@
 """Read Mac telemetry and execute the fixed set of Vitals commands."""
 
+from functools import lru_cache
 from ipaddress import ip_address, ip_network
 import json
 import logging
@@ -13,6 +14,7 @@ from time import monotonic
 
 import psutil
 
+from .core_audio import CoreAudio
 from .native import apple, javascript, native
 from .playback import MEDIA_ACTIONS, MEDIA_SCRIPT, Playback
 
@@ -52,21 +54,39 @@ def parse_volume(output: str) -> dict:
     return {"percent": int(percent[1]) if percent else None, "muted": muted[1] == "true" if muted else None}
 
 
+def parse_input_volume(output: str) -> int | None:
+    match = re.search(r"input volume:\s*(\d+)\b", output)
+    if match:
+        percent = int(match[1])
+        if 0 <= percent <= 100:
+            return percent
+    return None
+
+
+@lru_cache(maxsize=1)
+def core_audio():
+    return CoreAudio()
+
+
 def audio_tool():
     return next((path for path in AUDIO_PATHS if os.path.isfile(path) and os.access(path, os.X_OK)), None)
 
 
-def current_output(tool):
-    return json.loads(native(tool, "-c", "-t", "output", "-f", "json")).get("uid")
+def current_audio_device(tool, direction):
+    item = json.loads(native(tool, "-c", "-t", direction, "-f", "json"))
+    uid = item.get("uid") if isinstance(item, dict) else None
+    return uid if isinstance(uid, str) and 0 < len(uid) <= 256 else None
 
 
-def audio_outputs(tool):
-    rows = native(tool, "-a", "-t", "output", "-f", "json").splitlines()
+def audio_devices(tool, direction):
+    rows = native(tool, "-a", "-t", direction, "-f", "json").splitlines()
     devices = {}
     for row in rows:
         if not row.strip():
             continue
         item = json.loads(row)
+        if not isinstance(item, dict):
+            continue
         uid, name, number = item.get("uid"), item.get("name"), str(item.get("id", ""))
         if (isinstance(uid, str) and 0 < len(uid) <= 256 and isinstance(name, str)
                 and name.strip() and number.isascii() and number.isdigit()):
@@ -74,30 +94,43 @@ def audio_outputs(tool):
     return devices
 
 
+def audio_device_snapshot(tool, direction):
+    devices = (read_optional(f"audio {direction} devices", lambda: audio_devices(tool, direction)) or {}) if tool else {}
+    selected = read_optional(f"current audio {direction}", lambda: current_audio_device(tool, direction)) if devices else None
+    return selected, [{"id": uid, "name": value[0]} for uid, value in list(devices.items())[:64]]
+
+
+def read_input_mute():
+    return read_optional("input mute", lambda: core_audio().input_mute())
+
+
 def volume() -> dict | None:
-    settings = parse_volume(apple("get volume settings"))
+    raw_settings = read_optional("volume settings", lambda: apple("get volume settings")) or ""
+    settings = parse_volume(raw_settings)
+    input_percent, input_muted = parse_input_volume(raw_settings), read_input_mute()
     tool = audio_tool()
-    devices = (read_optional("audio output devices", lambda: audio_outputs(tool)) or {}) if tool else {}
-    selected = read_optional("current audio output", lambda: current_output(tool)) if devices else None
-    if not devices and None in settings.values():
+    selected, devices = audio_device_snapshot(tool, "output")
+    input_selected, inputs = audio_device_snapshot(tool, "input")
+    if not devices and None in settings.values() and not inputs and input_percent is None and input_muted is None:
         return None
-    return {**settings, "device_id": selected,
-            "devices": [{"id": uid, "name": value[0]} for uid, value in list(devices.items())[:64]]}
+    return {**settings, "device_id": selected, "devices": devices, "input_device_id": input_selected,
+            "input_devices": inputs, "input_percent": input_percent, "input_muted": input_muted}
 
 
-def set_audio_output(params):
+def set_audio_device(params, direction):
     uid = params.get("device_id")
     if params.keys() != {"device_id"} or not isinstance(uid, str) or not 0 < len(uid) <= 256:
-        raise ValueError("audio_device_set 需要有效的 device_id")
+        raise ValueError("音频设备切换需要有效的 device_id")
     tool = audio_tool()
     if tool is None:
         raise RuntimeError("未安装 SwitchAudioSource")
-    device = audio_outputs(tool).get(uid)
+    label = "输入" if direction == "input" else "输出"
+    device = audio_devices(tool, direction).get(uid)
     if device is None:
-        raise ValueError("找不到该音频输出设备")
-    native(tool, "-t", "output", "-i", device[1])
-    if current_output(tool) != uid:
-        raise RuntimeError("系统未切换到所选音频输出设备")
+        raise ValueError(f"找不到该音频{label}设备")
+    native(tool, "-t", direction, "-i", device[1])
+    if current_audio_device(tool, direction) != uid:
+        raise RuntimeError(f"系统未切换到所选音频{label}设备")
 
 
 class Caffeinate:
@@ -156,10 +189,29 @@ def execute_command(action: str, params: dict, *, caffeinate=None, clipboard_pus
         apple(script)
         return {"volume": parse_volume(apple("get volume settings"))}
     elif action == "audio_device_set":
-        set_audio_output(params)
+        set_audio_device(params, "output")
         if quick:
             return {"volume": {**quick.volume(), "device_id": params["device_id"]}}
         return {"volume": {**parse_volume(apple("get volume settings")), "device_id": params["device_id"]}}
+    elif action == "input_volume_set":
+        percent = params.get("percent")
+        if params.keys() != {"percent"} or type(percent) is not int or not 0 <= percent <= 100:
+            raise ValueError("input_volume_set 需要 0–100 的整数 percent")
+        apple(f"set volume input volume {percent}")
+        current = parse_input_volume(apple("get volume settings"))
+        if current is None:
+            raise RuntimeError("当前输入设备不支持麦克风音量控制")
+        return {"volume": {"input_percent": current}}
+    elif action == "input_volume_mute":
+        muted = params.get("muted")
+        if params.keys() != {"muted"} or type(muted) is not bool:
+            raise ValueError("input_volume_mute 需要布尔值 muted")
+        return {"volume": {"input_muted": core_audio().input_mute(muted=muted)}}
+    elif action == "input_audio_device_set":
+        set_audio_device(params, "input")
+        percent = read_optional("input volume", lambda: parse_input_volume(apple("get volume settings")))
+        return {"volume": {"input_device_id": params["device_id"], "input_percent": percent,
+                           "input_muted": read_input_mute()}}
     elif params:
         raise ValueError(f"{action} 不接受参数")
     elif action in MEDIA_ACTIONS:

@@ -25,7 +25,9 @@ ID_PATTERN = r"^[a-f0-9]{32}$"
 ART_PATTERN = r"^[a-f0-9]{64}$"
 MAX_ARTWORK = 512 * 1024
 EMPTY_STATE = {"available": True, "active": False, "current_session_id": None, "sessions": []}
-EMPTY_VOLUME = {"available": False, "percent": None, "muted": False, "device_id": None, "devices": []}
+EMPTY_INPUT_VOLUME = {"input_percent": None, "input_muted": None, "input_device_id": None, "input_devices": []}
+EMPTY_VOLUME = {"available": False, "percent": None, "muted": False, "device_id": None, "devices": [],
+                **EMPTY_INPUT_VOLUME}
 SessionId = Annotated[str, Field(pattern=ID_PATTERN)]
 ArtworkVersion = Annotated[str, Field(pattern=ART_PATTERN)]
 
@@ -49,11 +51,15 @@ class VolumeChange(BaseModel):
     percent: int | None = Field(default=None, strict=True, ge=0, le=100)
     muted: StrictBool | None = None
     device_id: ArtworkVersion | None = None
+    input_percent: int | None = Field(default=None, strict=True, ge=0, le=100)
+    input_muted: StrictBool | None = None
+    input_device_id: ArtworkVersion | None = None
 
     @model_validator(mode="after")
     def validate_change(self):
-        if self.percent is None and self.muted is None and self.device_id is None:
-            raise ValueError("至少设置音量、静音状态或输出设备中的一项")
+        if all(value is None for value in (self.percent, self.muted, self.device_id,
+                                           self.input_percent, self.input_muted, self.input_device_id)):
+            raise ValueError("至少设置一项音频控制")
         return self
 
 
@@ -204,16 +210,20 @@ class MacMediaBridge(MediaBridge):
             raise HTTPException(503, "macOS 播放器控制暂不可用") from error
 
     @staticmethod
-    def _audio_ids(data):
-        return {sha256(device["id"].encode()).hexdigest(): device for device in data["devices"]}
+    def _audio_ids(data, key):
+        return {sha256(device["id"].encode()).hexdigest(): device for device in data.get(key, [])}
 
     @classmethod
     def _public_volume(cls, data):
         if data is None:
             return EMPTY_VOLUME.copy()
-        current = data["device_id"]
-        return {**data, "available": True, "device_id": sha256(current.encode()).hexdigest() if current else None,
-                "devices": [{"id": key, "name": item["name"]} for key, item in cls._audio_ids(data).items()]}
+        result = {**EMPTY_VOLUME, **data}
+        result["available"] = bool(result["devices"]) or (result["percent"] is not None and result["muted"] is not None)
+        for device_id, devices in (("device_id", "devices"), ("input_device_id", "input_devices")):
+            current = result[device_id]
+            result[device_id] = sha256(current.encode()).hexdigest() if current else None
+            result[devices] = [{"id": key, "name": item["name"]} for key, item in cls._audio_ids(data, devices).items()]
+        return result
 
     async def volume(self, client):
         from mac_agent.macos import read_optional, volume
@@ -224,16 +234,26 @@ class MacMediaBridge(MediaBridge):
         from mac_agent.macos import execute_command, volume
 
         with self.lock:
-            if change.device_id:
+            if change.device_id or change.input_device_id:
                 current = volume()
-                device = self._audio_ids(current).get(change.device_id) if current else None
-                if not device:
-                    raise HTTPException(404, "找不到该音频输出设备")
-                execute_command("audio_device_set", {"device_id": device["id"]})
-            if change.percent is not None:
-                execute_command("volume_set", {"percent": change.percent})
-            if change.muted is not None:
-                execute_command("volume_mute", {"muted": change.muted})
+                switches = []
+                for device_id, devices, action, label in (
+                    (change.device_id, "devices", "audio_device_set", "输出"),
+                    (change.input_device_id, "input_devices", "input_audio_device_set", "输入"),
+                ):
+                    if device_id is not None:
+                        device = self._audio_ids(current or {}, devices).get(device_id)
+                        if not device:
+                            raise HTTPException(404, f"找不到该音频{label}设备")
+                        switches.append((action, device["id"]))
+                for action, device_id in switches:
+                    execute_command(action, {"device_id": device_id})
+            for action, field, value in (
+                ("volume_set", "percent", change.percent), ("volume_mute", "muted", change.muted),
+                ("input_volume_set", "percent", change.input_percent), ("input_volume_mute", "muted", change.input_muted),
+            ):
+                if value is not None:
+                    execute_command(action, {field: value})
             return self._public_volume(volume())
 
     async def set_volume(self, client, change):
@@ -266,11 +286,11 @@ def media_router(bridge, lyrics: LyricsCache, agents=None):
     @router.get("/volume")
     async def volume(request: Request, response: Response):
         response.headers["Cache-Control"] = "no-store"
-        return await bridge.volume(local(request))
+        return {**EMPTY_INPUT_VOLUME, **await bridge.volume(local(request))}
 
     @router.post("/volume")
     async def change_volume(request: Request, change: VolumeChange):
-        return await bridge.set_volume(local(request), change)
+        return {**EMPTY_INPUT_VOLUME, **await bridge.set_volume(local(request), change)}
 
     @router.get("/artwork")
     async def artwork(request: Request, session_id: Annotated[str | None, Query(pattern=ID_PATTERN)] = None,

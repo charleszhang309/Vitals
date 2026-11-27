@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Maximize2, MessageSquareQuote, Music2, Volume2, VolumeX } from 'lucide-react';
+import { Maximize2, MessageSquareQuote, Mic, MicOff, Music2, Volume2, VolumeX } from 'lucide-react';
 import { postJson, request } from './api.js';
 import { IconButton, Modal, ProgressBar } from './ui.jsx';
 import { artworkUrl } from './useMedia.js';
@@ -143,6 +143,16 @@ function LyricsPanel({ lyrics, track, received }) {
   </section>;
 }
 
+function mergeVolumeChange(previous, change) {
+  const next = { ...previous, ...change };
+  for (const prefix of ['', 'input_']) {
+    if (change[`${prefix}device_id`] == null) continue;
+    delete next[`${prefix}percent`];
+    delete next[`${prefix}muted`];
+  }
+  return next;
+}
+
 function useSystemVolume(platform) {
   const [volume, setVolume] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -203,21 +213,26 @@ function useSystemVolume(platform) {
 
   function queue(change, immediate = false) {
     revision.current += 1;
-    const changingDevice = change.device_id != null;
-    setDraft((previous) => changingDevice ? change : { ...previous, ...change });
+    setDraft((previous) => mergeVolumeChange(previous, change));
     setFeedback('');
-    pending.current = changingDevice ? change : { ...pending.current, ...change };
+    pending.current = mergeVolumeChange(pending.current, change);
     if (immediate) flush();
     else if (!timer.current && !writing.current) timer.current = window.setTimeout(flush, 140);
   }
 
-  const percent = draft?.percent ?? volume?.percent ?? null;
-  const muted = draft?.muted ?? volume?.muted ?? false;
-  const output = draft?.device_id ?? volume?.device_id ?? '';
-  const switching = draft?.device_id != null;
-  const devices = volume?.devices ?? [];
-  return { available: volume?.available, percent, muted, output, switching, devices, feedback, queue, flush,
-    canAdjust: Number.isFinite(volume?.percent), canMute: typeof volume?.muted === 'boolean',
+  function channel(prefix, available) {
+    const field = (key) => `${prefix}${key}`;
+    return { available, percent: draft?.[field('percent')] ?? volume?.[field('percent')] ?? null,
+      muted: draft?.[field('muted')] ?? volume?.[field('muted')] ?? false,
+      deviceId: draft?.[field('device_id')] ?? volume?.[field('device_id')] ?? '',
+      switching: draft?.[field('device_id')] != null, devices: volume?.[field('devices')] ?? [],
+      canAdjust: Number.isFinite(volume?.[field('percent')]), canMute: typeof volume?.[field('muted')] === 'boolean',
+      queue: (change, immediate) => queue(Object.fromEntries(Object.entries(change).map(([key, value]) => [field(key), value])), immediate),
+      flush };
+  }
+  const hasInput = Boolean(volume?.input_devices?.length || volume?.input_device_id
+    || Number.isFinite(volume?.input_percent) || typeof volume?.input_muted === 'boolean');
+  return { ...channel('', volume?.available), input: hasInput ? channel('input_', true) : null, feedback,
     unavailableLabel: platform === 'macos' ? '等待 macOS 音频设备' : undefined };
 }
 
@@ -238,32 +253,47 @@ function PlaybackGlyph({ kind }) {
   </svg>;
 }
 
-function VolumeControls({ sound, immersive = false }) {
+function VolumeControls({ sound, immersive = false, input = false }) {
   const { available, percent, muted, switching, queue, flush, canAdjust = available, canMute = available } = sound;
   const disabled = !available || switching;
+  const muteLabel = input ? (muted ? '开启麦克风' : '关闭麦克风') : (muted ? '取消静音' : '静音');
   return <div className="volume-controls">
-    <IconButton label={muted ? '取消静音' : '静音'} disabled={disabled || !canMute} onClick={() => queue({ muted: !muted }, true)}>
-      {immersive ? <PlaybackGlyph kind={muted ? 'muted' : 'volume'} /> : muted ? <VolumeX size={21} /> : <Volume2 size={21} />}
+    <IconButton label={muteLabel} aria-pressed={canMute ? Boolean(muted) : undefined}
+      disabled={disabled || !canMute} onClick={() => queue({ muted: !muted }, true)}>
+      {input ? (muted ? <MicOff size={20} /> : <Mic size={20} />)
+        : immersive ? <PlaybackGlyph kind={muted ? 'muted' : 'volume'} /> : muted ? <VolumeX size={21} /> : <Volume2 size={21} />}
     </IconButton>
-    <input className="media-range" type="range" min="0" max="100" aria-label="系统主音量" aria-valuetext={percent == null ? '音量不可用' : `${percent}%`}
+    <input className="media-range" type="range" min="0" max="100" aria-label={input ? '麦克风音量' : '系统主音量'}
+      aria-valuetext={percent == null ? '音量不可用' : `${percent}%`}
       disabled={disabled || !canAdjust} value={percent ?? 0} style={{ '--range-fill': `${percent ?? 0}%` }}
       onChange={(event) => queue({ percent: Number(event.target.value) })} onPointerUp={flush} onBlur={flush} />
+    {!immersive && <span className="numeric volume-readout">{available && percent != null ? `${percent}%` : '—'}</span>}
+  </div>;
+}
+
+function AudioLayer({ sound, input = false }) {
+  const { available, deviceId, switching, devices, queue } = sound;
+  const label = input ? '输入设备' : '输出设备';
+  const hasSelection = devices.some((device) => device.id === deviceId);
+  return <div className="audio-layer">
+    <label className="volume-device"><span>{label}</span>
+      <select value={hasSelection ? deviceId : ''} disabled={!available || switching || !devices.length}
+        onChange={(event) => queue({ device_id: event.target.value }, true)}>
+        {!hasSelection && <option value="" disabled>{devices.length ? `选择${label}` : available ? '系统默认' : '设备暂不可用'}</option>}
+        {devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
+      </select>
+    </label>
+    <VolumeControls sound={sound} input={input} />
   </div>;
 }
 
 function VolumeCard({ sound }) {
-  const { available, percent, output, switching, devices, feedback, queue, unavailableLabel = '等待 Windows 音频设备' } = sound;
+  const { available, input, feedback, unavailableLabel = '等待 Windows 音频设备' } = sound;
   return <section className="surface panel volume-card" aria-labelledby="volume-heading">
-    <div className="panel-header"><h2 id="volume-heading">系统音量</h2>
-      <span className="numeric volume-readout">{available && percent != null ? `${percent}%` : '—'}</span></div>
-    <VolumeControls sound={sound} />
-    {devices.length > 0 && <label className="volume-device"><span>输出设备</span>
-      <select value={output} disabled={!available || switching} onChange={(event) => queue({ device_id: event.target.value }, true)}>
-        {!devices.some((device) => device.id === output) && <option value="" disabled>选择输出设备</option>}
-        {devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
-      </select>
-    </label>}
-    {(!available || percent == null) && <p className="muted subtle-line">{unavailableLabel}</p>}
+    <div className="panel-header"><h2 id="volume-heading">系统音量</h2></div>
+    <AudioLayer sound={sound} />
+    {input && <AudioLayer sound={input} input />}
+    {!available && !input && <p className="muted subtle-line">{unavailableLabel}</p>}
     {feedback && <p className="feedback error" role="alert">{feedback}</p>}
   </section>;
 }
@@ -380,11 +410,12 @@ function HostControl({ sample, platform, power, onMonitor, media, ...player }) {
   </>;
 }
 
-export default function ControlPage({ hub, devices, device, onDevice, onAgentCommand, onAgentActivity, ...props }) {
+export default function ControlPage({ hub, devices, device, offlineNotice, onDevice, onAgentCommand, onAgentActivity, ...props }) {
   return <>
     <div className="page-heading control-heading"><h1>控制</h1>
       <DevicePicker id="control-device" hub={hub} devices={devices} device={device} onChange={onDevice} />
     </div>
+    {offlineNotice && <p className="feedback" role="status">{offlineNotice}</p>}
     {device ? <RemoteControl key={device.device_id} device={device} onMonitor={props.onMonitor}
       onCommand={onAgentCommand} onActivity={onAgentActivity}>
       {(playback) => <PlaybackControls {...playback} open={props.open} onOpenChange={props.onOpenChange} />}

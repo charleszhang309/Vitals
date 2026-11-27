@@ -4,9 +4,10 @@ import asyncio
 from base64 import b64encode
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+from hashlib import sha256
 from threading import Lock
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import httpx
 import pytest
@@ -15,7 +16,7 @@ from fastapi import HTTPException
 from backend.config import Settings
 from backend.main import create_app
 from backend.lyrics import LyricsCache, Track, candidate_score, parse_lrc, resolve_source, search_qq, fetch_qq, search_title
-from backend.media import MediaAction, MediaBridge, VolumeChange
+from backend.media import EMPTY_INPUT_VOLUME, MacMediaBridge, MediaAction, MediaBridge, VolumeChange
 from backend.media_desktop import WindowsAudio, WindowsMedia
 from backend.scratchpad import Scratchpad
 
@@ -94,11 +95,14 @@ def test_audio_uses_per_call_com_initialization_and_preserves_unspecified_settin
     headphones = SimpleNamespace(id="native-headphones", FriendlyName="Headphones", EndpointVolume=headphones_endpoint)
     audio.outputs = Mock(return_value=[speakers, headphones])
     audio.speakers = Mock(return_value=speakers)
+    audio.inputs = Mock(return_value=[])
+    audio.microphone = Mock(return_value=None)
     audio.switch = Mock(side_effect=lambda _: setattr(audio.speakers, "return_value", headphones))
     speakers_id, headphones_id = audio.device_key(speakers), audio.device_key(headphones)
     assert audio.volume(VolumeChange(percent=73)) == {
         "available": True, "percent": 73, "muted": True, "device_id": speakers_id,
         "devices": [{"id": speakers_id, "name": "Speakers"}, {"id": headphones_id, "name": "Headphones"}],
+        **EMPTY_INPUT_VOLUME,
     }
     endpoint.SetMasterVolumeLevelScalar.assert_called_once_with(.73, None)
     endpoint.SetMute.assert_not_called()
@@ -114,6 +118,57 @@ def test_audio_uses_per_call_com_initialization_and_preserves_unspecified_settin
     snapshot = audio.volume()
     assert not snapshot["available"] and len(snapshot["devices"]) == 2
     assert audio.initialize.call_count == audio.uninitialize.call_count == 5
+
+
+def test_windows_audio_switches_default_capture_and_changes_only_microphone_controls():
+    audio = WindowsAudio.__new__(WindowsAudio)
+    audio.lock = Lock()
+    audio.audio_errors = audio.endpoint_errors = (OSError,)
+    audio.initialize, audio.uninitialize = Mock(), Mock()
+    endpoint = Mock(GetMasterVolumeLevelScalar=Mock(return_value=.17), GetMute=Mock(return_value=1))
+    usb = SimpleNamespace(id="native-usb-mic", FriendlyName="USB mic", EndpointVolume=endpoint)
+    built_in = SimpleNamespace(id="native-mic", FriendlyName="Microphone")
+    audio.outputs = Mock(side_effect=OSError("render endpoints unavailable"))
+    audio.speakers = Mock()
+    audio.inputs = Mock(return_value=[built_in, usb])
+    audio.microphone = Mock(side_effect=[built_in, usb])
+    audio.switch = Mock()
+    usb_id = audio.device_key(usb)
+    result = audio.volume(VolumeChange(input_device_id=usb_id, input_percent=17, input_muted=True))
+    assert not result["available"]
+    assert result["input_devices"] == [{"id": audio.device_key(built_in), "name": "Microphone"},
+                                       {"id": usb_id, "name": "USB mic"}]
+    assert result["input_device_id"] == usb_id and result["input_percent"] == 17 and result["input_muted"] is True
+    audio.speakers.assert_not_called()
+    audio.switch.assert_called_once_with("native-usb-mic")
+    endpoint.SetMasterVolumeLevelScalar.assert_called_once_with(.17, None)
+    endpoint.SetMute.assert_called_once_with(1, None)
+    audio.initialize.assert_called_once()
+    audio.uninitialize.assert_called_once()
+
+
+@async_test
+async def test_mac_media_hashes_input_ids_and_resolves_commands_in_device_order():
+    input_id = sha256(b"native-mic").hexdigest()
+    output_id = sha256(b"native-speakers").hexdigest()
+    native = {"percent": 20, "muted": False, "device_id": "native-speakers",
+              "devices": [{"id": "native-speakers", "name": "Speakers"}],
+              "input_percent": 47, "input_muted": True, "input_device_id": "native-mic",
+              "input_devices": [{"id": "native-mic", "name": "Microphone"}]}
+    bridge = MacMediaBridge()
+    with (patch("mac_agent.macos.volume", return_value=native), patch("mac_agent.macos.execute_command") as command):
+        snapshot = await bridge.volume(None)
+        assert snapshot["device_id"] == output_id and snapshot["input_device_id"] == input_id
+        assert snapshot["input_devices"] == [{"id": input_id, "name": "Microphone"}]
+        assert await bridge.set_volume(None, VolumeChange(input_device_id=input_id, input_percent=47,
+                                                         input_muted=True)) == snapshot
+        assert command.call_args_list == [call("input_audio_device_set", {"device_id": "native-mic"}),
+                                          call("input_volume_set", {"percent": 47}),
+                                          call("input_volume_mute", {"muted": True})]
+        with pytest.raises(HTTPException) as rejected:
+            await bridge.set_volume(None, VolumeChange(input_device_id=output_id))
+        assert rejected.value.status_code == 404
+        assert command.call_count == 3
 
 
 def test_lrc_offsets_multiple_timestamps_and_empty_lines():
@@ -318,6 +373,7 @@ async def test_lyrics_retry_endpoint_keeps_identity_and_origin_guard(tmp_path):
 async def test_public_media_endpoints_cover_cache_and_volume_contract(tmp_path):
     identifier, version = "a" * 32, "b" * 64
     output_id = "c" * 64
+    input_id = "d" * 64
     track = {"session_id": identifier, "track_id": version, "artwork_version": version, "has_artwork": True}
     bridge = MediaBridge()
     bridge.call = AsyncMock(side_effect=[
@@ -327,6 +383,9 @@ async def test_public_media_endpoints_cover_cache_and_volume_contract(tmp_path):
         httpx.Response(200, json={"available": True, "active": True, "current_session_id": identifier, "sessions": [track]}),
         httpx.Response(200, json={"available": True, "percent": 31, "muted": False}),
         httpx.Response(200, json={"available": True, "percent": 40, "muted": True, "device_id": output_id}),
+        httpx.Response(200, json={"available": True, "percent": 40, "muted": True, "device_id": output_id,
+                                  "input_devices": [{"id": input_id, "name": "Microphone"}],
+                                  "input_device_id": input_id, "input_percent": 60, "input_muted": False}),
         httpx.Response(200, json={"accepted": True}),
     ])
     with (patch("backend.main.host_identity", return_value={"platform": "windows", "name": "Fixture"}),
@@ -339,17 +398,26 @@ async def test_public_media_endpoints_cover_cache_and_volume_contract(tmp_path):
         assert image.headers["content-type"] == "image/webp" and "immutable" in image.headers["cache-control"]
         unchanged = await client.get(art_url, headers={"If-None-Match": image.headers["etag"]})
         assert unchanged.status_code == 304
-        assert (await client.get("/api/media/volume")).json()["percent"] == 31
+        initial = (await client.get("/api/media/volume")).json()
+        assert initial["percent"] == 31
+        assert {key: initial[key] for key in EMPTY_INPUT_VOLUME} == EMPTY_INPUT_VOLUME
         change = {"percent": 40, "muted": True, "device_id": output_id}
         switched = (await client.post("/api/media/volume", json=change)).json()
         assert switched["muted"] and switched["device_id"] == output_id
         assert bridge.call.await_args_list[-1].kwargs["json"] == change
+        input_change = {"input_device_id": input_id, "input_percent": 60, "input_muted": False}
+        microphone = (await client.post("/api/media/volume", json=input_change)).json()
+        assert {key: microphone[key] for key in input_change} == input_change
+        assert microphone["input_devices"] == [{"id": input_id, "name": "Microphone"}]
+        assert bridge.call.await_args_list[-1].kwargs["json"] == input_change
         assert (await client.post("/api/media/action", json={"action": "toggle", "session_id": identifier})).json()["accepted"]
         assert (await client.post("/api/media/action", json={"action": "exec", "session_id": identifier})).status_code == 422
         assert (await client.post("/api/media/volume", json={"percent": 101})).status_code == 422
         assert (await client.post("/api/media/volume", json={"device_id": "device id"})).status_code == 422
+        for invalid in ({"input_percent": -1}, {"input_muted": 0}, {"input_devices": []}, {"input_device_id": "wrong"}):
+            assert (await client.post("/api/media/volume", json=invalid)).status_code == 422
         assert (await client.post("/api/media/volume", json={"percent": 40}, headers={"Origin": "https://other.test"})).status_code == 403
-        assert bridge.call.await_count == 7
+        assert bridge.call.await_count == 8
 
 
 @async_test

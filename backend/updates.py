@@ -1,16 +1,17 @@
 """Current app version and cached GitHub release checks."""
 
 import asyncio
+from hashlib import sha256
 import platform
 import re
 import sys
 from time import monotonic
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 import httpx
 
 
-APP_VERSION = "2.1.1"
+APP_VERSION = "2.2.0"
 REPOSITORY = "https://github.com/charleszhang309/Vitals"
 RELEASES_URL = f"{REPOSITORY}/releases"
 LATEST_RELEASE_API = "https://api.github.com/repos/charleszhang309/Vitals/releases/latest"
@@ -77,15 +78,21 @@ def release_details(document, host_platform):
     return result
 
 
-def updates_router(host_platform):
+def updates_router(host_platform, index_path):
     router = APIRouter(prefix="/api/system")
     lock = asyncio.Lock()
     result = None
     expires = 0.0
 
     @router.get("/version")
-    def version():
-        return {"version": APP_VERSION, "platform": host_platform, "desktop": bool(getattr(sys, "frozen", False))}
+    def version(response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            build_id = sha256(index_path.read_bytes()).hexdigest()[:16]
+        except OSError:
+            build_id = None
+        return {"version": APP_VERSION, "build_id": build_id,
+                "platform": host_platform, "desktop": bool(getattr(sys, "frozen", False))}
 
     @router.get("/update/check")
     async def check_updates(request: Request):

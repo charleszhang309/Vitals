@@ -67,7 +67,7 @@ class UsageLedger:
         return totals
 
 
-def week_summary(source, name, start, end, zone, totals=None, balances=None, stale=False):
+def week_summary(source, name, start, end, zone, totals=None, balances=None, updated_at=None):
     available = totals is not None or balances is not None
     days = [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
     cells = [{"date": day.isoformat(), "tokens": totals.get(day, 0)} for day in days] if totals is not None else []
@@ -77,11 +77,10 @@ def week_summary(source, name, start, end, zone, totals=None, balances=None, sta
         "today_tokens": values[-1] if values else None, "total_tokens": sum(values) if values else None,
         "peak_tokens": max(values) if values else None,
         "weeks": [cells[index:index + 7] for index in range(0, len(cells), 7)],
+        "updated_at": updated_at.isoformat(timespec="seconds") if available and updated_at else None,
     }
     if balances is not None:
         result["balances"] = balances
-    if stale:
-        result["stale"] = True
     return result
 
 
@@ -159,7 +158,7 @@ class AiUsage:
         self.cloud = {}
         self.locks = {provider: asyncio.Lock() for provider in ("deepseek", "openai", "anthropic")}
 
-    def local_source(self, source, name, start, end):
+    def local_source(self, source, name, start, end, now):
         try:
             if source == "vitals":
                 totals = self.ledger.daily(start, end, self.zone)
@@ -168,7 +167,7 @@ class AiUsage:
         except (OSError, sqlite3.Error) as error:
             logger.info("读取 AI 用量失败（%s，%s）", source, type(error).__name__)
             totals = None
-        return week_summary(source, name, start, end, self.zone, totals=totals)
+        return week_summary(source, name, start, end, self.zone, totals=totals, updated_at=now)
 
     async def provider_source(self, provider, name, setting, client, now):
         end = now.date()
@@ -184,10 +183,10 @@ class AiUsage:
             try:
                 if provider == "deepseek":
                     balances = await asyncio.wait_for(deepseek_balances(client, key), 8)
-                    result = week_summary(provider, name, start, end, timezone.utc, balances=balances)
+                    result = week_summary(provider, name, start, end, timezone.utc, balances=balances, updated_at=now)
                 else:
                     totals = await asyncio.wait_for(daily_provider_usage(client, provider, key, start, now), 24)
-                    result = week_summary(provider, name, start, end, timezone.utc, totals=totals)
+                    result = week_summary(provider, name, start, end, timezone.utc, totals=totals, updated_at=now)
                 ttl = 600
             except (httpx.HTTPError, TimeoutError, KeyError, TypeError, ValueError, AttributeError, OverflowError) as error:
                 logger.info("读取云端 AI 用量失败（%s，%s）", provider, type(error).__name__)
@@ -202,7 +201,7 @@ class AiUsage:
         today = now.astimezone(self.zone).date()
         start = today - timedelta(days=DAYS - 1)
         sources = await asyncio.gather(
-            *(run_in_threadpool(self.local_source, source, name, start, today)
+            *(run_in_threadpool(self.local_source, source, name, start, today, now)
               for source, name in (("codex", "Codex"), ("claude", "Claude Code"), ("vitals", "Vitals"))),
             *(self.provider_source(provider, name, key, client, now) for provider, name, key in (
                 ("deepseek", "DeepSeek", "deepseek_api_key"), ("openai", "OpenAI", "openai_admin_key"),

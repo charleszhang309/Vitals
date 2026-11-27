@@ -134,6 +134,46 @@ def test_heartbeat_authorization_and_server_offline_clock(tmp_path, monkeypatch)
     asyncio.run(verify())
 
 
+def test_microphone_commands_require_input_resources_and_accept_legacy_heartbeats(tmp_path):
+    commands = {"input_volume_set": {"percent": 0}, "input_volume_mute": {"muted": False},
+                "input_audio_device_set": {"device_id": "fixture:mic"}}
+
+    async def verify():
+        async with client_for(tmp_path) as client:
+            async def heartbeat(snapshot):
+                response = await client.post(AGENT + "/heartbeat", json=snapshot, headers=AUTH)
+                response.raise_for_status()
+                return response.json()["commands"]
+
+            await heartbeat(SNAPSHOT)
+            for action, payload in commands.items():
+                reply = await client.post(AGENT + "/command", json={"action": action, "payload": payload})
+                assert reply.status_code == 409
+            legacy = await client.post(AGENT + "/command", json={"action": "volume_set", "payload": {"percent": 51}})
+            assert legacy.status_code == 202
+            assert [item["action"] for item in await heartbeat(SNAPSHOT)] == ["volume_set"]
+
+            volume = {**SNAPSHOT["volume"], "device_id": "fixture:speakers",
+                      "devices": [{"id": "fixture:speakers", "name": "Speakers"}],
+                      "input_percent": 0, "input_muted": False, "input_device_id": "fixture:mic",
+                      "input_devices": [{"id": "fixture:mic", "name": "Microphone"}]}
+            snapshot = {**SNAPSHOT, "volume": volume}
+            assert await heartbeat(snapshot) == []
+            public = (await client.get("/api/agents")).json()["devices"][0]["snapshot"]["volume"]
+            assert public == volume
+            wrong_direction = await client.post(AGENT + "/command", json={
+                "action": "input_audio_device_set", "payload": {"device_id": "fixture:speakers"}})
+            assert wrong_direction.status_code == 409
+            invalid = await client.post(AGENT + "/command", json={"action": "input_volume_mute", "payload": {"muted": 0}})
+            assert invalid.status_code == 422
+            for action, payload in commands.items():
+                reply = await client.post(AGENT + "/command", json={"action": action, "payload": payload})
+                assert reply.status_code == 202
+            assert {cmd["action"]: cmd["payload"] for cmd in await heartbeat(snapshot)} == commands
+
+    asyncio.run(verify())
+
+
 def test_command_whitelist_delivery_and_result(tmp_path, monkeypatch):
     now = 100
     monkeypatch.setattr("backend.agents.monotonic", lambda: now)

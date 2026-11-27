@@ -95,7 +95,12 @@ def test_cloud_usage_paginates_caches_and_distinguishes_balance(tmp_path):
     assert result["deepseek"]["balances"] == [{"currency": "USD", "amount": "9.25"}]
     assert result["openai"]["today_tokens"] == 300
     assert result["anthropic"]["today_tokens"] == 70
-    assert client.get("/api/ai/usage").json() == first.json()
+    again = {item["id"]: item for item in client.get("/api/ai/usage").json()["sources"]}
+    for provider in ("deepseek", "openai", "anthropic"):
+        assert result[provider]["updated_at"]
+        assert again[provider] == result[provider]
+    assert result["codex"]["updated_at"] is None
+    assert result["vitals"]["updated_at"] and again["vitals"]["updated_at"] >= result["vitals"]["updated_at"]
     assert calls.count("api.openai.com") == 2 and len(calls) == 4
 
 

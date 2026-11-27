@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Cloud, CloudDrizzle, CloudFog, CloudLightning, CloudRain, CloudSun, Flame, Footprints, HeartPulse, MoonStar, RotateCw, Snowflake, Sparkles, Sun } from 'lucide-react';
 import { MediaCover, playbackLabels } from './ControlPage.jsx';
@@ -11,6 +11,7 @@ import { orderedCards } from './overviewCards.js';
 import { AiUsageDetails, AiUsagePreview } from './AiUsageWidget.jsx';
 import { CalendarDetails, CalendarPreview } from './CalendarWidget.jsx';
 import { CountdownDetails, CountdownPreview, RateDetails, RatePreview, TasksDetails, TasksPreview } from './LifeWidgets.jsx';
+import './overviewWidgets.css';
 
 const OverviewChart = lazy(() => import('./OverviewChart.jsx'));
 const HealthDetails = lazy(() => import('./HealthDetails.jsx'));
@@ -18,6 +19,11 @@ const modeLabels = { silent: '静音', balanced: '平衡', performance: '性能'
 const taskLabels = { idle: '空闲', running: '高负载运行中', completed: '已完工' };
 const stages = [
   ['deep', '深睡'], ['rem', 'REM'], ['core', '核心'], ['asleep', '未分期'], ['awake', '清醒'],
+];
+const weeklyMeasures = [
+  ['steps', '日均步数', '步', (value) => measure(value, '步', 0), '步数'],
+  ['sleep_minutes', '平均睡眠', '分钟', sleepTime, '睡眠'],
+  ['resting_heart_rate', '平均静息心率', '次/分', (value) => measure(value, '次/分', 1), '静息心率'],
 ];
 const weatherMetrics = [{ value: 'temperature', label: '温度' }, { value: 'rain', label: '降水概率' }];
 const forecastWeekday = new Intl.DateTimeFormat('zh-CN', { timeZone: 'UTC', weekday: 'short' });
@@ -118,50 +124,111 @@ function AirBadge({ air, compact = false }) {
   </span>;
 }
 
+function temperatureScale(days) {
+  const values = days.flatMap((day) => [day.low_c, day.high_c]).filter(Number.isFinite);
+  const minimum = values.length ? Math.min(...values) : 0;
+  return { minimum, span: values.length ? Math.max(Math.max(...values) - minimum, 1) : 1 };
+}
+
+function TemperatureTrack({ day, scale }) {
+  const valid = Number.isFinite(day.low_c) && Number.isFinite(day.high_c);
+  const start = valid ? (day.low_c - scale.minimum) / scale.span * 100 : 0;
+  const width = valid ? (day.high_c - day.low_c) / scale.span * 100 : 0;
+  return <span className="temperature-track" aria-hidden="true">
+    {valid && <span style={{ left: `min(calc(100% - 4px), ${start}%)`, width: `max(4px, ${width}%)` }} />}
+  </span>;
+}
+
 function WeatherPreview({ resource, wide }) {
   const reply = resource.data;
   const current = reply?.data?.current;
-  const [, description] = condition(current?.code);
+  const [CurrentIcon, description] = condition(current?.code);
   const location = current ? [description, reply?.city_name].filter(Boolean).join(' · ')
     : resource.error || reply?.status === 'unavailable' ? '天气暂不可用' : '正在获取天气…';
   const temperature = (value) => Number.isFinite(value) ? `${number(value, 0)}°` : '—';
   const percent = (value) => Number.isFinite(value) ? `${number(value, 0)}%` : '—';
-  const forecast = wide ? reply?.data?.daily?.slice(1, 4) ?? [] : [];
-  return <div className="weather-preview">
-    <div className="widget-weather">
-      <div className="widget-weather-current">
-        <p className="widget-weather-temperature numeric">{temperature(current?.temperature_c)}</p>
-        <p className="widget-muted widget-truncate" title={location}>{location}</p>
+  const forecast = wide ? reply?.data?.daily?.slice(1, 5) ?? [] : [];
+  const scale = temperatureScale(forecast);
+  return <div className={forecast.length ? 'preview-split weather-preview-split' : 'weather-preview'}>
+    <div className="weather-preview">
+      <div className="widget-weather">
+        <div className="widget-weather-current">
+          <p className="widget-weather-temperature numeric">{temperature(current?.temperature_c)}</p>
+          <p className="widget-muted widget-weather-location" title={location}>
+            {wide && current && <CurrentIcon size={13} aria-hidden="true" />}<span className="widget-truncate">{location}</span>
+          </p>
+        </div>
+        <dl className="widget-weather-range">{[['最高', current?.high_c], ['最低', current?.low_c]].map(([label, value]) => (
+          <div key={label}><dt>{label}</dt><dd className="numeric">{temperature(value)}</dd></div>
+        ))}</dl>
       </div>
-      <dl className="widget-weather-range">{[['最高', current?.high_c], ['最低', current?.low_c]].map(([label, value]) => (
-        <div key={label}><dt>{label}</dt><dd className="numeric">{temperature(value)}</dd></div>
-      ))}</dl>
+      <dl className="widget-weather-facts">{[
+        ['体感', temperature(current?.feels_like_c)], ['湿度', percent(current?.humidity_percent)],
+        ['降水', percent(current?.precipitation_percent)],
+      ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd className="numeric">{value}</dd></div>)}</dl>
     </div>
-    <dl className="widget-weather-facts">{[
-      ['体感', temperature(current?.feels_like_c)], ['湿度', percent(current?.humidity_percent)],
-      ['降水', percent(current?.precipitation_percent)],
-    ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd className="numeric">{value}</dd></div>)}</dl>
-    {forecast.length > 0 && <ul className="widget-weather-forecast">
+    {forecast.length > 0 && <ul className="preview-secondary weather-preview-days" aria-label="未来四天">
       {forecast.map((day) => {
         const [Icon, label] = condition(day.code);
         return <li key={day.date} title={label}>
           <time dateTime={day.date}>{forecastWeekday.format(new Date(`${day.date}T00:00:00Z`))}</time>
           <Icon size={17} role="img" aria-label={label} />
-          <span className="numeric"><span className="muted">{temperature(day.low_c)}</span> {temperature(day.high_c)}</span>
+          <span className="numeric muted">{temperature(day.low_c)}</span>
+          <TemperatureTrack day={day} scale={scale} />
+          <strong className="numeric">{temperature(day.high_c)}</strong>
         </li>;
       })}
     </ul>}
   </div>;
 }
 
-function HealthPreview({ resource }) {
+function SleepStageTrack({ sleep }) {
+  const duration = stages.reduce((sum, [key]) => sum + (sleep?.stages?.[key] ?? 0), 0);
+  const scale = Math.max(duration, sleep?.in_bed_minutes ?? 0);
+  if (scale <= 0) return null;
+  return <div className="sleep-track" aria-hidden="true">{stages.map(([key]) => sleep?.stages?.[key] > 0 &&
+    <span key={key} className={`stage-${key}`} style={{ width: `${sleep.stages[key] / scale * 100}%` }} />)}</div>;
+}
+
+function HealthPreviewDetails({ sleep, weekly }) {
+  const sleepStages = stages.filter(([key]) => sleep?.stages?.[key] > 0);
+  const trends = weeklyMeasures.flatMap(([key, label, unit, format, short]) => {
+    const metric = weekly?.data?.metrics?.[key];
+    if (!Number.isFinite(metric?.recent)) return [];
+    const change = key === 'steps' && Number.isFinite(metric.percent_change)
+      ? `${number(Math.abs(metric.percent_change), 1)}%`
+      : `${number(Math.abs(metric.delta), key === 'resting_heart_rate' ? 1 : 0)}${key === 'sleep_minutes' ? '分' : unit}`;
+    const direction = Number.isFinite(metric.delta) ? Math.sign(metric.delta) : null;
+    const text = direction === null ? format(metric.recent) : `${direction > 0 ? '+' : direction < 0 ? '−' : ''}${change}`;
+    return [{ key, short, text, label: `${label} ${format(metric.recent)}${direction !== null ? `，较前 7 天 ${text}` : ''}` }];
+  });
+  return <div className="preview-secondary health-preview-details">
+    <div>
+      <p className="preview-caption">睡眠阶段</p>
+      {sleepStages.length ? <>
+        <SleepStageTrack sleep={sleep} />
+        <ul className="health-preview-stages">{sleepStages.map(([key, label]) => <li key={key}>
+          <i className={`stage-${key}`} aria-hidden="true" />{label}<strong className="numeric">{number(sleep.stages[key], 0)}分</strong>
+        </li>)}</ul>
+      </> : <p className="widget-muted">暂无分期数据</p>}
+    </div>
+    <div>
+      <p className="preview-caption">近 7 天</p>
+      {trends.length ? <ul className="health-preview-trends">{trends.map(({ key, short, text, label }) => <li key={key} title={label}>
+        <span className="sr-only">{label}</span><span aria-hidden="true">{short} <strong className="numeric">{text}</strong></span>
+      </li>)}</ul> : <p className="widget-muted">{weekly?.error ? '趋势暂不可用' : weekly?.data ? '暂无趋势数据' : '正在读取趋势…'}</p>}
+    </div>
+  </div>;
+}
+
+function HealthPreview({ resource, wide, weekly }) {
   const { totals, heart_rate: heart, sleep } = resource.data ?? {};
   const rings = [
     ['活动能量', totals?.active_energy, 500, '#FF3B30', 39],
     ['步数', totals?.step_count, 8000, '#34C759', 28],
     ['睡眠', sleep?.total_minutes, 480, '#5856D6', 17],
   ];
-  return <div className="widget-health">
+  const metrics = <div className="widget-health">
     <svg viewBox="0 0 88 88" className="health-rings" fill="none" strokeWidth="8" role="img" aria-label={rings.map(
       ([label, value, goal]) => `${label}目标 ${Number.isFinite(value) ? `${Math.round(value / goal * 100)}%` : '暂无数据'}`
     ).join('，')}>
@@ -179,25 +246,23 @@ function HealthPreview({ resource }) {
     ['心率', measure(heart?.current, '次/分', 0)], ['活动能量', measure(totals?.active_energy, 'kcal', 0)],
     ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd className="numeric">{value}</dd></div>)}</dl>
   </div>;
+  return wide ? <div className="preview-split health-preview-split">
+    {metrics}<HealthPreviewDetails sleep={sleep} weekly={weekly} />
+  </div> : metrics;
 }
 
 function ForecastDays({ days }) {
-  const values = days.flatMap((day) => [day.low_c, day.high_c]).filter(Number.isFinite);
-  const minimum = values.length ? Math.min(...values) : 0;
-  const span = values.length ? Math.max(Math.max(...values) - minimum, 1) : 1;
+  const scale = temperatureScale(days);
   return (
     <section className="surface panel forecast-card">
       <div className="panel-header"><h3>未来 7 天</h3></div>
       <ul className="forecast-list">{days.map((day, index) => {
         const [Icon, label] = condition(day.code);
-        const valid = Number.isFinite(day.low_c) && Number.isFinite(day.high_c);
-        const start = valid ? (day.low_c - minimum) / span * 100 : 0;
-        const width = valid ? (day.high_c - day.low_c) / span * 100 : 0;
         return <li className="forecast-row" key={day.date}>
           <span className="forecast-day">{index === 0 ? '今天' : forecastWeekday.format(new Date(`${day.date}T00:00:00Z`))}</span>
           <span className="forecast-condition" aria-label={label} title={label}><Icon size={19} aria-hidden="true" /><span>{label}</span></span>
           <span className="numeric muted">{measure(day.low_c, '°', 0)}</span>
-          <span className="temperature-track" aria-hidden="true">{valid && <span style={{ left: `${start}%`, width: `max(4px, ${width}%)` }} />}</span>
+          <TemperatureTrack day={day} scale={scale} />
           <strong className="numeric">{measure(day.high_c, '°', 0)}</strong>
         </li>;
       })}</ul>
@@ -275,14 +340,11 @@ function VitalTile({ title, value, onOpen }) {
 }
 
 function SleepCard({ sleep }) {
-  const duration = stages.reduce((sum, [key]) => sum + (sleep?.stages[key] ?? 0), 0);
-  const scale = Math.max(duration, sleep?.in_bed_minutes ?? 0);
   return <section className="surface panel sleep-card">
     <div className="panel-header"><h3>睡眠阶段</h3>{sleep?.adjusted && <span className="muted panel-note">时长已校正</span>}</div>
     {sleep ? <>
       <p className="muted sleep-summary numeric">{sleep.start && sleep.end ? `${time(sleep.start, true)} – ${time(sleep.end)}` : '最近一次睡眠'} · 在床 {sleepTime(sleep.in_bed_minutes)}</p>
-      {scale > 0 && <div className="sleep-track" aria-hidden="true">{stages.map(([key]) => (sleep.stages[key] > 0 &&
-        <span key={key} className={`stage-${key}`} style={{ width: `${sleep.stages[key] / scale * 100}%` }} />))}</div>}
+      <SleepStageTrack sleep={sleep} />
       <dl className="sleep-legend">{stages.map(([key, label]) => <div key={key}>
         <dt><span className={`stage-${key}`} aria-hidden="true" />{label}</dt><dd className="numeric">{sleepTime(sleep.stages[key])}</dd>
       </div>)}</dl>
@@ -290,14 +352,9 @@ function SleepCard({ sleep }) {
   </section>;
 }
 
-function WeeklyComparison() {
-  const { data, error } = useResource('/api/health/weekly-comparison', 60_000);
-  const measures = [
-    ['steps', '日均步数', '步', (value) => measure(value, '步', 0)],
-    ['sleep_minutes', '平均睡眠', '分钟', sleepTime],
-    ['resting_heart_rate', '平均静息心率', '次/分', (value) => measure(value, '次/分', 1)],
-  ];
-  const items = measures.filter(([key]) => data?.metrics[key].recent_days || data?.metrics[key].previous_days);
+function WeeklyComparison({ resource }) {
+  const { data, error } = resource;
+  const items = weeklyMeasures.filter(([key]) => data?.metrics[key].recent_days || data?.metrics[key].previous_days);
   function displayRange(range) {
     return `${range.start.slice(5).replace('-', '/')}–${range.end.slice(5).replace('-', '/')}`;
   }
@@ -323,7 +380,7 @@ function WeeklyComparison() {
   </section>;
 }
 
-function Health({ resource, dark }) {
+function Health({ resource, weekly, dark }) {
   const [detail, setDetail] = useState(null);
   const { data, error, retry } = resource;
   const totals = data?.totals;
@@ -348,7 +405,7 @@ function Health({ resource, dark }) {
           ['深睡', sleepTime(sleep?.stages.deep)], ['REM', sleepTime(sleep?.stages.rem)],
         ]} />
       </div>
-      <WeeklyComparison />
+      <WeeklyComparison resource={weekly} />
       <div className="health-detail-grid">
         <section className="surface panel heart-trend">
           <HealthTrend metric="heart" title="心率趋势" dark={dark} />
@@ -369,29 +426,36 @@ export default function TodayPage({ telemetry, media, hub, primaryDevice, waitin
   briefingEnabled, widgets, cardOrder, cardWidths }) {
   const [open, setOpen] = useState(null);
   const [usageSource, setUsageSource] = useState(null);
+  const [usageReadAt, setUsageReadAt] = useState(null);
   const visible = (id) => widgets[id] !== false;
+  const isWide = (id) => cardWidths[id] === 'wide';
   const weather = useResource('/api/weather', 60_000, visible('weather'));
   const health = useResource('/api/health/summary', 20_000, visible('health'));
+  const healthWeek = useResource('/api/health/weekly-comparison', 60_000, visible('health') && (isWide('health') || open === 'health'));
   const calendar = useResource('/api/calendar/events', 45_000, visible('calendar'));
   const todos = useResource('/api/todos', 15_000, visible('tasks'));
   const habits = useResource('/api/habits', 15_000, visible('tasks'));
   const countdowns = useResource('/api/countdowns', 30_000, visible('countdowns'));
   const rates = useResource('/api/rates', 60_000, visible('rates'));
   const aiUsage = useResource('/api/ai/usage', 300_000, visible('ai-usage'));
-  const isWide = (id) => cardWidths[id] === 'wide';
+  useEffect(() => {
+    if (aiUsage.data) setUsageReadAt(Date.now());
+  }, [aiUsage.data]);
 
   const previews = {
-    weather: <WeatherPreview resource={weather} wide={isWide('weather')} />, health: <HealthPreview resource={health} />,
+    weather: <WeatherPreview resource={weather} wide={isWide('weather')} />,
+    health: <HealthPreview resource={health} wide={isWide('health')} weekly={healthWeek} />,
     calendar: <CalendarPreview resource={calendar} wide={isWide('calendar')} />,
     tasks: <TasksPreview todos={todos} habits={habits} wide={isWide('tasks')} />,
-    countdowns: <CountdownPreview resource={countdowns} />, rates: <RatePreview resource={rates} />,
+    countdowns: <CountdownPreview resource={countdowns} wide={isWide('countdowns')} />,
+    rates: <RatePreview resource={rates} wide={isWide('rates')} />,
     'ai-usage': <AiUsagePreview resource={aiUsage} wide={isWide('ai-usage')} preferredSource={usageSource} />,
   };
   const details = {
-    weather: <Weather resource={weather} dark={dark} />, health: <Health resource={health} dark={dark} />,
+    weather: <Weather resource={weather} dark={dark} />, health: <Health resource={health} weekly={healthWeek} dark={dark} />,
     tasks: <TasksDetails todos={todos} habits={habits} />,
     countdowns: <CountdownDetails resource={countdowns} />, rates: <RateDetails resource={rates} dark={dark} />,
-    'ai-usage': <AiUsageDetails resource={aiUsage} preferredSource={usageSource} onSource={setUsageSource} />,
+    'ai-usage': <AiUsageDetails resource={aiUsage} preferredSource={usageSource} onSource={setUsageSource} readAt={usageReadAt} />,
   };
   const shown = orderedCards(cardOrder).filter(({ id }) => visible(id));
   const selected = shown.find(({ id }) => id === open);

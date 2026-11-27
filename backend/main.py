@@ -230,7 +230,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     app.include_router(scratchpad_router(store, settings.upload_limit_mib * MIB))
     app.include_router(wallpaper_router(data_dir, wallpaper_lock))
     app.include_router(backup_router(backups, identity))
-    app.include_router(updates_router(identity["platform"]))
+    app.include_router(updates_router(identity["platform"], static_dir / "index.html"))
     app.include_router(health_router(health))
     app.include_router(weather_router(weather))
     app.include_router(calendar_router(calendar))

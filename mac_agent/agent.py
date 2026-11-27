@@ -37,8 +37,8 @@ STREAM_BACKOFF = (1, 2, 5)
 STREAM_KEEPALIVE_SECONDS = 20
 COMMAND_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 RECEIPT_TTL = 48 * 3600
-REFRESH_ACTIONS = {"volume_set", "volume_mute", "audio_device_set", "media_play_pause", "media_next",
-                   "media_previous", "caffeinate_toggle"}
+REFRESH_ACTIONS = {"volume_set", "volume_mute", "audio_device_set", "input_volume_set", "input_volume_mute",
+                   "input_audio_device_set", "media_play_pause", "media_next", "media_previous", "caffeinate_toggle"}
 FAILURES = (httpx.HTTPError, OSError, RuntimeError, ValueError, TypeError, KeyError, psutil.Error,
             subprocess.TimeoutExpired)
 logger = logging.getLogger(__name__)

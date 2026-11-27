@@ -124,6 +124,10 @@ class Volume(BaseModel):
     muted: StrictBool | None = None
     device_id: DeviceUID | None = None
     devices: list[AudioDevice] = Field(default_factory=list, max_length=64)
+    input_percent: Percent | None = None
+    input_muted: StrictBool | None = None
+    input_device_id: DeviceUID | None = None
+    input_devices: list[AudioDevice] = Field(default_factory=list, max_length=64)
 
 
 class Media(BaseModel):
@@ -173,17 +177,17 @@ class SetAudioDevice(EmptyPayload):
 
 
 class AudioDeviceCommand(EmptyPayload):
-    action: Literal["audio_device_set"]
+    action: Literal["audio_device_set", "input_audio_device_set"]
     payload: SetAudioDevice
 
 
 class VolumeCommand(EmptyPayload):
-    action: Literal["volume_set"]
+    action: Literal["volume_set", "input_volume_set"]
     payload: SetVolume
 
 
 class MuteCommand(EmptyPayload):
-    action: Literal["volume_mute"]
+    action: Literal["volume_mute", "input_volume_mute"]
     payload: SetMute
 
 
@@ -427,11 +431,18 @@ class AgentRegistry:
                 raise HTTPException(404, "找不到该设备")
             if not device.online(now):
                 raise HTTPException(409, "设备已休眠或离线")
+            volume = device.snapshot["volume"] or {}
             for payload in payloads:
-                if payload.action == "audio_device_set":
-                    volume = device.snapshot["volume"] or {}
-                    if not any(item["id"] == payload.payload.device_id for item in volume.get("devices", [])):
-                        raise HTTPException(409, "该输出设备已不可用")
+                if payload.action in {"audio_device_set", "input_audio_device_set"}:
+                    is_input = payload.action == "input_audio_device_set"
+                    devices = volume.get("input_devices" if is_input else "devices", [])
+                    if not any(item["id"] == payload.payload.device_id for item in devices):
+                        label = "输入" if is_input else "输出"
+                        raise HTTPException(409, f"该{label}设备已不可用")
+                if payload.action == "input_volume_set" and volume.get("input_percent") is None:
+                    raise HTTPException(409, "当前设备不支持麦克风音量控制")
+                if payload.action == "input_volume_mute" and volume.get("input_muted") is None:
+                    raise HTTPException(409, "当前设备不支持麦克风静音控制")
             extra = len(device.commands) + len(payloads) - MAX_COMMANDS
             if extra > 0:
                 removable = [key for key, command in device.commands.items() if command.status(now) not in {"queued", "delivered"}]

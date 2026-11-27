@@ -293,8 +293,8 @@ export default function HostSetup({ config, onConfig }) {
         <SetupField label="OpenAI API Key" name="api_key" secret configured={config.ai.has_api_key} />
       </div>
     </SetupForm>
-    <SetupForm title="AI 用量" onSave={(data) => save({ ai_usage: Object.fromEntries(data) })}>
-      <p className="muted">本机日志和 Vitals 用量自动统计。只有查询云端用量或余额时才需要填写密钥。</p>
+    <SetupForm title="AI 用量统计" onSave={(data) => save({ ai_usage: Object.fromEntries(data) })}>
+      <p className="muted">密钥用于查询云端用量或余额，留空会保留已保存的值。</p>
       <div className="host-setup-grid">
         <SetupField label="DeepSeek API Key" name="deepseek_api_key" secret configured={config.ai_usage?.has_deepseek_api_key} />
         <SetupField label="OpenAI Admin Key" name="openai_admin_key" secret configured={config.ai_usage?.has_openai_admin_key} />

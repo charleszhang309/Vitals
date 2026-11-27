@@ -15,13 +15,15 @@ use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem}
 use tauri::tray::TrayIconBuilder;
 #[cfg(not(target_os = "macos"))]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+#[cfg(target_os = "macos")]
+use tauri::WindowEvent;
 use tauri::{
     AppHandle, Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-    WindowEvent,
 };
 use tauri_plugin_autostart::ManagerExt;
 
 const SERVICE_UNAVAILABLE: &str = "无法连接 Vitals 服务管理器。";
+const MAIN_WINDOW: &str = "main";
 const SETTINGS_WINDOW: &str = "desktop-settings";
 type DashboardOrigin = Arc<Mutex<Option<Url>>>;
 
@@ -63,7 +65,7 @@ fn start_service(
     window: WebviewWindow,
     operations: tauri::State<'_, Sender<Operation>>,
 ) -> Result<(), &'static str> {
-    require_bundled_page(&window, "main", "/index.html")?;
+    require_bundled_page(&window, MAIN_WINDOW, "/index.html")?;
     operations
         .send(Operation::Start)
         .map_err(|_| SERVICE_UNAVAILABLE)
@@ -71,8 +73,8 @@ fn start_service(
 
 #[tauri::command]
 fn open_desktop_settings(window: WebviewWindow) -> Result<(), &'static str> {
-    require_bundled_page(&window, "main", "/index.html")?;
-    open_settings(window.app_handle());
+    require_bundled_page(&window, MAIN_WINDOW, "/index.html")?;
+    open_window(window.app_handle(), SETTINGS_WINDOW);
     Ok(())
 }
 
@@ -100,8 +102,8 @@ fn save_desktop_settings(
             .send(Operation::Configure(role))
             .map_err(|_| SERVICE_UNAVAILABLE)
     })?;
-    let _ = window.hide();
-    open_window(window.app_handle());
+    let _ = window.close();
+    open_window(window.app_handle(), MAIN_WINDOW);
     Ok(())
 }
 
@@ -112,7 +114,7 @@ fn permits_dashboard_page(
     grants: &[Arc<String>],
 ) -> bool {
     let origin = page.origin().ascii_serialization();
-    label == "main"
+    label == MAIN_WINDOW
         && matches!(page.path(), "/" | "/index.html")
         && is_allowed_origin(active, page)
         && grants.iter().any(|grant| grant.as_str() == origin)
@@ -164,34 +166,37 @@ fn set_desktop_mode(
     Ok(store.mode_view())
 }
 
-fn show_window(app: &AppHandle, label: &str) {
-    if let Some(window) = app.get_webview_window(label) {
-        #[cfg(target_os = "macos")]
-        if let Err(error) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
-            eprintln!("Could not restore Vitals Dock icon: {error}");
+fn open_window(app: &AppHandle, label: &'static str) {
+    let app = app.clone();
+    // WebView2 creation must run outside synchronous window and IPC callbacks.
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = show_or_build_window(&app, label);
+        if let Err(error) = result {
+            eprintln!("Could not open Vitals window {label}: {error}");
         }
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
+    });
 }
 
-fn open_window(app: &AppHandle) {
-    show_window(app, "main");
-}
-
-fn open_settings(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window(SETTINGS_WINDOW) {
-        if !window.is_visible().unwrap_or(false) {
-            let _ = window.reload();
-        }
-        show_window(app, SETTINGS_WINDOW);
+fn show_or_build_window(app: &AppHandle, label: &str) -> tauri::Result<()> {
+    let navigation = app.state::<Mutex<DashboardNavigation>>();
+    let mut navigation = navigation.lock().unwrap();
+    let window = match app.get_webview_window(label) {
+        Some(window) => window,
+        None if label == MAIN_WINDOW => navigation.build_window(app)?,
+        None => build_settings_window(app)?,
+    };
+    #[cfg(target_os = "macos")]
+    if let Err(error) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
+        eprintln!("Could not restore Vitals Dock icon: {error}");
     }
+    window.show()?;
+    window.unminimize()?;
+    window.set_focus()
 }
 
 fn reopen_and_start(app: &AppHandle) {
-    open_window(app);
     if let Some(operations) = app.try_state::<Sender<Operation>>() {
+        open_window(app, MAIN_WINDOW);
         let _ = operations.send(Operation::Start);
     }
 }
@@ -296,35 +301,6 @@ fn install_macos_menu(app: &AppHandle) -> tauri::Result<TrayMenu<tauri::Wry>> {
     Ok(services)
 }
 
-fn hide_on_close(window: &WebviewWindow) {
-    let window = window.clone();
-    let event_window = window.clone();
-    window.on_window_event(move |event| {
-        if let WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_close();
-            if let Err(error) = event_window.hide() {
-                eprintln!("Could not hide Vitals window: {error}");
-                return;
-            }
-            #[cfg(target_os = "macos")]
-            {
-                let app = event_window.app_handle();
-                let any_visible = app
-                    .webview_windows()
-                    .values()
-                    .any(|window| window.is_visible().unwrap_or(false));
-                if !any_visible {
-                    if let Err(error) =
-                        app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                    {
-                        eprintln!("Could not hide Vitals Dock icon: {error}");
-                    }
-                }
-            }
-        }
-    });
-}
-
 fn known_external_link(url: &Url) -> bool {
     if url.scheme() != "https"
         || url.port().is_some()
@@ -345,14 +321,44 @@ fn known_external_link(url: &Url) -> bool {
     }
 }
 
-fn navigation_target(role: &Role, status: Status, hub_url: &Url) -> (Url, Option<Url>) {
+#[derive(Debug, PartialEq, Eq)]
+enum MainPage {
+    Startup(Url),
+    Dashboard(Url),
+}
+
+impl MainPage {
+    fn url(&self) -> &Url {
+        match self {
+            Self::Startup(url) | Self::Dashboard(url) => url,
+        }
+    }
+
+    fn origin(&self) -> Option<&Url> {
+        match self {
+            Self::Startup(_) => None,
+            Self::Dashboard(url) => Some(url),
+        }
+    }
+
+    fn initial_url(&self) -> WebviewUrl {
+        match self {
+            Self::Startup(url) => WebviewUrl::App(
+                format!("{}?{}", url.path(), url.query().unwrap_or_default()).into(),
+            ),
+            Self::Dashboard(url) => WebviewUrl::External(url.clone()),
+        }
+    }
+}
+
+fn navigation_target(role: &Role, status: Status, hub_url: &Url) -> MainPage {
     let target = match (role, status) {
         (Role::Hub, Status::Running | Status::External) => Some(hub_url.clone()),
         (Role::Remote(remote), Status::Running | Status::Failed) => Some(remote.address()),
         _ => None,
     };
     if let Some(url) = target {
-        return (url.clone(), Some(url));
+        return MainPage::Dashboard(url);
     }
     let mut url = bundled_url("/");
     let mode = match role {
@@ -370,7 +376,7 @@ fn navigation_target(role: &Role, status: Status, hub_url: &Url) -> (Url, Option
     url.query_pairs_mut()
         .append_pair("mode", mode)
         .append_pair("status", status);
-    (url, None)
+    MainPage::Startup(url)
 }
 
 fn is_allowed_origin(allowed: &Mutex<Option<Url>>, url: &Url) -> bool {
@@ -398,7 +404,7 @@ fn allow_dashboard_ipc(app: &AppHandle, origin: &Url, registered: &mut HashSet<S
     let capability = CapabilityBuilder::new(format!("dashboard-{}", registered.len()))
         .local(false)
         .remote(pattern)
-        .window("main")
+        .window(MAIN_WINDOW)
         .permission_scoped(
             "allow-dashboard-mode",
             vec![origin.clone()],
@@ -411,20 +417,43 @@ fn allow_dashboard_ipc(app: &AppHandle, origin: &Url, registered: &mut HashSet<S
     }
 }
 
-fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(target_os = "macos")]
-    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+struct DashboardNavigation {
+    current: MainPage,
+    registered_origins: HashSet<String>,
+}
 
-    let hub = Hub::new(app.handle())?;
-    let hub_url: Url = hub.url().parse()?;
-    let home = desktop_home(app.path().app_local_data_dir()?)?;
-    let (store, role) = SettingsStore::load(&home);
-    app.manage(store);
-    let allowed_origin = Arc::new(Mutex::new(None));
-    app.manage(allowed_origin.clone());
-    let navigation_origin = allowed_origin.clone();
-    let popup_origin = allowed_origin.clone();
-    let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+impl DashboardNavigation {
+    fn authorize(&mut self, app: &AppHandle) {
+        let origin = self.current.origin();
+        if let Some(origin) = origin {
+            allow_dashboard_ipc(app, origin, &mut self.registered_origins);
+        }
+        *app.state::<DashboardOrigin>().lock().unwrap() = origin.cloned();
+    }
+
+    fn build_window(&mut self, app: &AppHandle) -> tauri::Result<WebviewWindow> {
+        self.authorize(app);
+        build_main_window(app, self.current.initial_url())
+    }
+
+    fn report(&mut self, app: &AppHandle, target: MainPage) {
+        if self.current == target {
+            return;
+        }
+        self.current = target;
+        self.authorize(app);
+        if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+            if let Err(error) = window.navigate(self.current.url().clone()) {
+                eprintln!("Could not navigate to the Vitals page: {error}");
+            }
+        }
+    }
+}
+
+fn build_main_window(app: &AppHandle, url: WebviewUrl) -> tauri::Result<WebviewWindow> {
+    let navigation_origin = app.state::<DashboardOrigin>().inner().clone();
+    let popup_origin = navigation_origin.clone();
+    WebviewWindowBuilder::new(app, MAIN_WINDOW, url)
         .title("Vitals")
         .inner_size(1280.0, 820.0)
         .min_inner_size(900.0, 640.0)
@@ -441,9 +470,11 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
             tauri::webview::NewWindowResponse::Deny
         })
-        .build()?;
-    hide_on_close(&window);
-    let settings_window = WebviewWindowBuilder::new(
+        .build()
+}
+
+fn build_settings_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+    WebviewWindowBuilder::new(
         app,
         SETTINGS_WINDOW,
         WebviewUrl::App("settings.html".into()),
@@ -454,8 +485,28 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     .visible(false)
     .on_navigation(|url| is_bundled_page(url, "/settings.html"))
     .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-    .build()?;
-    hide_on_close(&settings_window);
+    .build()
+}
+
+fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+    let hub = Hub::new(app.handle())?;
+    let hub_url: Url = hub.url().parse()?;
+    let home = desktop_home(app.path().app_local_data_dir()?)?;
+    let (store, role) = SettingsStore::load(&home);
+    app.manage(store);
+    app.manage::<DashboardOrigin>(Arc::new(Mutex::new(None)));
+    let initial_status = if role == Role::Unconfigured {
+        Status::Unconfigured
+    } else {
+        Status::Starting
+    };
+    app.manage(Mutex::new(DashboardNavigation {
+        current: navigation_target(&role, initial_status, &hub_url),
+        registered_origins: HashSet::new(),
+    }));
 
     let tray_menu = TrayMenu::new(app.handle())?;
     let actions = Menu::with_items(app, &tray_menu.items())?;
@@ -491,7 +542,7 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 }
             ) {
-                open_window(tray.app_handle());
+                open_window(tray.app_handle(), MAIN_WINDOW);
             }
         });
     tray.tooltip("Vitals")
@@ -499,11 +550,11 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .on_menu_event(move |app, event| {
             let operation = match event.id().as_ref() {
                 "open" => {
-                    open_window(app);
+                    open_window(app, MAIN_WINDOW);
                     return;
                 }
                 "desktop-settings" => {
-                    open_settings(app);
+                    open_window(app, SETTINGS_WINDOW);
                     return;
                 }
                 "start" => Operation::Start,
@@ -536,24 +587,18 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let app = app.handle().clone();
     let background = std::env::args_os().any(|arg| arg == "--background");
     if !background {
-        open_window(&app);
+        open_window(&app, MAIN_WINDOW);
     }
     std::thread::spawn(move || {
-        let mut previous = None;
-        let mut registered = HashSet::new();
+        let navigation = app.state::<Mutex<DashboardNavigation>>();
         Supervisor::new(hub, role, home).run(receive, |role, state| {
             for menu in &menus {
                 menu.update(role, state);
             }
-            let (target, origin) = navigation_target(role, state, &hub_url);
-            if let Some(origin) = &origin {
-                allow_dashboard_ipc(&app, origin, &mut registered);
-            }
-            *allowed_origin.lock().unwrap() = origin;
-            if previous.as_ref() != Some(&target) {
-                let _ = window.navigate(target.clone());
-                previous = Some(target);
-            }
+            navigation
+                .lock()
+                .unwrap()
+                .report(&app, navigation_target(role, state, &hub_url));
         });
         app.exit(0);
     });
@@ -583,21 +628,34 @@ fn main() {
         .expect("could not initialize Vitals");
     app.run(|app, event| {
         #[cfg(target_os = "macos")]
-        if let RunEvent::Reopen {
-            has_visible_windows: false,
-            ..
-        } = &event
-        {
-            reopen_and_start(app);
+        match &event {
+            RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } => reopen_and_start(app),
+            RunEvent::WindowEvent {
+                event: WindowEvent::Destroyed,
+                ..
+            } if !app
+                .webview_windows()
+                .values()
+                .any(|window| window.is_visible().unwrap_or(false)) =>
+            {
+                if let Err(error) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
+                    eprintln!("Could not hide Vitals Dock icon: {error}");
+                }
+            }
+            _ => {}
         }
+        #[cfg(not(target_os = "macos"))]
+        let _ = app;
         if let RunEvent::ExitRequested {
             api, code: None, ..
         } = event
         {
-            if let Some(send) = app.try_state::<Sender<Operation>>() {
-                api.prevent_exit();
-                let _ = send.send(Operation::Quit);
-            }
+            // Tauri requests an uncoded exit when the last window is destroyed.
+            // Quit from the native menus still stops the services before app.exit(0).
+            api.prevent_exit();
         }
     });
 }
@@ -649,11 +707,12 @@ mod tests {
             device_id: "fixture-device".into(),
         });
         let hub = Url::parse("http://127.0.0.1:3993/").unwrap();
-        let (target, allowed) = navigation_target(&remote, Status::Running, &hub);
+        let page = navigation_target(&remote, Status::Running, &hub);
+        let target = page.url();
         assert_eq!(target.as_str(), "https://vitals.example.test/");
-        assert!(!is_bundled_page(&target, "/index.html"));
-        assert!(!is_bundled_page(&target, "/settings.html"));
-        let allowed = Mutex::new(allowed);
+        assert!(!is_bundled_page(target, "/index.html"));
+        assert!(!is_bundled_page(target, "/settings.html"));
+        let allowed = Mutex::new(page.origin().cloned());
         assert!(is_allowed_origin(&allowed, &target.join("today").unwrap()));
         assert!(!is_allowed_origin(&allowed, &hub));
         for other in [
@@ -664,8 +723,81 @@ mod tests {
         ] {
             assert!(!is_allowed_origin(&allowed, &Url::parse(other).unwrap()));
         }
-        let (waiting, allowed) = navigation_target(&remote, Status::Stopped, &hub);
-        assert!(is_bundled_page(&waiting, "/index.html"));
-        assert!(allowed.is_none());
+        let waiting = navigation_target(&remote, Status::Stopped, &hub);
+        assert!(is_bundled_page(waiting.url(), "/index.html"));
+        assert!(waiting.origin().is_none());
+    }
+
+    #[test]
+    fn recreated_window_uses_the_reported_page_and_current_dashboard_origin() {
+        let hub = Url::parse("http://127.0.0.1:3993/").unwrap();
+        let remote = Role::Remote(settings::Remote {
+            url: "https://vitals.example.test:8443/".into(),
+            token: "fixture-token".into(),
+            device_id: "fixture-device".into(),
+        });
+        let remote_url = Url::parse("https://vitals.example.test:8443/").unwrap();
+        let grants = [
+            Arc::new(hub.origin().ascii_serialization()),
+            Arc::new(remote_url.origin().ascii_serialization()),
+        ];
+
+        for (role, status, expected, previous) in [
+            (&Role::Hub, Status::External, &hub, &remote_url),
+            (&remote, Status::Running, &remote_url, &hub),
+            (&remote, Status::Failed, &remote_url, &hub),
+        ] {
+            let page = navigation_target(role, status, &hub);
+            let WebviewUrl::External(initial) = page.initial_url() else {
+                panic!("running dashboard must open directly");
+            };
+            assert_eq!(&initial, expected);
+            let active = Mutex::new(page.origin().cloned());
+            assert!(permits_dashboard_page(
+                MAIN_WINDOW,
+                &initial,
+                &active,
+                &grants
+            ));
+            assert!(!permits_dashboard_page(
+                MAIN_WINDOW,
+                previous,
+                &active,
+                &grants
+            ));
+        }
+    }
+
+    #[test]
+    fn recreated_startup_window_passes_the_reported_mode_and_status() {
+        let hub = Url::parse("http://127.0.0.1:3993/").unwrap();
+        let remote = Role::Remote(settings::Remote {
+            url: "https://vitals.example.test/".into(),
+            token: "fixture-token".into(),
+            device_id: "fixture-device".into(),
+        });
+        for (role, status, mode, status_name) in [
+            (&Role::Hub, Status::Starting, "hub", "starting"),
+            (&remote, Status::Stopped, "remote", "stopped"),
+            (
+                &Role::Unconfigured,
+                Status::Unconfigured,
+                "unconfigured",
+                "unconfigured",
+            ),
+        ] {
+            let page = navigation_target(role, status, &hub);
+            let WebviewUrl::App(initial) = page.initial_url() else {
+                panic!("waiting service status must open the bundled page");
+            };
+            let url = bundled_url("/").join(initial.to_str().unwrap()).unwrap();
+            assert_eq!(&url, page.url());
+            assert!(is_bundled_page(&url, "/index.html"));
+            assert_eq!(
+                url.query(),
+                Some(format!("mode={mode}&status={status_name}").as_str())
+            );
+            assert!(page.origin().is_none());
+        }
     }
 }

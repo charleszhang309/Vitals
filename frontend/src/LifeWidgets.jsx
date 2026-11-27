@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from 'react';
-import { ArrowDown, ArrowLeftRight, ArrowUp, Pin, Plus, X } from 'lucide-react';
+import { ArrowDown, ArrowLeftRight, ArrowUp, Check, Circle, Pin, Plus, X } from 'lucide-react';
 import { postJson, request, sendJson } from './api.js';
 import { Button, IconButton, ProgressBar, Segmented } from './ui.jsx';
 import useResource from './useOverviewResource.js';
@@ -10,15 +10,39 @@ function ReminderSource({ item }) {
 
 export function TasksPreview({ todos, habits, wide }) {
   if (!todos.data || !habits.data) return <p className="widget-muted">{todos.error || habits.error ? '事项暂不可用' : '正在读取事项…'}</p>;
-  const items = [...todos.data.items, ...habits.data.items];
+  const todoItems = todos.data.items.map((item) => ({ ...item, kind: '待办' }));
+  const habitItems = habits.data.items.map((item) => ({ ...item, kind: '习惯' }));
+  const items = [...todoItems, ...habitItems];
   const done = items.filter((item) => item.done).length;
-  return <>
+  const progress = <>
     <p className="widget-value numeric">{done} <small>/ {items.length} 已完成</small></p>
     <ProgressBar label="今日完成进度" value={items.length ? done / items.length * 100 : 0} />
-    <ul className="widget-lines">{items.filter((item) => !item.done).slice(0, wide ? 6 : 2).map((item, index) =>
-      <li className="reminder-preview" key={index}><span className="widget-truncate">{item.title}</span><ReminderSource item={item} /></li>)}</ul>
+  </>;
+  if (!wide) return <>
+    {progress}
+    <ul className="widget-lines">{items.filter((item) => !item.done).slice(0, 2).map((item) =>
+      <li className="reminder-preview" key={`${item.kind}-${item.id}`}><span className="widget-truncate">{item.title}</span>
+        <ReminderSource item={item} /></li>)}</ul>
     {items.length === done && <p className="widget-muted">{items.length ? '今日事项已完成' : '今日暂无事项'}</p>}
   </>;
+
+  const recent = Array.from({ length: Math.max(todoItems.length, habitItems.length) }, (_, index) =>
+    [todoItems[index], habitItems[index]]).flat().filter(Boolean)
+    .sort((left, right) => Number(left.done) - Number(right.done)).slice(0, 4);
+  return <div className="preview-split tasks-preview-split">
+    <div className="preview-primary">{progress}</div>
+    {recent.length ? <ul className="preview-secondary preview-rows tasks-preview-rows" aria-label="今日待办和习惯">
+      {recent.map((item) => {
+        const Mark = item.done ? Check : Circle;
+        return <li key={`${item.kind}-${item.id}`}>
+          <Mark size={12} data-done={item.done || undefined} aria-hidden="true" />
+          <span className="sr-only">{item.done ? '已完成' : '未完成'}</span>
+          <span className="widget-truncate" title={item.title}>{item.title}</span>
+          <small>{item.external_source === 'apple_reminders' ? '提醒事项' : item.kind}</small>
+        </li>;
+      })}
+    </ul> : <p className="preview-secondary widget-muted">今日暂无事项</p>}
+  </div>;
 }
 
 function TaskList({ title, resource, kind }) {
@@ -69,11 +93,20 @@ export function TasksDetails({ todos, habits }) {
   </div>;
 }
 
-export function CountdownPreview({ resource }) {
-  const next = resource.data?.items.find((item) => item.days >= 0);
+export function CountdownPreview({ resource, wide }) {
+  const [next, ...upcoming] = resource.data?.items.filter((item) => item.days >= 0).slice(0, wide ? 4 : 1) ?? [];
   if (!next) return <p className="widget-muted">{resource.error ? '倒数日暂不可用' : resource.data ? '暂无未到期倒数日' : '正在读取倒数日…'}</p>;
-  return <><p className="widget-value numeric">{next.days === 0 ? '就在今天' : <>{next.days}<small> 天后</small></>}</p>
-    <p className="widget-truncate">{next.title}</p><p className="widget-muted numeric">{next.target_date}</p></>;
+  const summary = <><p className="widget-value numeric">{next.days === 0 ? '就在今天' : <>{next.days}<small> 天后</small></>}</p>
+    <p className="widget-truncate" title={next.title}>{next.title}</p>
+    <time className="widget-muted numeric" dateTime={next.target_date}>{next.target_date}</time></>;
+  if (!upcoming.length) return summary;
+  return <div className="preview-split countdown-preview-split">
+    <div className="preview-primary">{summary}</div>
+    <ul className="preview-secondary preview-rows" aria-label="其他未到期倒数日">{upcoming.map((item) => <li key={item.id}>
+      <span className="widget-truncate" title={item.title}>{item.title}</span>
+      <small className="numeric" title={item.target_date}>{item.days ? `${item.days} 天后` : '今天'}</small>
+    </li>)}</ul>
+  </div>;
 }
 
 export function CountdownDetails({ resource }) {
@@ -160,12 +193,20 @@ function RateHistory({ base, target, dark }) {
   </section>;
 }
 
-export function RatePreview({ resource }) {
+export function RatePreview({ resource, wide }) {
   const { data, error } = resource;
-  const first = data?.pins?.[0];
+  const [first, ...others] = data?.pins?.slice(0, wide ? 4 : 1) ?? [];
   if (!first) return <p className="widget-muted">{data ? '暂无固定汇率' : error ? '汇率暂不可用' : '正在读取汇率…'}</p>;
-  return <><p className="widget-muted numeric">1 {first.base} =</p>
+  const summary = <><p className="widget-muted numeric">1 {first.base} =</p>
     <p className="widget-value numeric">{Number.isFinite(first.rate) ? rateNumber.format(first.rate) : '—'}<small> {first.target}</small></p></>;
+  if (!others.length) return summary;
+  return <div className="preview-split rate-preview-split">
+    <div className="preview-primary">{summary}</div>
+    <ul className="preview-secondary preview-rows" aria-label="其他固定汇率">{others.map((item) => <li key={`${item.base}-${item.target}`}>
+      <span className="widget-truncate">{item.base} → {item.target}</span>
+      <strong className="numeric">{Number.isFinite(item.rate) ? rateNumber.format(item.rate) : '—'}</strong>
+    </li>)}</ul>
+  </div>;
 }
 
 export function RateDetails({ resource, dark }) {

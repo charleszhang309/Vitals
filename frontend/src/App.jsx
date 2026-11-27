@@ -1,6 +1,6 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'framer-motion';
-import { Activity, Settings, Sparkles } from 'lucide-react';
+import { Activity, RefreshCw, Settings, Sparkles } from 'lucide-react';
 import { AppearanceDialog, AppearanceFrame, useAppearance } from './appearance.jsx';
 import { ClockDialog, FocusNotice, HeaderClock } from './Clock.jsx';
 import ControlPage from './ControlPage.jsx';
@@ -8,7 +8,7 @@ import { usePowerControls } from './HostControls.jsx';
 import MonitorPage from './MonitorPage.jsx';
 import ScratchpadPage from './ScratchpadPage.jsx';
 import TodayPage from './TodayPage.jsx';
-import { IconButton, Segmented } from './ui.jsx';
+import { Button, IconButton, Segmented } from './ui.jsx';
 import { useTelemetry } from './useTelemetry.js';
 import { useAiSettings } from './useAiSettings.js';
 import { useMedia } from './useMedia.js';
@@ -21,6 +21,24 @@ const AiChat = lazy(() => import('./AiChat.jsx'));
 const views = [{ value: 'today', label: '今日概览' }, { value: 'control', label: '控制' },
   { value: 'scratchpad', label: '中转站' }];
 
+function useHostUpdate() {
+  const host = useOverviewResource('/api/system/version', 300_000).data;
+  const initial = useRef(null);
+  const [available, setAvailable] = useState(false);
+  useEffect(() => {
+    if (!host?.version) return;
+    if (!initial.current) {
+      initial.current = host;
+    } else if (host.version !== initial.current.version ||
+      (host.build_id && initial.current.build_id && host.build_id !== initial.current.build_id)) {
+      setAvailable(true);
+    } else if (!initial.current.build_id && host.build_id) {
+      initial.current = host;
+    }
+  }, [host]);
+  return available;
+}
+
 export default function App() {
   const [view, setView] = useState('today');
   const [playerOpen, setPlayerOpen] = useState(false);
@@ -28,7 +46,9 @@ export default function App() {
   const [monitorOpen, setMonitorOpen] = useState(false);
   const [settings, setSettings] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState(null);
+  const [offlineNotice, setOfflineNotice] = useState('');
   const [agentActive, setAgentActive] = useState(false);
+  const hostUpdated = useHostUpdate();
   const immersiveView = clockOpen ? 'clock' : view === 'control' && playerOpen ? 'player' : null;
   const appearance = useAppearance(immersiveView);
   const { widgets, cardOrder, cardWidths, defaultDevice } = appearance.preferences;
@@ -43,10 +63,11 @@ export default function App() {
     name: aliases[item.device_id] ?? (aliasResource.data ? item.snapshot.name : item.name),
     online: item.online && !agents.error,
   }));
-  const device = devices.find((item) => item.device_id === (selectedDevice ?? defaultDevice));
+  const device = devices.find((item) => item.online && item.device_id === (selectedDevice ?? defaultDevice));
+  const onlineDevices = devices.filter((item) => item.online);
   const primaryDevice = devices.find((item) => item.device_id === defaultDevice);
   const waitingForPrimary = defaultDevice !== HUB_DEVICE_ID && !agents.data;
-  const waitingForSelection = (selectedDevice ?? defaultDevice) !== HUB_DEVICE_ID && !agents.data;
+  const waitingForSelection = (selectedDevice ?? defaultDevice) !== HUB_DEVICE_ID && !agents.data && !agents.error;
   const telemetry = useTelemetry(settings || ((monitorOpen || view === 'control') && !device && !waitingForSelection) ||
     (view === 'today' && !primaryDevice && !waitingForPrimary && widgets.host !== false));
   const platform = info.data?.platform ?? telemetry.sample?.platform;
@@ -73,6 +94,17 @@ export default function App() {
     if (selectedDevice && !exists(selectedDevice)) setSelectedDevice(HUB_DEVICE_ID);
   }, [agentData, agentsError, defaultDevice, selectedDevice, updatePreference]);
 
+  useEffect(() => {
+    if (view !== 'control' || !agentData || agentsError) return;
+    const id = selectedDevice ?? defaultDevice;
+    const offline = agentData.devices.find((item) => item.device_id === id && !item.online);
+    if (offline) {
+      setOfflineNotice(`${aliases[id] ?? offline.name} 已离线，已切回本机。`);
+      setSelectedDevice(HUB_DEVICE_ID);
+      setPlayerOpen(false);
+    }
+  }, [view, agentData, agentsError, selectedDevice, defaultDevice, aliases]);
+
   async function renameDevice(id, alias) {
     aliasResource.replace(await sendJson('PATCH', '/api/agents/aliases', { device_id: id, alias }));
   }
@@ -88,6 +120,7 @@ export default function App() {
   function chooseDevice(next) {
     setSelectedDevice(next);
     setPlayerOpen(false);
+    setOfflineNotice('');
   }
   function navigate(next, selection = null) {
     if (next !== view) chooseDevice(selection);
@@ -115,6 +148,9 @@ export default function App() {
           </div>
         </header>
         <main className="main-content" id="main-content">
+          {hostUpdated && <div className="host-update-notice" role="status">
+            <Button onClick={() => window.location.reload()}><RefreshCw size={16} aria-hidden="true" />Vitals 已更新，点击刷新</Button>
+          </div>}
           <AnimatePresence initial={false} mode="wait">
             <motion.section key={view} role="tabpanel" aria-labelledby={`tab-${view}`} id={`panel-${view}`}
               initial={{ opacity: 0, y: reduced ? 0 : 7 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 0 }} transition={{ duration: reduced ? 0 : 0.16 }}>
@@ -131,7 +167,8 @@ export default function App() {
                 ? <p className="feedback" role="status">{agents.error || '正在读取设备…'}</p>
                 : <ControlPage media={media} open={playerOpen} onOpenChange={setPlayerOpen} hub={hub}
                 sample={telemetry.sample} power={power} onMonitor={() => setMonitorOpen(true)}
-                devices={devices} device={device} onDevice={chooseDevice} onAgentCommand={agents.retry} onAgentActivity={setAgentActive} />)}
+                devices={onlineDevices} device={device} offlineNotice={offlineNotice} onDevice={chooseDevice}
+                onAgentCommand={agents.retry} onAgentActivity={setAgentActive} />)}
               {view === 'scratchpad' && <ScratchpadPage aiEnabled={Boolean(ai.settings?.enabled && ai.settings.configured)} />}
             </motion.section>
           </AnimatePresence>
@@ -148,7 +185,7 @@ export default function App() {
           setSettings(false);
         }} />}
         {monitorOpen && <MonitorPage telemetry={telemetry} dark={dark} power={power} hub={hub} onClose={() => setMonitorOpen(false)}
-          devices={devices} device={device} onDevice={chooseDevice} />}
+          devices={onlineDevices} device={device} onDevice={chooseDevice} />}
         {clockOpen && <ClockDialog style={appearance.preferences.clockStyle} focus={focusTimer} onClose={() => setClockOpen(false)} />}
         <FocusNotice notice={focusTimer.notice} clockOpen={clockOpen} />
       </AppearanceFrame>

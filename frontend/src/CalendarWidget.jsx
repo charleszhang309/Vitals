@@ -88,23 +88,24 @@ export function CalendarPreview({ resource, wide }) {
   )) ?? [];
   const next = remaining.find((item) => item.all_day ? item.start >= today : Date.parse(item.start) > now) ?? remaining[0];
   const unavailable = error || (data?.sources.length > 0 && !data.sources.some((source) => ['live', 'stale'].includes(source.status)));
-  const upcoming = next ? remaining.slice(remaining.indexOf(next), remaining.indexOf(next) + (wide ? 3 : 1)) : [];
-  return <div className="calendar-preview">
+  const upcoming = next ? remaining.slice(remaining.indexOf(next), remaining.indexOf(next) + (wide ? 4 : 1)) : [];
+  return <div className={wide ? 'preview-split calendar-preview-split' : 'calendar-preview'}>
     <time className="calendar-preview-date" dateTime={today} aria-label={namedDate.format(new Date(today))}>
       <span>{weekday.format(new Date(today))}</span>
       <strong className="numeric">{Number(today.slice(8))}</strong>
       <small className="numeric">{Number(today.slice(5, 7))}月</small>
     </time>
-    {upcoming.length ? <ul className="calendar-preview-events">{upcoming.map((item, index) => {
+    {upcoming.length ? <ul className={wide ? 'preview-secondary calendar-preview-events' : 'calendar-preview-events'}
+      aria-label="近期日程">{upcoming.map((item) => {
       const eventDay = calendarDate(item.start, zone);
       const eventStart = item.all_day ? '全天' : localDateTime(item.start, zone).slice(11);
       const starts = eventDay < today || (!item.all_day && Date.parse(item.start) <= now)
         ? '进行中' : `${relativeDay(eventDay, today)} ${eventStart}`;
-      return <li className="calendar-preview-event" key={index}>
-        <p className="widget-muted numeric">{starts}</p>
+      return <li className="calendar-preview-event" key={`${item.source_id}-${item.id}-${item.start}`}>
+        <p className="widget-muted numeric widget-truncate" title={starts}>{starts}</p>
         <p className="calendar-preview-title"><Dot color={item.color} /><strong className="widget-truncate" title={item.title}>{item.title}</strong></p>
       </li>;
-    })}</ul> : <div className="calendar-preview-event"><p className="widget-muted">
+    })}</ul> : <div className={wide ? 'preview-secondary' : 'calendar-preview-event'}><p className="widget-muted">
       {unavailable ? '日历暂不可用' : data ? '近期暂无日程' : '正在读取日历…'}</p></div>}
   </div>;
 }
