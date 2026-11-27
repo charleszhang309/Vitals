@@ -1,0 +1,23 @@
+{
+  "id": "davinci-resolve",
+  "name": {"en": "DaVinci Resolve", "zh-CN": "DaVinci Resolve 剪辑"},
+  "version": "1.0.0",
+  "actions": [
+    {"id": "play-pause", "name": {"en": "Play / Pause", "zh-CN": "播放 / 暂停"}},
+    {"id": "shuttle-reverse", "name": {"en": "Shuttle Reverse (J)", "zh-CN": "倒放 / 加速倒放（J）"}},
+    {"id": "shuttle-stop", "name": {"en": "Shuttle Stop (K)", "zh-CN": "停止播放（K）"}},
+    {"id": "shuttle-forward", "name": {"en": "Shuttle Forward (L)", "zh-CN": "快进 / 加速播放（L）"}},
+    {"id": "razor", "name": {"en": "Blade Edit Mode", "zh-CN": "剪切刀模式"}},
+    {"id": "split-clip", "name": {"en": "Split Clip at Playhead", "zh-CN": "在播放头分割片段"}},
+    {"id": "ripple-delete", "name": {"en": "Ripple Delete", "zh-CN": "波纹删除"}},
+    {"id": "add-marker", "name": {"en": "Add Marker", "zh-CN": "添加标记"}},
+    {"id": "undo", "name": {"en": "Undo", "zh-CN": "撤销"}},
+    {"id": "redo", "name": {"en": "Redo", "zh-CN": "重做"}},
+    {"id": "page-edit", "name": {"en": "Open Edit Page", "zh-CN": "切换到剪辑页面"}},
+    {"id": "page-color", "name": {"en": "Open Color Page", "zh-CN": "切换到调色页面"}},
+    {"id": "page-fairlight", "name": {"en": "Open Fairlight Page", "zh-CN": "切换到 Fairlight 音频页面"}},
+    {"id": "page-deliver", "name": {"en": "Open Deliver Page", "zh-CN": "切换到交付页面"}}
+  ],
+  "feedbacks": [],
+  "variables": []
+}

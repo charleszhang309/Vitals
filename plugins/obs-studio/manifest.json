@@ -1,0 +1,59 @@
+{
+  "id": "obs-studio",
+  "name": {"en": "OBS Studio", "zh-CN": "OBS Studio"},
+  "version": "1.0.0",
+  "actions": [
+    {"id": "start-recording", "name": {"en": "Start Recording", "zh-CN": "开始录屏"}},
+    {"id": "stop-recording", "name": {"en": "Stop Recording", "zh-CN": "停止录屏"}},
+    {"id": "start-streaming", "name": {"en": "Start Streaming", "zh-CN": "开始推流"}},
+    {"id": "stop-streaming", "name": {"en": "Stop Streaming", "zh-CN": "停止推流"}},
+    {
+      "id": "switch-scene",
+      "name": {"en": "Switch Program Scene", "zh-CN": "切换节目场景"},
+      "parameters": [
+        {"id": "scene_name", "name": {"en": "Scene Name", "zh-CN": "场景名称"}, "type": "string", "required": true}
+      ]
+    },
+    {
+      "id": "mute-audio",
+      "name": {"en": "Mute Audio Source", "zh-CN": "静音音频源"},
+      "parameters": [
+        {"id": "input_name", "name": {"en": "Audio Source Name", "zh-CN": "音频源名称"}, "type": "string", "required": true}
+      ]
+    },
+    {
+      "id": "unmute-audio",
+      "name": {"en": "Unmute Audio Source", "zh-CN": "取消音频源静音"},
+      "parameters": [
+        {"id": "input_name", "name": {"en": "Audio Source Name", "zh-CN": "音频源名称"}, "type": "string", "required": true}
+      ]
+    },
+    {
+      "id": "show-source",
+      "name": {"en": "Show Scene Source", "zh-CN": "显示画面源"},
+      "parameters": [
+        {"id": "source_name", "name": {"en": "Scene Source Name", "zh-CN": "画面源名称"}, "type": "string", "required": true},
+        {"id": "scene_name", "name": {"en": "Scene Name (optional)", "zh-CN": "场景名称（可选）"}, "type": "string"}
+      ]
+    },
+    {
+      "id": "hide-source",
+      "name": {"en": "Hide Scene Source", "zh-CN": "隐藏画面源"},
+      "parameters": [
+        {"id": "source_name", "name": {"en": "Scene Source Name", "zh-CN": "画面源名称"}, "type": "string", "required": true},
+        {"id": "scene_name", "name": {"en": "Scene Name (optional)", "zh-CN": "场景名称（可选）"}, "type": "string"}
+      ]
+    }
+  ],
+  "feedbacks": [
+    {"id": "recording", "name": {"en": "Recording Status", "zh-CN": "录屏状态"}},
+    {"id": "streaming", "name": {"en": "Streaming Status", "zh-CN": "推流状态"}},
+    {"id": "current-scene", "name": {"en": "Current Program Scene", "zh-CN": "当前节目场景"}},
+    {"id": "connection", "name": {"en": "OBS Connection", "zh-CN": "OBS 连接状态"}}
+  ],
+  "variables": [
+    {"id": "recording", "name": {"en": "Recording Active", "zh-CN": "正在录屏"}, "type": "boolean"},
+    {"id": "streaming", "name": {"en": "Streaming Active", "zh-CN": "正在推流"}, "type": "boolean"},
+    {"id": "current-scene", "name": {"en": "Current Program Scene", "zh-CN": "当前节目场景"}, "type": "string"}
+  ]
+}
