@@ -244,44 +244,45 @@
 
 .deck-slot {
   position: relative;
-  aspect-ratio: 1.08 / 1;
+  aspect-ratio: 1 / 1;
   min-width: 0;
   min-height: 0;
 }
 
 .deck-layout[data-editing="true"] .deck-slot {
-  aspect-ratio: 1.15 / 1;
+  aspect-ratio: 1 / 1;
 }
 
-/* Hardware Squircle Keycap */
+/* OLED Stream Deck Keycap */
 .deck-key {
   position: relative;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  gap: clamp(6px, 1.1vh, 10px);
+  gap: clamp(6px, 1vh, 10px);
   width: 100%;
   height: 100%;
-  padding: clamp(10px, 1.3vw, 16px);
+  padding: clamp(10px, 1.3vw, 14px);
   text-align: center;
-  border-radius: clamp(16px, 2vw, 22px);
-  color: var(--text);
-  border: 1px solid color-mix(in srgb, var(--deck-accent, #778396) 24%, color-mix(in srgb, var(--text) 10%, transparent));
+  border-radius: clamp(18px, 2.2vw, 24px);
+  color: #f8fafc;
+  border: 1px solid color-mix(in srgb, var(--deck-accent, #778396) 36%, rgb(255 255 255 / 0.14));
   background:
-    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--deck-accent, #778396) 22%, transparent), transparent 70%),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, #fff 4%), color-mix(in srgb, var(--surface) 92%, #000 16%));
+    radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--deck-accent, #778396) 44%, transparent), transparent 72%),
+    linear-gradient(180deg, color-mix(in srgb, var(--deck-accent, #778396) 26%, #181d26), color-mix(in srgb, var(--deck-accent, #778396) 10%, #0d1017));
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.14),
-    inset 0 -1px 0 rgb(0 0 0 / 0.25),
-    0 5px 0 color-mix(in srgb, var(--deck-accent, #1c2230) 24%, #090c12),
-    0 10px 22px rgb(0 0 0 / 0.32);
-  transition: transform 0.12s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.15s ease, border-color 0.18s ease, background 0.18s ease;
+    inset 0 1px 0 rgb(255 255 255 / 0.2),
+    inset 0 -2px 6px rgb(0 0 0 / 0.4),
+    0 6px 0 #07090e,
+    0 12px 24px rgb(0 0 0 / 0.45);
+  transition: transform 0.12s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.15s ease, border-color 0.18s ease;
 }
 
 .deck-key[data-empty="true"] {
-  background: color-mix(in srgb, var(--surface) 28%, transparent);
-  box-shadow: inset 0 1px 4px rgb(0 0 0 / 0.16);
+  background: color-mix(in srgb, var(--surface) 24%, transparent);
+  box-shadow: inset 0 1px 4px rgb(0 0 0 / 0.18);
   border: 1px dashed color-mix(in srgb, var(--text) 16%, transparent);
   color: var(--muted);
 }
@@ -291,19 +292,43 @@ div.deck-key[data-empty="true"] {
 }
 
 .deck-key[data-active="true"] {
-  border-color: color-mix(in srgb, var(--deck-accent, var(--green)) 72%, #fff 10%);
+  border-color: color-mix(in srgb, var(--deck-accent, var(--green)) 82%, #fff 16%);
   background:
-    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--deck-accent, var(--green)) 44%, transparent), transparent 78%),
-    linear-gradient(180deg, color-mix(in srgb, var(--deck-accent, var(--green)) 28%, var(--surface)), color-mix(in srgb, var(--deck-accent, var(--green)) 16%, var(--surface)));
+    radial-gradient(circle at 50% 15%, color-mix(in srgb, var(--deck-accent, var(--green)) 62%, transparent), transparent 76%),
+    linear-gradient(180deg, color-mix(in srgb, var(--deck-accent, var(--green)) 45%, #181d26), color-mix(in srgb, var(--deck-accent, var(--green)) 24%, #0d1017));
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.24),
-    0 5px 0 color-mix(in srgb, var(--deck-accent, var(--green)) 46%, #090c12),
-    0 0 24px color-mix(in srgb, var(--deck-accent, var(--green)) 24%, transparent);
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    0 6px 0 color-mix(in srgb, var(--deck-accent, var(--green)) 34%, #07090e),
+    0 0 28px color-mix(in srgb, var(--deck-accent, var(--green)) 34%, transparent);
+}
+
+.deck-key[data-has-cover="true"] {
+  justify-content: flex-end;
+  padding-bottom: clamp(8px, 1.1vw, 12px);
+}
+
+.deck-key[data-has-cover="true"]::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 55%;
+  background: linear-gradient(180deg, transparent, rgb(0 0 0 / 0.78));
+  z-index: 1;
+  pointer-events: none;
+}
+
+.deck-key-cover {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
 }
 
 .deck-key[data-selected="true"] {
   border-color: var(--link);
-  box-shadow: 0 0 0 2px var(--link), 0 8px 20px rgb(0 0 0 / 0.32);
+  box-shadow: 0 0 0 2px var(--link), 0 8px 20px rgb(0 0 0 / 0.36);
 }
 
 button.deck-key {
@@ -314,20 +339,20 @@ button.deck-key {
 @media (hover: hover) {
   button.deck-key:hover:not(:disabled):not([data-empty="true"]) {
     transform: translateY(-1px);
-    border-color: color-mix(in srgb, var(--deck-accent, var(--link)) 55%, #fff 12%);
+    border-color: color-mix(in srgb, var(--deck-accent, var(--link)) 66%, #fff 20%);
     box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.2),
-      0 6px 0 color-mix(in srgb, var(--deck-accent, #1c2230) 30%, #090c12),
-      0 14px 28px rgb(0 0 0 / 0.38);
+      inset 0 1px 0 rgb(255 255 255 / 0.25),
+      0 7px 0 #07090e,
+      0 15px 28px rgb(0 0 0 / 0.5);
   }
 }
 
 button.deck-key:active:not(:disabled):not([data-empty="true"]) {
-  transform: translateY(3px) scale(0.985);
+  transform: translateY(4px) scale(0.985);
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.1),
-    0 2px 0 color-mix(in srgb, var(--deck-accent, #1c2230) 24%, #090c12),
-    0 4px 10px rgb(0 0 0 / 0.28);
+    inset 0 1px 0 rgb(255 255 255 / 0.12),
+    0 2px 0 #07090e,
+    0 4px 10px rgb(0 0 0 / 0.35);
 }
 
 .deck-key:focus-visible, .deck-grip:focus-visible {
@@ -335,73 +360,73 @@ button.deck-key:active:not(:disabled):not([data-empty="true"]) {
   outline-offset: 3px;
 }
 
-/* Glowing Icon Badge & LED */
-.deck-key-badge {
+/* OLED Keycap Icon & Text */
+.deck-key-glyph {
+  position: relative;
+  z-index: 1;
   display: grid;
   place-items: center;
-  width: clamp(42px, 4.4vw, 52px);
-  height: clamp(42px, 4.4vw, 52px);
-  border-radius: 15px;
-  color: color-mix(in srgb, var(--deck-accent, var(--link)) 82%, #fff 28%);
-  background: color-mix(in srgb, var(--deck-accent, var(--link)) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--deck-accent, var(--link)) 28%, transparent);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14);
-  flex: none;
+  color: #fff;
+  filter: drop-shadow(0 4px 12px color-mix(in srgb, var(--deck-accent, #000) 55%, rgb(0 0 0 / 0.5)));
 }
 
-.deck-key-badge-empty {
+.deck-key-empty-plus {
+  display: grid;
+  place-items: center;
   color: var(--muted);
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
 }
 
-.deck-key-metric-top .deck-key-badge {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
+.deck-key-metric-top {
+  position: relative;
+  z-index: 2;
 }
 
-.deck-key-metric-top .deck-key-badge svg {
-  width: 16px;
-  height: 16px;
+.deck-key-metric-top .deck-key-glyph svg {
+  width: 20px;
+  height: 20px;
 }
 
 .deck-key-emoji {
-  font-size: clamp(20px, 2.2vw, 26px);
+  font-size: clamp(28px, 3.2vw, 38px);
   line-height: 1;
 }
 
 .deck-key-led {
   position: absolute;
-  top: 11px;
-  right: 11px;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--text) 18%, transparent);
+  background: rgb(255 255 255 / 0.24);
   transition: background-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .deck-key-led[data-active="true"] {
-  background: color-mix(in srgb, var(--deck-accent, var(--green)) 85%, #fff 20%);
-  box-shadow: 0 0 10px var(--deck-accent, var(--green));
+  background: #fff;
+  box-shadow: 0 0 10px #fff, 0 0 16px var(--deck-accent, var(--green));
 }
 
 .deck-key-value {
+  position: relative;
+  z-index: 2;
   font-size: clamp(22px, 2.8vw, 34px);
   font-weight: 780;
   letter-spacing: -0.04em;
   line-height: 1.05;
-  color: var(--text);
+  color: #fff;
 }
 
 .deck-key-name {
+  position: relative;
+  z-index: 2;
   min-width: 0;
   max-width: 100%;
   font-size: clamp(11px, 1.05vw, 13.5px);
-  font-weight: 650;
-  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  font-weight: 670;
+  color: rgb(255 255 255 / 0.88);
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.55);
   line-height: 1.25;
   overflow-wrap: anywhere;
   display: -webkit-box;
@@ -585,6 +610,63 @@ button.deck-key:active:not(:disabled):not([data-empty="true"]) {
 
 .deck-screenshot {
   display: contents;
+}
+
+/* Visual Icon Picker */
+.deck-icon-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.deck-icon-bar .button {
+  min-height: 34px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.deck-icon-bar .icon-button {
+  width: 34px;
+  min-height: 34px;
+}
+
+.deck-icon-picker {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  margin-top: 2px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--background) 65%, transparent);
+  border: 1px solid var(--border);
+}
+
+.deck-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));
+  gap: 6px;
+  max-height: 176px;
+  overflow-y: auto;
+}
+
+.deck-icon-choice {
+  display: grid;
+  place-items: center;
+  height: 34px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--surface) 75%, transparent);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.deck-icon-choice:hover {
+  background: color-mix(in srgb, var(--link) 18%, var(--surface));
+  border-color: color-mix(in srgb, var(--link) 45%, transparent);
+}
+
+.deck-icon-choice[aria-pressed="true"] {
+  background: var(--link);
+  color: #fff;
 }
 
 /* Responsive */

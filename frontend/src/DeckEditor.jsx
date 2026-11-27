@@ -1,7 +1,9 @@
-import { useState } from 'react';
-import { ArrowDown, ArrowUp, Plus, Trash2, X } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { ArrowDown, ArrowUp, ImagePlus, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import { Button, IconButton } from './ui.jsx';
+import { request } from './api.js';
 import { getLocale, t } from './i18n/messages.js';
+import { CUSTOM_ICON_RE, DECK_ICON_KEYS, DECK_ICONS } from './deckIcons.js';
 
 export const palettes = ['slate', 'blue', 'teal', 'green', 'amber', 'pink', 'purple', 'red'];
 export const grids = { '3x2': [3, 2], '4x3': [4, 3], '5x3': [5, 3], '6x3': [6, 3] };
@@ -118,7 +120,29 @@ function FeedbackFields({ tile, catalog, set, audio }) {
 }
 
 export function TileEditor({ tile, set, onClose, onRemove, scenes, scene, ensureFolder, catalog, audio }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const iconFileRef = useRef(null);
   const setStep = (index, next) => set({ ...tile, steps: tile.steps.map((item, i) => i === index ? next : item) });
+
+  async function uploadIcon(file) {
+    if (!file) return;
+    setUploading(true);
+    setUploadError('');
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const result = await request('/api/deck/icons', { method: 'POST', body: form });
+      set({ ...tile, icon: result.url });
+      setPickerOpen(false);
+    } catch (error) {
+      setUploadError(error.message);
+    } finally {
+      setUploading(false);
+      if (iconFileRef.current) iconFileRef.current.value = '';
+    }
+  }
   function changeKind(kind) {
     const target = scenes.find((item) => item.id !== scene.id && item.folder)
       ?? scenes.find((item) => item.id !== scene.id);
@@ -140,11 +164,32 @@ export function TileEditor({ tile, set, onClose, onRemove, scenes, scene, ensure
     <label className="deck-field"><span>{t('按键类型')}</span><select value={tile.kind} onChange={(event) => changeKind(event.target.value)}>
       {Object.entries(typeLabels).map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}
     </select></label>
-    <div className="deck-field-row">
-      <label className="deck-field"><span>{t('标题')}</span><input value={tile.title} maxLength={40} placeholder={t('自动标题')}
-        onChange={(event) => set({ ...tile, title: event.target.value })} /></label>
-      <label className="deck-field"><span>{t('图标 / Emoji')}</span><input value={tile.icon} maxLength={16}
-        onChange={(event) => set({ ...tile, icon: event.target.value })} /></label>
+    <label className="deck-field"><span>{t('标题')}</span><input value={tile.title} maxLength={40} placeholder={t('自动标题')}
+      onChange={(event) => set({ ...tile, title: event.target.value })} /></label>
+    <div className="deck-field">
+      <span>{t('图标')}</span>
+      <div className="deck-icon-bar">
+        <Button onClick={() => setPickerOpen((open) => !open)}><Sparkles size={15} />{pickerOpen ? t('收起图标库') : t('选择图标')}</Button>
+        <Button disabled={uploading} onClick={() => iconFileRef.current?.click()}><ImagePlus size={15} />{uploading ? t('上传中…') : t('上传图片')}</Button>
+        {tile.icon && <IconButton label={t('清除图标')} onClick={() => set({ ...tile, icon: '' })}><X size={15} /></IconButton>}
+        <input ref={iconFileRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden
+          onChange={(event) => uploadIcon(event.target.files[0])} />
+      </div>
+      {uploadError && <p className="feedback error" role="alert">{uploadError}</p>}
+      {pickerOpen && <div className="deck-icon-picker">
+        <div className="deck-icon-grid">
+          {DECK_ICON_KEYS.map((key) => {
+            const Icon = DECK_ICONS[key];
+            const value = `lucide:${key}`;
+            return <button type="button" key={key} className="deck-icon-choice" aria-pressed={tile.icon === value}
+              title={key} onClick={() => { set({ ...tile, icon: value }); setPickerOpen(false); }}>
+              <Icon size={18} />
+            </button>;
+          })}
+        </div>
+        <input value={CUSTOM_ICON_RE.test(tile.icon) || tile.icon?.startsWith('lucide:') ? '' : tile.icon} maxLength={16}
+          placeholder={t('或输入 Emoji')} onChange={(event) => set({ ...tile, icon: event.target.value })} />
+      </div>}
     </div>
     <div className="deck-palette" role="group" aria-label={t('配色')}>
       {palettes.map((color, index) => <button type="button" key={color} data-deck-color={color}

@@ -1,11 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import {
-  ArrowLeft, Camera, Check, ChevronLeft, ChevronRight, Cpu, Download, FolderOpen,
-  Globe, Grip, Keyboard, Layers, Lock, Maximize, MonitorOff, Pause, Pencil, Play, Plug,
-  Plus, SkipBack, SkipForward, Sliders, Sparkles, Thermometer, Timer, Upload,
-  Volume1, Volume2, VolumeX, X, Zap,
+  ArrowLeft, Check, ChevronLeft, ChevronRight, Download, FolderOpen,
+  Grip, Maximize, Pencil, Plug, Plus, Upload, X,
 } from 'lucide-react';
 import { AnimatePresence } from 'framer-motion';
+import { CUSTOM_ICON_RE, DECK_ICONS } from './deckIcons.js';
 import { Button, IconButton, Modal } from './ui.jsx';
 import { httpUrl, request, sendJson } from './api.js';
 import useResource from './useOverviewResource.js';
@@ -61,54 +60,48 @@ const defaultIconMap = {
   '✦': 'ai', '✨': 'ai', '▦': 'folder', '📁': 'folder',
 };
 
-const vectorIcons = {
-  camera: Camera, cpu: Cpu, 'folder-open': FolderOpen, globe: Globe, keyboard: Keyboard,
-  layers: Layers, lock: Lock, 'monitor-off': MonitorOff, pause: Pause, play: Play, plug: Plug,
-  'skip-back': SkipBack, 'skip-forward': SkipForward, sliders: Sliders, sparkles: Sparkles,
-  thermometer: Thermometer, timer: Timer, 'volume-1': Volume1, 'volume-2': Volume2, 'volume-x': VolumeX, zap: Zap,
-};
-
 function KeyIcon({ tile, state }) {
-  if (!tile) return <span className="deck-key-badge deck-key-badge-empty"><Plus size={22} /></span>;
-  if (/^\/api\/deck\/icons\/[a-f0-9]{64}\.(?:png|jpg|webp|svg)$/.test(tile.icon)) {
-    return <span className="deck-key-badge"><img src={httpUrl(tile.icon).href} width={28} height={28}
-      style={{ objectFit: 'contain' }} alt="" decoding="async" draggable={false} /></span>;
+  if (!tile) return <span className="deck-key-empty-plus"><Plus size={26} strokeWidth={1.8} /></span>;
+  if (CUSTOM_ICON_RE.test(tile.icon)) {
+    return <img className="deck-key-cover" src={httpUrl(tile.icon).href} alt="" decoding="async" draggable={false} />;
   }
   if (tile.icon?.startsWith('lucide:')) {
     const name = tile.icon.slice(7);
-    const Icon = Object.hasOwn(vectorIcons, name) ? vectorIcons[name] : Zap;
-    return <span className="deck-key-badge" aria-hidden="true"><Icon size={24} strokeWidth={2.1} /></span>;
+    const Icon = Object.hasOwn(DECK_ICONS, name) ? DECK_ICONS[name] : DECK_ICONS.zap;
+    return <span className="deck-key-glyph" aria-hidden="true"><Icon size={36} strokeWidth={1.9} /></span>;
   }
   const action = tile.steps?.[0]?.action;
   const actionId = action?.id;
   const mapped = tile.icon ? defaultIconMap[tile.icon.trim()] : null;
 
   if (tile.icon && !mapped) {
-    return <span className="deck-key-badge"><span className="deck-key-emoji" aria-hidden="true">{tile.icon}</span></span>;
+    return <span className="deck-key-glyph deck-key-emoji" aria-hidden="true">{tile.icon}</span>;
   }
 
-  let Icon = Zap;
-  if (tile.kind === 'folder' || mapped === 'folder') Icon = FolderOpen;
-  else if (tile.live === 'cpu' || mapped === 'cpu') Icon = Thermometer;
-  else if (tile.live === 'gpu') Icon = Cpu;
-  else if (tile.live === 'focus' || mapped === 'focus') Icon = Timer;
-  else if (tile.live === 'ai' || mapped === 'ai') Icon = Sparkles;
-  else if (actionId === 'mute' || mapped === 'mute') Icon = state.active ? VolumeX : Volume2;
-  else if (actionId === 'volume' || mapped === 'volume') Icon = action?.params?.step < 0 ? Volume1 : Volume2;
+  let key = 'zap';
+  if (tile.kind === 'folder' || mapped === 'folder') key = 'folder-open';
+  else if (tile.live === 'cpu' || mapped === 'cpu') key = 'thermometer';
+  else if (tile.live === 'gpu') key = 'cpu';
+  else if (tile.live === 'focus' || mapped === 'focus') key = 'timer';
+  else if (tile.live === 'ai' || mapped === 'ai') key = 'sparkles';
+  else if (actionId === 'mute' || mapped === 'mute') key = state.active ? 'volume-x' : 'volume-2';
+  else if (actionId === 'volume' || mapped === 'volume') key = action?.params?.step < 0 ? 'volume-1' : 'volume-2';
   else if (actionId === 'media') {
-    Icon = action?.params?.action === 'next' ? SkipForward
-      : action?.params?.action === 'previous' ? SkipBack
-      : state.active ? Pause : Play;
+    key = action?.params?.action === 'next' ? 'skip-forward'
+      : action?.params?.action === 'previous' ? 'skip-back'
+      : state.active ? 'pause' : 'play';
   }
-  else if (actionId === 'screenshot' || mapped === 'screenshot') Icon = Camera;
-  else if (actionId === 'focus') Icon = Timer;
-  else if (actionId === 'desktop') Icon = action?.params?.action === 'lock' ? Lock : MonitorOff;
-  else if (actionId === 'hotkey' || actionId === 'preset' || actionId === 'text') Icon = Keyboard;
-  else if (actionId === 'webhook') Icon = Globe;
-  else if (actionId === 'power' || actionId === 'audio_device') Icon = Sliders;
-  else if (tile.steps?.length > 1) Icon = Layers;
+  else if (actionId === 'screenshot' || mapped === 'screenshot') key = 'camera';
+  else if (actionId === 'focus') key = 'timer';
+  else if (actionId === 'desktop') key = action?.params?.action === 'lock' ? 'lock' : 'monitor-off';
+  else if (actionId === 'hotkey' || actionId === 'preset' || actionId === 'text') key = 'keyboard';
+  else if (actionId === 'webhook') key = 'globe';
+  else if (actionId === 'power' || actionId === 'audio_device') key = 'sliders';
+  else if (actionId === 'plugin') key = 'plug';
+  else if (tile.steps?.length > 1) key = 'layers';
 
-  return <span className="deck-key-badge" aria-hidden="true"><Icon size={24} strokeWidth={2.1} /></span>;
+  const Icon = DECK_ICONS[key] ?? DECK_ICONS.zap;
+  return <span className="deck-key-glyph" aria-hidden="true"><Icon size={36} strokeWidth={1.9} /></span>;
 }
 
 function tileState(tile, { sample, audio, media, focus, ai, feedback }) {
@@ -531,12 +524,13 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
                       {(tile || editing) && <span className="deck-key-name">{label}</span>}
                     </>}
                   </>;
+                  const hasCover = CUSTOM_ICON_RE.test(tile?.icon || '') || undefined;
                   return <div key={index} data-deck-slot={index} className="deck-slot">
                     {isButton ? <button type="button" className={classes} title={label}
                       data-deck-color={tile?.color || 'slate'} data-kind={tile?.kind} data-active={Boolean(state.active)} data-selected={editing && entry === index}
-                      data-empty={!tile} disabled={busy && !editing} aria-pressed={tile?.kind === 'toggle' ? Boolean(state.active) : undefined}
+                      data-empty={!tile} data-has-cover={hasCover} disabled={busy && !editing} aria-pressed={tile?.kind === 'toggle' ? Boolean(state.active) : undefined}
                       onClick={() => pressTile(index, tile)}>{content}</button>
-                      : <div className={classes} data-empty={!tile} data-kind={tile?.kind} data-deck-color={tile?.color || 'slate'} data-active={Boolean(state.active)}>{content}</div>}
+                      : <div className={classes} data-empty={!tile} data-has-cover={hasCover} data-kind={tile?.kind} data-deck-color={tile?.color || 'slate'} data-active={Boolean(state.active)}>{content}</div>}
                     {editing && tile && <button className="deck-grip" type="button" aria-label={t('移动按键')} aria-pressed={moveFrom === index}
                       onClick={() => {
                         if (!skipDragClick.current) setMoveFrom(moveFrom === index ? null : index);
