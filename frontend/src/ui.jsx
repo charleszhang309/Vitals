@@ -1,8 +1,7 @@
-import { useId, useLayoutEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { motion, usePresence, useReducedMotion } from 'framer-motion';
 import { ChevronRight, X } from 'lucide-react';
 
-const segmentSpring = { type: 'spring', stiffness: 420, damping: 34, mass: 0.75 };
 const easeOut = [0.22, 1, 0.36, 1];
 const modalDuration = 0.18;
 const modalStack = [];
@@ -21,9 +20,43 @@ export function IconButton({ label, children, href, className = '', disabled, ..
 }
 
 export function Segmented({ id, label, options, value, onChange, tabs = false, disabled = false }) {
-  const selectionId = useId();
+  const groupRef = useRef(null);
+  const highlightRef = useRef(null);
+  const hasMeasuredRef = useRef(false);
+  const reduced = useReducedMotion();
   const tabStop = tabs && (options.find((option) => !option.disabled && option.value === value)
     ?? options.find((option) => !option.disabled));
+
+  useLayoutEffect(() => {
+    const group = groupRef.current;
+    const highlight = highlightRef.current;
+    if (!group || !highlight) return;
+
+    function sync(animate) {
+      const active = group.querySelector('[aria-selected="true"], [aria-pressed="true"]');
+      if (!active) {
+        highlight.style.opacity = '0';
+        return;
+      }
+      if (animate && !reduced) {
+        highlight.dataset.animated = 'true';
+      } else {
+        delete highlight.dataset.animated;
+      }
+      highlight.style.opacity = '1';
+      highlight.style.width = `${active.offsetWidth}px`;
+      highlight.style.height = `${active.offsetHeight}px`;
+      highlight.style.transform = `translate3d(${active.offsetLeft}px, ${active.offsetTop}px, 0)`;
+    }
+
+    sync(hasMeasuredRef.current);
+    hasMeasuredRef.current = true;
+
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => sync(false));
+    observer.observe(group);
+    return () => observer.disconnect();
+  }, [value, options, reduced]);
 
   function moveFocus(event) {
     const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
@@ -40,7 +73,8 @@ export function Segmented({ id, label, options, value, onChange, tabs = false, d
   }
 
   return (
-    <div className="segments" role={tabs ? 'tablist' : 'group'} aria-label={label} onKeyDown={moveFocus}>
+    <div ref={groupRef} className="segments" role={tabs ? 'tablist' : 'group'} aria-label={label} onKeyDown={moveFocus}>
+      <span ref={highlightRef} className="segment-highlight" aria-hidden="true" />
       {options.map((option) => {
         const selected = option.value === value;
         const state = tabs
@@ -49,7 +83,6 @@ export function Segmented({ id, label, options, value, onChange, tabs = false, d
         return (
           <button key={option.value} type="button" className="segment" disabled={disabled || option.disabled}
             onClick={() => { if (!selected) onChange(option.value); }} {...state}>
-            {selected && <motion.span className="segment-highlight" layoutId={`${id}-${selectionId}-selection`} transition={segmentSpring} aria-hidden="true" />}
             <span className="segment-label">{option.label}</span>
           </button>
         );
