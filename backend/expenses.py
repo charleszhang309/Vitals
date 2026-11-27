@@ -51,6 +51,11 @@ def parse_amount(value):
 AMOUNT = Annotated[Decimal, BeforeValidator(parse_amount), Field(gt=0, le=999_999_999_999)]
 
 
+class BudgetInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount: AMOUNT | None
+
+
 class PaymentInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     amount: AMOUNT
@@ -178,6 +183,10 @@ class ExpenseStore:
                     ingest_key TEXT UNIQUE
                 );
                 CREATE INDEX IF NOT EXISTS expenses_date ON expenses(occurred_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS expense_budgets (
+                    currency TEXT PRIMARY KEY NOT NULL,
+                    amount_minor INTEGER NOT NULL CHECK(amount_minor > 0)
+                );
                 CREATE TABLE IF NOT EXISTS subscriptions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
@@ -226,6 +235,23 @@ class ExpenseStore:
         today = self.local_date()
         return {"date": today.isoformat(), "time_zone": self.zone.key, "base_currency": self.rates.base,
                 "currencies": self.rates.currencies, "items": [public_payment(row) for row in self.month_receipts(today)]}
+
+    def budget(self):
+        currency = self.rates.base
+        with self.connect() as db:
+            row = db.execute("SELECT amount_minor FROM expense_budgets WHERE currency=?", (currency,)).fetchone()
+        return {"currency": currency, "amount": amount_text(row["amount_minor"], currency) if row else None}
+
+    def set_budget(self, amount):
+        currency = self.rates.base
+        with self.connect() as db:
+            if amount is None:
+                db.execute("DELETE FROM expense_budgets WHERE currency=?", (currency,))
+            else:
+                minor, _ = self.money(amount, currency)
+                db.execute("""INSERT INTO expense_budgets(currency,amount_minor) VALUES (?,?)
+                    ON CONFLICT(currency) DO UPDATE SET amount_minor=excluded.amount_minor""", (currency, minor))
+        return {"currency": currency, "amount": None if amount is None else amount_text(minor, currency)}
 
     def get_receipt(self, item_id):
         with self.connect() as db:
@@ -325,11 +351,11 @@ class ExpenseStore:
         for row in receipts:
             totals[row["currency"]] += row["amount_minor"]
         upcoming = [item for item in self.subscriptions(today) if item["active"] and item["next_billing_date"]]
-        return receipts, totals, upcoming
+        return receipts, totals, upcoming, self.budget()["amount"]
 
     async def summary(self, client):
         today = self.local_date()
-        receipts, totals, upcoming = await run_in_threadpool(self.snapshot, today)
+        receipts, totals, upcoming, budget_amount = await run_in_threadpool(self.snapshot, today)
         base = self.rates.base
         targets = sorted(set(totals).intersection(self.rates.currencies) - {base})
         quotes = await self.rates.quotes(client, base, targets) if targets else {}
@@ -341,9 +367,17 @@ class ExpenseStore:
                 missing.append(currency)
             else:
                 total += amount_from_minor(totals[currency], currency) / Decimal(str(rate))
-        converted = total.quantize(Decimal(1).scaleb(-precision(base)), rounding=ROUND_HALF_UP)
+        converted = None if totals and len(totals) == len(missing) else total.quantize(
+            Decimal(1).scaleb(-precision(base)), rounding=ROUND_HALF_UP)
+        budget = None
+        if budget_amount is not None:
+            limit = Decimal(budget_amount)
+            budget = {"amount": budget_amount, "remaining": None, "used_percent": None}
+            if converted is not None:
+                budget["remaining"] = format(limit - converted, "f")
+                budget["used_percent"] = int(converted * 1000 / limit) / 10
         return {"date": today.isoformat(), "time_zone": self.zone.key, "base_currency": base,
-                "month_total": format(converted, "f") if not totals or len(totals) > len(missing) else None,
+                "month_total": format(converted, "f") if converted is not None else None, "monthly_budget": budget,
                 "monthly_count": len(receipts), "missing_rates": missing,
                 "totals_by_currency": {code: amount_text(minor, code) for code, minor in sorted(totals.items())},
                 "recent_expenses": [public_payment(row) for row in receipts[:4]], "upcoming_bills": upcoming}
@@ -399,6 +433,15 @@ def expenses_router(store: ExpenseStore):
     async def summary(request: Request, response: Response):
         response.headers["Cache-Control"] = "no-store"
         return await store.summary(request.app.state.external_client)
+
+    @router.get("/expenses/budget")
+    def budget(response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return store.budget()
+
+    @router.put("/expenses/budget")
+    def set_budget(payload: BudgetInput):
+        return store.set_budget(payload.amount)
 
     @router.post("/expenses", status_code=201)
     def create_receipt(payload: ReceiptInput):

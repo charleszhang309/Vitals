@@ -9,6 +9,27 @@
 .bills-compact-line { font-size: 12px; }
 .bills-missing { color: var(--amber-text); }
 
+.bills-budget {
+  --budget-fill: var(--blue);
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.bills-budget[data-tone="warning"] { --budget-fill: var(--orange); --budget-status: var(--amber-text); }
+.bills-budget[data-tone="limit"] { --budget-fill: var(--red); --budget-status: var(--error); }
+.bills-budget-line { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 2px 8px; }
+.bills-budget-line strong { color: var(--text); }
+.bills-budget-status { color: var(--budget-status, var(--muted)); }
+.bills-budget-progress { appearance: none; overflow: hidden; width: 100%; height: 6px; border: 0; border-radius: 6px; background: var(--track); }
+.bills-budget-progress::-webkit-progress-bar { background: var(--track); }
+.bills-budget-progress::-webkit-progress-value { background: var(--budget-fill); border-radius: 6px; }
+.bills-budget-progress::-moz-progress-bar { background: var(--budget-fill); border-radius: 6px; }
+.bills-budget-editor input { max-width: 245px; }
+
 .overview-widget[data-widget="expenses"] > .widget-content {
   flex: 1;
   align-content: stretch;

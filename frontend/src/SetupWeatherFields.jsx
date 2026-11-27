@@ -1,3 +1,5 @@
+import { t } from './i18n/messages.js';
+import { useI18n } from './i18n/index.jsx';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import { request } from './api.js';
@@ -17,6 +19,7 @@ export function setupWeatherPatch(data, timezoneOnly = false) {
 }
 
 export default function SetupWeatherFields({ weather, timezone, systemTimezone }) {
+  const { locale } = useI18n();
   const [fields, setFields] = useState(() => ({ ...weather, timezone }));
   const [matches, setMatches] = useState(null);
   const [searching, setSearching] = useState(false);
@@ -32,14 +35,15 @@ export default function SetupWeatherFields({ weather, timezone, systemTimezone }
     setMatches(null);
     setSearchError('');
     try {
-      const results = await request(`/api/setup/geocode?${new URLSearchParams({ q: query })}`, { signal: controller.signal });
+      const language = locale === 'zh-CN' ? 'zh' : 'en';
+      const results = await request(`/api/setup/geocode?${new URLSearchParams({ q: query, language })}`, { signal: controller.signal });
       if (!controller.signal.aborted) setMatches(results);
     } catch (error) {
       if (!controller.signal.aborted) setSearchError(error.message);
     } finally {
       if (!controller.signal.aborted) setSearching(false);
     }
-  }, []);
+  }, [locale]);
 
   useEffect(() => () => lookup.current?.abort(), []);
 
@@ -55,7 +59,7 @@ export default function SetupWeatherFields({ weather, timezone, systemTimezone }
 
   return <>
     <div className="host-city-search">
-      <Field label="城市名" name="city_name" value={fields.city_name} maxLength={100}
+      <Field label={t('城市名')} name="city_name" value={fields.city_name} maxLength={100}
         onChange={(event) => edit('city_name', event.target.value)} onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
             event.preventDefault();
@@ -63,12 +67,12 @@ export default function SetupWeatherFields({ weather, timezone, systemTimezone }
           }
         }} />
       <Button disabled={searching || !fields.city_name.trim()} onClick={() => search(fields.city_name.trim())}>
-        <Search size={16} aria-hidden="true" />{searching ? '正在搜索…' : '搜索匹配'}
+        <Search size={16} aria-hidden="true" />{searching ? t('正在搜索…') : t('搜索匹配')}
       </Button>
     </div>
     {searchError && <p className="feedback error" role="alert">{searchError}</p>}
-    {matches?.length === 0 && <p className="feedback" role="status">未找到匹配城市，可以换个名称或手动填写。</p>}
-    {!!matches?.length && <ul className="host-city-matches" aria-label="城市匹配结果">
+    {matches?.length === 0 && <p className="feedback" role="status">{t('未找到匹配城市，可以换个名称或手动填写。')}</p>}
+    {!!matches?.length && <ul className="host-city-matches" aria-label={t('城市匹配结果')}>
       {matches.map(({ name, admin1, country, timezone: cityTimezone, latitude, longitude }) => <li key={
         JSON.stringify([name, admin1, country, latitude, longitude])
       }>
@@ -81,12 +85,12 @@ export default function SetupWeatherFields({ weather, timezone, systemTimezone }
       </li>)}
     </ul>}
     <div className="host-setup-grid">
-      <Field label="IANA 时区" name="timezone" value={fields.timezone} onChange={(event) => edit('timezone', event.target.value)} />
+      <Field label={t('IANA 时区')} name="timezone" value={fields.timezone} onChange={(event) => edit('timezone', event.target.value)} />
       {systemTimezone && fields.timezone !== systemTimezone && <Button className="wizard-use-timezone"
-        onClick={() => edit('timezone', systemTimezone)}>使用系统时区 · {systemTimezone}</Button>}
-      <Field label="纬度" name="latitude" type="number" min="-90" max="90" step="any" value={fields.latitude}
+        onClick={() => edit('timezone', systemTimezone)}>{t('使用系统时区 · {p1}', { p1: systemTimezone })}</Button>}
+      <Field label={t('纬度')} name="latitude" type="number" min="-90" max="90" step="any" value={fields.latitude}
         onChange={(event) => edit('latitude', event.target.value)} />
-      <Field label="经度" name="longitude" type="number" min="-180" max="180" step="any" value={fields.longitude}
+      <Field label={t('经度')} name="longitude" type="number" min="-180" max="180" step="any" value={fields.longitude}
         onChange={(event) => edit('longitude', event.target.value)} />
     </div>
   </>;

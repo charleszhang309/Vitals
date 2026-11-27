@@ -1,9 +1,12 @@
+import { t } from './i18n/messages.js';
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Archive, Copy, Download, Eye, File, FileText, Image, Paperclip, Pin, RotateCw, Sparkles, Trash2 } from 'lucide-react';
 import { httpUrl, postJson, request, sendJson } from './api.js';
 import { bytes, time } from './format.js';
+import { useI18n } from './i18n/index.jsx';
 import { documentType, PREVIEW_LIMIT } from './previewFormat.js';
+import { filterScratchpadItems, scratchpadTitle } from './scratchpadSearch.js';
 import { Button, IconButton, Modal } from './ui.jsx';
 import AiConfirmation, { useAiConfirmations } from './AiConfirmation.jsx';
 
@@ -41,7 +44,7 @@ function TextCard({ text, tools }) {
     if (navigator.clipboard?.writeText) {
       try {
         await navigator.clipboard.writeText(text);
-        setCopyStatus('已复制');
+        setCopyStatus(t('已复制'));
         return;
       } catch {
         // 普通 HTTP 或浏览器拒绝写剪贴板时，交给系统复制操作。
@@ -49,33 +52,32 @@ function TextCard({ text, tools }) {
     }
     setExpanded(true);
     setSelecting(true);
-    setCopyStatus('已选中文字，请使用系统菜单或 Ctrl+C / ⌘C 复制。');
+    setCopyStatus(t('已选中文字，请使用系统菜单或 Ctrl+C / ⌘C 复制。'));
   }
 
   return (
     <>
       <div className="scratch-card-content">
         {expanded ? <textarea className="text-expand" rows={Math.min(10, Math.max(4, lines.length))} readOnly ref={field}
-          aria-label="中转站文本内容" value={text} /> : <p className="text-excerpt">{preview}</p>}
-        {truncated && <Button className="quiet-button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>{expanded ? '收起' : '展开'}</Button>}
+          aria-label={t('中转站文本内容')} value={text} /> : <p className="text-excerpt">{preview}</p>}
+        {truncated && <Button className="quiet-button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>{expanded ? t('收起') : t('展开')}</Button>}
         {copyStatus && <p className="feedback" role="status">{copyStatus}</p>}
       </div>
       <div className="card-tools">
-        <IconButton label="复制文本" onClick={copy}><Copy size={18} /></IconButton>
+        <IconButton label={t('复制文本')} onClick={copy}><Copy size={18} /></IconButton>
         {tools}
       </div>
     </>
   );
 }
 
-function ItemCard({ item, openImage, openDocument, remove, pin, busy, aiEnabled, ref }) {
+function ItemCard({ item, title, openImage, openDocument, remove, pin, busy, aiEnabled, ref }) {
   const text = item.kind === 'text';
   const document = !text && Boolean(documentType(item.filename));
   const image = !text && !document && PREVIEW.has(item.mime_type);
   const oversized = item.size_bytes > PREVIEW_LIMIT;
   const picture = image && !oversized;
   const Icon = text ? FileText : picture ? Image : File;
-  const title = text ? '文本' : item.filename;
   const [aiResult, setAiResult] = useState('');
   const [aiError, setAiError] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
@@ -97,14 +99,14 @@ function ItemCard({ item, openImage, openDocument, remove, pin, busy, aiEnabled,
   }
 
   const tools = <>
-    {text && aiEnabled && <Button className="quiet-button ai-button" title="将此卡片文本发送给已配置的 AI"
-      disabled={aiBusy} onClick={analyze} aria-expanded={aiOpen}><Sparkles size={15} />{aiBusy ? '正在整理…' : 'AI 整理'}</Button>}
-    <IconButton label={item.pinned ? '取消固定' : '固定卡片'} aria-pressed={item.pinned} className={item.pinned ? 'pinned-button' : ''}
+    {text && aiEnabled && <Button className="quiet-button ai-button" title={t('将此卡片文本发送给已配置的 AI')}
+      disabled={aiBusy} onClick={analyze} aria-expanded={aiOpen}><Sparkles size={15} />{aiBusy ? t('正在整理…') : t('AI 整理')}</Button>}
+    <IconButton label={item.pinned ? t('取消固定') : t('固定卡片')} aria-pressed={item.pinned} className={item.pinned ? 'pinned-button' : ''}
       disabled={busy} onClick={() => pin(item)}><Pin size={18} /></IconButton>
-    {document && item.size_bytes <= PREVIEW_LIMIT && <IconButton label={`预览 ${item.filename}`} aria-haspopup="dialog"
+    {document && item.size_bytes <= PREVIEW_LIMIT && <IconButton label={t('预览 {p1}', { p1: item.filename })} aria-haspopup="dialog"
       onClick={() => openDocument(item)}><Eye size={18} /></IconButton>}
-    {!text && <IconButton label={`下载 ${item.filename}`} href={fileUrl(item.id, true)} download><Download size={18} /></IconButton>}
-    <IconButton label={text ? '删除文本' : `删除 ${item.filename}`} className="delete-button" disabled={busy} onClick={() => remove(item.id)}><Trash2 size={18} /></IconButton>
+    {!text && <IconButton label={t('下载 {p1}', { p1: item.filename })} href={fileUrl(item.id, true)} download><Download size={18} /></IconButton>}
+    <IconButton label={text ? t('删除文本') : t('删除 {p1}', { p1: item.filename })} className="delete-button" disabled={busy} onClick={() => remove(item.id)}><Trash2 size={18} /></IconButton>
   </>;
 
   return (
@@ -112,31 +114,30 @@ function ItemCard({ item, openImage, openDocument, remove, pin, busy, aiEnabled,
       initial={{ opacity: 0, scale: 0.92 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.88, transition: { duration: 0.16, ease: [0.32, 0, 0.67, 0] } }}
-      transition={{ type: 'spring', stiffness: 420, damping: 32, mass: 0.8 }}
       transition={{ duration: 0.2 }}>
       <div className="scratch-card-header">
         <span className={`scratch-type ${picture ? 'picture-type' : ''}`}><Icon size={20} aria-hidden="true" /></span>
         <div className="scratch-card-title"><h2 title={title}>{title}</h2><time dateTime={item.created_at} className="muted numeric">{time(item.created_at, true)}</time></div>
-        {item.pinned && <span className="pin-mark"><Pin size={14} aria-hidden="true" />已固定</span>}
+        {item.pinned && <span className="pin-mark"><Pin size={14} aria-hidden="true" />{t('已固定')}</span>}
       </div>
       {text ? <TextCard text={item.text ?? ''} tools={tools} /> : <>
         <div className="scratch-card-content">{picture ? (
           <>
-            <motion.button type="button" className="thumbnail" aria-label={`预览 ${item.filename}`} onClick={() => openImage(item)} whileTap={{ scale: 0.97 }}>
+            <motion.button type="button" className="thumbnail" aria-label={t('预览 {p1}', { p1: item.filename })} onClick={() => openImage(item)} whileTap={{ scale: 0.97 }}>
               <img src={fileUrl(item.id)} alt={item.filename} loading="lazy" />
             </motion.button>
             <p className="file-meta muted">{bytes(item.size_bytes)} · {item.mime_type}</p>
           </>
         ) : <>
           <p className="file-meta muted">{bytes(item.size_bytes)} · {item.mime_type}</p>
-          {(document || image) && oversized && <p className="file-meta muted">超过 15 MB，请下载查看。</p>}
+          {(document || image) && oversized && <p className="file-meta muted">{t('超过 15 MB，请下载查看。')}</p>}
         </>}</div>
         <div className="card-tools">{tools}</div>
       </>}
       <AnimatePresence initial={false}>
         {aiOpen && aiEnabled && <motion.div className="ai-expand" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
           exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}>
-          <div className="ai-output">{aiError ? <p role="alert" className="error">{aiError}</p> : <p>{aiResult || '正在整理这条文本…'}</p>}</div>
+          <div className="ai-output">{aiError ? <p role="alert" className="error">{aiError}</p> : <p>{aiResult || t('正在整理这条文本…')}</p>}</div>
         </motion.div>}
       </AnimatePresence>
     </motion.li>
@@ -144,7 +145,9 @@ function ItemCard({ item, openImage, openDocument, remove, pin, busy, aiEnabled,
 }
 
 export default function ScratchpadPage({ aiEnabled = false }) {
+  const { t } = useI18n();
   const [items, setItems] = useState(null);
+  const [query, setQuery] = useState('');
   const [text, setText] = useState('');
   const [activeImage, setActiveImage] = useState(null);
   const [activeDocument, setActiveDocument] = useState(null);
@@ -211,14 +214,14 @@ export default function ScratchpadPage({ aiEnabled = false }) {
         const result = await postJson('/api/ai/command', { command: command[1].trim() });
         setCommands((previous) => [{ ...result, command: command[1].trim(), id: Date.now() }, ...previous]);
         setText((previous) => previous === text ? '' : previous);
-      }, '正在执行快捷控制…');
+      }, t('正在执行快捷控制…'));
       return;
     }
     change(async () => {
       const item = await postJson(`${SCRATCHPAD}/text`, { text });
       setItems((previous) => sortRecent([item, ...(previous ?? [])]));
       setText((previous) => previous === text ? '' : previous);
-    }, '正在保存文字…');
+    }, t('正在保存文字…'));
   }
 
   function uploadFiles(files, clipboard = false) {
@@ -228,7 +231,7 @@ export default function ScratchpadPage({ aiEnabled = false }) {
       for (const [index, file] of files.entries()) {
         const form = new FormData();
         const ext = CLIPBOARD_EXTENSIONS[file.type] ?? (file.type.slice(6).replace(/[^a-z0-9]/gi, '') || 'img');
-        const filename = clipboard ? `截图-${new Date().toISOString().replace(/[:.]/g, '-')}-${index + 1}.${ext}` : file.name;
+        const filename = clipboard ? t('截图-{p1}-{p2}.{p3}', { p1: new Date().toISOString().replace(/[:.]/g, '-'), p2: index + 1, p3: ext }) : file.name;
         form.append('file', file, filename);
         try {
           const item = await request(`${SCRATCHPAD}/file`, { method: 'POST', body: form });
@@ -238,7 +241,7 @@ export default function ScratchpadPage({ aiEnabled = false }) {
         }
       }
       if (failures.length) throw new Error(failures.join('\n'));
-    }, `正在上传 ${files.length} 个文件…`);
+    }, t('正在上传 {p1} 个文件…', { p1: files.length }));
   }
 
   function paste(event) {
@@ -266,19 +269,22 @@ export default function ScratchpadPage({ aiEnabled = false }) {
       await request(`${SCRATCHPAD}/${id}`, { method: 'DELETE' });
       setItems((previous) => previous?.filter((item) => item.id !== id));
       setActiveImage((previous) => previous?.id === id ? null : previous);
-    }, '正在删除…');
+    }, t('正在删除…'));
   }
 
   function pin(item) {
     change(async () => {
       const updated = await sendJson('PATCH', `${SCRATCHPAD}/${item.id}/pin`, { pinned: !item.pinned });
       setItems((previous) => sortRecent((previous ?? []).map((record) => record.id === item.id ? updated : record)));
-    }, item.pinned ? '正在取消固定…' : '正在固定…');
+    }, item.pinned ? t('正在取消固定…') : t('正在固定…'));
   }
+
+  const textTitle = t('文本');
+  const visibleItems = filterScratchpadItems(items ?? [], query, textTitle);
 
   return (
     <>
-      <div className="page-heading"><h1>中转站</h1></div>
+      <div className="page-heading"><h1>{t('中转站')}</h1></div>
       <form onSubmit={saveText} className={`surface composer${dragging ? ' drop-active' : ''}`}
         onDragEnter={(event) => {
           if (!Array.from(event.dataTransfer.types).includes('Files')) return;
@@ -295,40 +301,45 @@ export default function ScratchpadPage({ aiEnabled = false }) {
           dragDepth.current = Math.max(0, dragDepth.current - 1);
           if (!dragDepth.current) setDragging(false);
         }} onDrop={drop}>
-        <textarea aria-label="中转文字" placeholder={aiEnabled ? '输入文字，或用 /ai 或 /cmd 执行快捷控制…' : '在此输入要中转的文字…'} rows={5} maxLength={20000} value={text}
+        <textarea aria-label={t('中转文字')} placeholder={aiEnabled ? t('输入文字，或用 /ai 或 /cmd 执行快捷控制…') : t('在此输入要中转的文字…')} rows={5} maxLength={20000} value={text}
           onChange={(event) => setText(event.target.value)} onPaste={paste} />
-        <p className="composer-hint muted"><Paperclip size={16} aria-hidden="true" />{dragging ? '松开以上传文件' : '拖入文件或粘贴截图（Ctrl+V）'}</p>
+        <p className="composer-hint muted"><Paperclip size={16} aria-hidden="true" />{dragging ? t('松开以上传文件') : t('拖入文件或粘贴截图（Ctrl+V）')}</p>
         <div className="composer-actions flex items-center justify-between gap-3">
           <input ref={input} type="file" multiple hidden onChange={(event) => {
             const files = Array.from(event.target.files);
             event.target.value = '';
             uploadFiles(files);
           }} />
-          <Button disabled={busy} onClick={() => input.current.click()}><Paperclip size={17} /> 上传文件</Button>
-          <Button className="primary-button" disabled={busy || !text.trim()} type="submit">{aiEnabled && /^\/(?:ai|cmd)\s+\S/i.test(text.trim()) ? '执行指令' : '保存文字'}</Button>
+          <Button disabled={busy} onClick={() => input.current.click()}><Paperclip size={17} />{t('上传文件')}</Button>
+          <Button className="primary-button" disabled={busy || !text.trim()} type="submit">{aiEnabled && /^\/(?:ai|cmd)\s+\S/i.test(text.trim()) ? t('执行指令') : t('保存文字')}</Button>
         </div>
         {notice && <p className={`feedback${notice.error ? ' error' : ''}`} role={notice.error ? 'alert' : 'status'}>{notice.text}</p>}
       </form>
-      {commands.length > 0 && <ul className="command-results" aria-label="快捷控制结果">{commands.map((result) => <li key={result.id} className="surface panel">
-        <strong>{result.message}</strong><p className="muted">{result.command}{result.scheduled_at && ` · ${time(result.scheduled_at, true)}`}</p>
+      {commands.length > 0 && <ul className="command-results" aria-label={t('快捷控制结果')}>{commands.map((result) => <li key={result.id} className="surface panel">
+        <strong>{t(result.message)}</strong><p className="muted">{t(result.command)}{result.scheduled_at && ` · ${time(result.scheduled_at, true)}`}</p>
         {result.confirmation && <AiConfirmation confirmation={result.confirmation}
           state={confirmations.states[result.confirmation.id]} onResolve={confirmations.resolve} />}
       </li>)}</ul>}
       {items === null ? <div className="surface empty-scratch">
-        {notice?.error ? <Button onClick={() => { setNotice(null); setReload((value) => value + 1); }}><RotateCw size={16} />重试读取</Button> : <p>正在读取中转站…</p>}
+        {notice?.error ? <Button onClick={() => { setNotice(null); setReload((value) => value + 1); }}><RotateCw size={16} />{t('重试读取')}</Button> : <p>{t('正在读取中转站…')}</p>}
       </div> : (
         <>
-          {items.length === 0 && <div className="surface empty-scratch"><Archive size={28} aria-hidden="true" /><p>中转站暂无内容</p></div>}
-          <ul className="scratch-grid" aria-label="中转记录"><AnimatePresence initial={false} mode="popLayout">
-            {items.map((item) => <ItemCard key={item.id} item={item} openImage={setActiveImage} openDocument={setActiveDocument}
-              remove={remove} pin={pin} busy={busy} aiEnabled={aiEnabled} />)}
+          <div className="widget-form mb-3">
+            <input type="search" aria-label={t('搜索中转记录')} placeholder={t('搜索标题、文本或文件名')}
+              value={query} onChange={(event) => setQuery(event.target.value)} />
+          </div>
+          {visibleItems.length === 0 && <div className="surface empty-scratch" role="status"><Archive size={28} aria-hidden="true" />
+            <p>{items.length || query.trim() ? t('没有匹配的中转记录') : t('中转站暂无内容')}</p></div>}
+          <ul className="scratch-grid" aria-label={t('中转记录')}><AnimatePresence initial={false} mode="popLayout">
+            {visibleItems.map((item) => <ItemCard key={item.id} item={item} title={scratchpadTitle(item, textTitle)}
+              openImage={setActiveImage} openDocument={setActiveDocument} remove={remove} pin={pin} busy={busy} aiEnabled={aiEnabled} />)}
           </AnimatePresence></ul>
         </>
       )}
       <AnimatePresence>
         {activeImage && <Modal key="image" id="image-preview" title={activeImage.filename} className="preview-dialog" onClose={() => setActiveImage(null)}>
           <img className="preview-image" src={fileUrl(activeImage.id)} alt={activeImage.filename} />
-          <div className="card-tools"><IconButton label="下载图片" href={fileUrl(activeImage.id, true)} download><Download size={18} /></IconButton></div>
+          <div className="card-tools"><IconButton label={t('下载图片')} href={fileUrl(activeImage.id, true)} download><Download size={18} /></IconButton></div>
         </Modal>}
         {activeDocument && <Suspense key="document" fallback={null}>
           <DocumentPreview item={activeDocument} inline={httpUrl(`${SCRATCHPAD}/files/${activeDocument.id}?preview=true`).href}

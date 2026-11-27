@@ -353,6 +353,8 @@
   --heat-label-gap: 4px;
 }
 
+:root:lang(en) .usage-heatmap.usage-heatmap-v2.usage-heatmap-full { --heat-label-column: 22px; }
+
 .usage-heatmap-v2 :is(.usage-heatmap-grid, .usage-weekdays) {
   --heat-height: calc((100cqi - var(--heat-label-column) - var(--heat-label-gap) - 11 * var(--heat-gap)) / 12);
 }

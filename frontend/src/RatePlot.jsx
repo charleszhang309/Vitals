@@ -1,12 +1,14 @@
+import { getLocale, localizedDate, localizedNumber, t } from './i18n/messages.js';
 import { useMemo } from 'react';
 import LinePlot, { fill, plotStyle } from './LinePlot.jsx';
 
-const formatter = new Intl.NumberFormat('zh-CN', { maximumSignificantDigits: 6 });
-const dateFormat = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', timeZone: 'UTC' });
-const hourFormat = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const formatter = localizedNumber({ maximumSignificantDigits: 6 });
+const dateFormat = localizedDate({ month: 'short', day: 'numeric', timeZone: 'UTC' });
+const hourFormat = localizedDate({ hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 const color = '#007aff';
 
 export default function RatePlot({ data, dark }) {
+  const locale = getLocale();
   const options = useMemo(() => {
     const hourly = data.granularity === 'hourly_snapshot';
     return {
@@ -28,6 +30,6 @@ export default function RatePlot({ data, dark }) {
         showSymbol: data.points.length < 4, symbolSize: 7, lineStyle: { width: 2 }, areaStyle: { color: fill(color) },
       }],
     };
-  }, [data, dark]);
-  return <LinePlot options={options} label={`${data.base} → ${data.target} 汇率走势图`} />;
+  }, [data, dark, locale]);
+  return <LinePlot options={options} label={t('{p1} → {p2} 汇率走势图', { p1: data.base, p2: data.target })} />;
 }

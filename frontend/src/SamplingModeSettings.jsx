@@ -1,12 +1,13 @@
+import { t } from './i18n/messages.js';
 import { useEffect, useState } from 'react';
 import { request, sendJson } from './api.js';
 import { Segmented } from './ui.jsx';
 
 const path = '/api/system/sampling';
 const modes = [
-  { value: 'realtime', label: '实时' },
-  { value: 'smart', label: '智能' },
-  { value: 'eco', label: '节能' },
+  { value: 'smart', get label() { return t('智能'); } },
+  { value: 'realtime', get label() { return t('实时'); } },
+  { value: 'eco', get label() { return t('节能'); } },
 ];
 
 export default function SamplingModeSettings() {
@@ -39,11 +40,9 @@ export default function SamplingModeSettings() {
 
   return <section className="settings-subsection" aria-labelledby="sampling-mode-heading">
     <div className="settings-row">
-      <h3 id="sampling-mode-heading">采样模式</h3>
-      <Segmented id="sampling-mode" label="采样模式" options={modes} value={mode} onChange={save} disabled={!mode || busy} />
+      <h3 id="sampling-mode-heading">{t('采样模式')}</h3>
+      <Segmented id="sampling-mode" label={t('采样模式')} options={modes} value={mode} onChange={save} disabled={!mode || busy} />
     </div>
-    <p className="muted">实时每 1 秒采样，节能每 5 秒采样。智能模式在有人查看时每 1 秒采样，其他时间每 5 秒采样。</p>
-    {!mode && !error && <p className="muted" role="status">正在读取采样设置…</p>}
     {error && <p className="feedback error" role="alert">{error}</p>}
   </section>;
 }

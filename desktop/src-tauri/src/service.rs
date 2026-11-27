@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Status {
     Starting,
     Running,
@@ -20,29 +20,6 @@ pub enum Status {
     Occupied,
     Failed,
     Unconfigured,
-}
-
-impl Status {
-    pub fn label(self, role: &Role) -> &'static str {
-        if matches!(role, Role::Remote(_)) {
-            return match self {
-                Self::Running if cfg!(target_os = "macos") => "远程模式：Mac agent 运行中",
-                Self::Running => "远程模式：已启用",
-                Self::Starting => "远程模式：正在启动",
-                Self::Failed => "远程模式：Mac agent 启动失败或已退出",
-                _ => "远程模式：已停止",
-            };
-        }
-        match self {
-            Self::Starting => "主机模式：正在启动",
-            Self::Running => "主机模式：运行中",
-            Self::External => "主机模式：运行中（外部托管）",
-            Self::Stopped => "主机模式：已停止",
-            Self::Occupied => "主机模式：端口已被占用",
-            Self::Failed => "主机模式：启动失败",
-            Self::Unconfigured => "桌面模式：请检查设置",
-        }
-    }
 }
 
 pub enum Operation {

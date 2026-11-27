@@ -139,6 +139,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .brand-name strong { display: block; font-size: 22px; line-height: 1.25; font-weight: 750; letter-spacing: -.045em; white-space: nowrap; }
 .header-tabs { grid-area: tabs; }
 .header-tabs .segments { min-width: 250px; }
+:root:lang(en) .header-tabs .segment { padding-inline: 7px; }
 .header-actions { grid-area: actions; justify-self: end; display: flex; align-items: center; gap: 8px; }
 .system-badge { font-size: 12px; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 99px; background: var(--track); }
 .system-off { color: var(--amber-text); background: var(--amber-fill); }
@@ -460,6 +461,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .settings-fields { display: grid; gap: 17px; font-size: 14px; }
 .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 7px; }
 .settings-row > span { font-weight: 640; }
+:root:lang(en) .settings-category { overflow-wrap: anywhere; }
 .settings-row:has(> .segments) { flex-wrap: wrap; }
 .settings-row .segment { font-size: 13px; }
 .settings-row > select { border: 1px solid var(--field-border); border-radius: 10px; background: var(--surface); min-height: 36px; padding: 5px 9px; }
@@ -1335,6 +1337,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (max-width: 520px) {
   .quick-control-row.remote-quick-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+:root:lang(en) .quick-control-row:not(.remote-quick-row, .mac-quick-row) {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 116px), 1fr));
+}
+:root:lang(en) .quick-control-row .button { white-space: normal; }
 
 .player-card-progress {
   display: grid;

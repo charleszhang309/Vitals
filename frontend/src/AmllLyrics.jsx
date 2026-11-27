@@ -1,3 +1,4 @@
+import { t } from './i18n/messages.js';
 import { useEffect, useState } from 'react';
 import { useReducedMotion } from 'framer-motion';
 import { LyricPlayer } from '@applemusic-like-lyrics/react';
@@ -22,7 +23,7 @@ export default function AmllLyrics({ lines, track, received }) {
     return () => cancelAnimationFrame(frame);
   }, [base, duration, playing, received, speed]);
 
-  return <div className="now-amll" role="group" aria-label="同步歌词">
+  return <div className="now-amll" role="group" aria-label={t('同步歌词')}>
     <LyricPlayer
       lyricLines={lines}
       currentTime={time}

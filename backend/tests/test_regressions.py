@@ -323,7 +323,7 @@ class NetworkTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(endpoint(ws), 8.5)
         ws.close.assert_awaited_once_with(code=1013)
         self.assertLess(monotonic() - close_started, 2.5)
-        self.assertEqual(monitor.subscribers, set())
+        self.assertFalse(monitor.subscribers)
 
     async def test_websocket_reads_both_disconnect_errors_and_removes_subscriber(self):
         endpoint, monitor, ws = self.websocket()
@@ -340,7 +340,7 @@ class NetworkTests(unittest.IsolatedAsyncioTestCase):
         ws.receive = receive
         ws.send_json = send
         await endpoint(ws)
-        self.assertEqual(monitor.subscribers, set())
+        self.assertFalse(monitor.subscribers)
         ws.close.assert_not_called()
 
 

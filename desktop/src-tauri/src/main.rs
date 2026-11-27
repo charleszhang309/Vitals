@@ -1,8 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autostart;
+mod language;
 mod service;
 mod settings;
 
+use language::{Language, LanguagePreference, LanguageStore};
 use service::{desktop_home, Hub, Operation, Status, Supervisor};
 use settings::{DesktopModeView, Role, Selection, SettingsStore, SettingsView};
 use std::collections::HashSet;
@@ -21,15 +24,27 @@ use tauri::WindowEvent;
 use tauri::{
     AppHandle, Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
-use tauri_plugin_autostart::ManagerExt;
-
-const SERVICE_UNAVAILABLE: &str = "无法连接 Vitals 服务管理器。";
 const MAIN_WINDOW: &str = "main";
 const SETTINGS_WINDOW: &str = "desktop-settings";
 type DashboardOrigin = Arc<Mutex<Option<Url>>>;
 
 #[derive(Default)]
 struct ManagedHub(AtomicBool);
+
+fn desktop_language(app: &AppHandle) -> Language {
+    app.state::<LanguageStore>().language()
+}
+
+fn service_unavailable(app: &AppHandle) -> &'static str {
+    desktop_language(app).choose(
+        "Could not reach the Vitals service manager.",
+        "无法连接 Vitals 服务管理器。",
+    )
+}
+
+fn settings_error(app: &AppHandle, error: &'static str) -> &'static str {
+    desktop_language(app).choose(settings::english_error(error), error)
+}
 
 fn bundled_url(path: &str) -> Url {
     let origin = if cfg!(windows) {
@@ -60,7 +75,10 @@ fn require_bundled_page(
     if window.label() == label && window.url().is_ok_and(|url| is_bundled_page(&url, entry)) {
         Ok(())
     } else {
-        Err("请在 Vitals 桌面应用中打开此设置。")
+        Err(desktop_language(window.app_handle()).choose(
+            "Open this setting in the Vitals desktop app.",
+            "请在 Vitals 桌面应用中打开此设置。",
+        ))
     }
 }
 
@@ -72,7 +90,7 @@ fn start_service(
     require_bundled_page(&window, MAIN_WINDOW, "/index.html")?;
     operations
         .send(Operation::Start)
-        .map_err(|_| SERVICE_UNAVAILABLE)
+        .map_err(|_| service_unavailable(window.app_handle()))
 }
 
 #[tauri::command]
@@ -101,11 +119,13 @@ fn save_desktop_settings(
     token: String,
 ) -> Result<(), &'static str> {
     require_bundled_page(&window, SETTINGS_WINDOW, "/settings.html")?;
-    store.apply(role, &url, &token, |role| {
-        operations
-            .send(Operation::Configure(role))
-            .map_err(|_| SERVICE_UNAVAILABLE)
-    })?;
+    store
+        .apply(role, &url, &token, |role| {
+            operations
+                .send(Operation::Configure(role))
+                .map_err(|_| service_unavailable(window.app_handle()))
+        })
+        .map_err(|error| settings_error(window.app_handle(), error))?;
     let _ = window.close();
     open_window(window.app_handle(), MAIN_WINDOW);
     Ok(())
@@ -135,7 +155,10 @@ fn require_dashboard(
     {
         Ok(())
     } else {
-        Err("请在 Vitals 桌面主窗口中打开此设置。")
+        Err(desktop_language(window.app_handle()).choose(
+            "Open this setting in the main Vitals desktop window.",
+            "请在 Vitals 桌面主窗口中打开此设置。",
+        ))
     }
 }
 
@@ -162,11 +185,13 @@ fn set_desktop_mode(
     token: String,
 ) -> Result<DesktopModeView, &'static str> {
     require_dashboard(&window, &active, &scope)?;
-    store.apply(mode, &remote_url, &token, |role| {
-        operations
-            .send(Operation::Configure(role))
-            .map_err(|_| SERVICE_UNAVAILABLE)
-    })?;
+    store
+        .apply(mode, &remote_url, &token, |role| {
+            operations
+                .send(Operation::Configure(role))
+                .map_err(|_| service_unavailable(window.app_handle()))
+        })
+        .map_err(|error| settings_error(window.app_handle(), error))?;
     Ok(store.mode_view())
 }
 
@@ -183,15 +208,98 @@ fn restart_desktop_hub(
     operations: tauri::State<'_, Sender<Operation>>,
 ) -> Result<(), &'static str> {
     require_dashboard(&window, &active, &scope)?;
+    let language = desktop_language(window.app_handle());
     if !window.url().is_ok_and(|page| is_local_hub_page(&page)) {
-        return Err("请在本机主中心重启服务。");
+        return Err(language.choose(
+            "Restart the service from the local hub.",
+            "请在本机主中心重启服务。",
+        ));
     }
     if !managed_hub.inner().0.load(Ordering::Acquire) {
-        return Err("请使用当前的服务启动方式重启 Vitals。");
+        return Err(language.choose(
+            "Restart Vitals the same way you started it.",
+            "请使用当前的服务启动方式重启 Vitals。",
+        ));
     }
     operations
         .send(Operation::Restart)
-        .map_err(|_| SERVICE_UNAVAILABLE)
+        .map_err(|_| service_unavailable(window.app_handle()))
+}
+
+fn launch_at_login_error(app: &AppHandle, error: std::io::Error) -> &'static str {
+    eprintln!("Could not update Vitals launch at login: {error}");
+    desktop_language(app).choose("Could not update Start at login.", "无法更新开机自启设置。")
+}
+
+fn apply_launch_at_login(app: &AppHandle, enabled: bool) -> Result<bool, &'static str> {
+    let write = autostart::set_enabled(enabled);
+    let actual = autostart::is_enabled();
+    if let Ok(checked) = &actual {
+        for menu in &app.state::<NativeMenus>().menus {
+            let _ = menu.autostart.set_checked(*checked);
+        }
+    }
+    write
+        .and(actual)
+        .map_err(|error| launch_at_login_error(app, error))
+}
+
+#[tauri::command]
+fn get_launch_at_login(
+    window: WebviewWindow,
+    active: tauri::State<'_, DashboardOrigin>,
+    scope: CommandScope<String>,
+) -> Result<bool, &'static str> {
+    require_dashboard(&window, &active, &scope)?;
+    autostart::is_enabled().map_err(|error| {
+        eprintln!("Could not read Vitals launch at login: {error}");
+        desktop_language(window.app_handle())
+            .choose("Could not read Start at login.", "无法读取开机自启设置。")
+    })
+}
+
+#[tauri::command]
+fn set_launch_at_login(
+    window: WebviewWindow,
+    active: tauri::State<'_, DashboardOrigin>,
+    scope: CommandScope<String>,
+    enabled: bool,
+) -> Result<bool, &'static str> {
+    require_dashboard(&window, &active, &scope)?;
+    apply_launch_at_login(window.app_handle(), enabled)
+}
+
+#[tauri::command]
+fn set_desktop_language(
+    window: WebviewWindow,
+    active: tauri::State<'_, DashboardOrigin>,
+    scope: CommandScope<String>,
+    store: tauri::State<'_, LanguageStore>,
+    language: LanguagePreference,
+) -> Result<(), &'static str> {
+    require_dashboard(&window, &active, &scope)?;
+    let error_message = store.language().choose(
+        "Could not update the desktop language.",
+        "无法更新桌面语言。",
+    );
+    store.set(language).map_err(|error| {
+        eprintln!("Could not save Vitals desktop language: {error}");
+        error_message
+    })?;
+    let app = window.app_handle().clone();
+    window
+        .app_handle()
+        .run_on_main_thread(move || {
+            let language = desktop_language(&app);
+            app.state::<NativeMenus>().set_language(language);
+            if let Some(window) = app.get_webview_window(SETTINGS_WINDOW) {
+                let _ = window.set_title(settings_title(language));
+            }
+        })
+        .map_err(|error| {
+            eprintln!("Could not refresh Vitals desktop language: {error}");
+            error_message
+        })
 }
 
 fn open_window(app: &AppHandle, label: &'static str) {
@@ -242,30 +350,66 @@ struct TrayMenu<R: Runtime> {
 }
 
 impl<R: Runtime> TrayMenu<R> {
-    fn new(app: &AppHandle<R>) -> tauri::Result<Self> {
+    fn new(app: &AppHandle<R>, language: Language, launches_at_login: bool) -> tauri::Result<Self> {
         Ok(Self {
-            open: MenuItem::with_id(app, "open", "打开 Vitals", true, None::<&str>)?,
+            open: MenuItem::with_id(
+                app,
+                "open",
+                language.choose("Open Vitals", "打开 Vitals"),
+                true,
+                None::<&str>,
+            )?,
             settings: MenuItem::with_id(
                 app,
                 "desktop-settings",
-                "配置桌面模式…",
+                language.choose("Configure desktop mode…", "配置桌面模式…"),
                 true,
                 None::<&str>,
             )?,
-            status: MenuItem::with_id(app, "status", "正在启动 Vitals", false, None::<&str>)?,
+            status: MenuItem::with_id(
+                app,
+                "status",
+                language.choose("Starting Vitals", "正在启动 Vitals"),
+                false,
+                None::<&str>,
+            )?,
             separator: PredefinedMenuItem::separator(app)?,
-            start: MenuItem::with_id(app, "start", "启动服务", false, None::<&str>)?,
-            stop: MenuItem::with_id(app, "stop", "停止服务", false, None::<&str>)?,
-            restart: MenuItem::with_id(app, "restart", "重启服务", false, None::<&str>)?,
+            start: MenuItem::with_id(
+                app,
+                "start",
+                language.choose("Start service", "启动服务"),
+                false,
+                None::<&str>,
+            )?,
+            stop: MenuItem::with_id(
+                app,
+                "stop",
+                language.choose("Stop service", "停止服务"),
+                false,
+                None::<&str>,
+            )?,
+            restart: MenuItem::with_id(
+                app,
+                "restart",
+                language.choose("Restart service", "重启服务"),
+                false,
+                None::<&str>,
+            )?,
             autostart: CheckMenuItem::with_id(
                 app,
                 "autostart",
-                "开机自启",
-                true,
-                app.autolaunch().is_enabled().unwrap_or(false),
+                language.choose("Start at login", "开机自启"),
+                cfg!(any(windows, target_os = "macos")),
+                launches_at_login,
                 None::<&str>,
             )?,
-            quit: MenuItem::with_id(app, "quit", "退出 Vitals", true, None::<&str>)?,
+            quit: MenuItem::with_id(
+                app,
+                "quit",
+                language.choose("Quit Vitals", "退出 Vitals"),
+                true,
+                None::<&str>,
+            )?,
         })
     }
 
@@ -283,8 +427,32 @@ impl<R: Runtime> TrayMenu<R> {
         ]
     }
 
-    fn update(&self, role: &Role, state: Status) {
-        let _ = self.status.set_text(state.label(role));
+    fn set_language(&self, language: Language) {
+        let _ = self
+            .open
+            .set_text(language.choose("Open Vitals", "打开 Vitals"));
+        let _ = self
+            .settings
+            .set_text(language.choose("Configure desktop mode…", "配置桌面模式…"));
+        let _ = self
+            .start
+            .set_text(language.choose("Start service", "启动服务"));
+        let _ = self
+            .stop
+            .set_text(language.choose("Stop service", "停止服务"));
+        let _ = self
+            .restart
+            .set_text(language.choose("Restart service", "重启服务"));
+        let _ = self
+            .autostart
+            .set_text(language.choose("Start at login", "开机自启"));
+        let _ = self
+            .quit
+            .set_text(language.choose("Quit Vitals", "退出 Vitals"));
+    }
+
+    fn update(&self, language: Language, role: &Role, state: Status) {
+        let _ = self.status.set_text(language.status(role, state));
         let _ = self.start.set_enabled(matches!(
             state,
             Status::Stopped | Status::Failed | Status::Occupied
@@ -297,12 +465,61 @@ impl<R: Runtime> TrayMenu<R> {
     }
 }
 
+struct NativeMenus {
+    menus: Vec<TrayMenu<tauri::Wry>>,
+    status: Mutex<(Role, Status)>,
+    #[cfg(target_os = "macos")]
+    service_submenu: Submenu<tauri::Wry>,
+    #[cfg(target_os = "macos")]
+    application_quit: MenuItem<tauri::Wry>,
+}
+
+impl NativeMenus {
+    fn set_language(&self, language: Language) {
+        let (role, status) = self.status.lock().unwrap().clone();
+        for menu in &self.menus {
+            menu.set_language(language);
+            let _ = menu.status.set_text(language.status(&role, status));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = self
+                .service_submenu
+                .set_text(language.choose("Vitals Service", "Vitals 服务"));
+            let _ = self
+                .application_quit
+                .set_text(language.choose("Quit Vitals", "退出 Vitals"));
+        }
+    }
+
+    fn update(&self, language: Language, role: Role, status: Status) {
+        for menu in &self.menus {
+            menu.update(language, &role, status);
+        }
+        *self.status.lock().unwrap() = (role, status);
+    }
+}
+
 #[cfg(target_os = "macos")]
-fn install_macos_menu(app: &AppHandle) -> tauri::Result<TrayMenu<tauri::Wry>> {
-    let services = TrayMenu::new(app)?;
+fn install_macos_menu(
+    app: &AppHandle,
+    language: Language,
+    launches_at_login: bool,
+) -> tauri::Result<(
+    TrayMenu<tauri::Wry>,
+    Submenu<tauri::Wry>,
+    MenuItem<tauri::Wry>,
+)> {
+    let services = TrayMenu::new(app, language, launches_at_login)?;
     let native = Menu::default(app)?;
     // AppKit's built-in Quit bypasses the asynchronous Tauri exit request.
-    let quit = MenuItem::with_id(app, "quit", "退出 Vitals", true, Some("Cmd+Q"))?;
+    let quit = MenuItem::with_id(
+        app,
+        "quit",
+        language.choose("Quit Vitals", "退出 Vitals"),
+        true,
+        Some("Cmd+Q"),
+    )?;
     let application = Submenu::with_items(
         app,
         "Vitals",
@@ -321,12 +538,15 @@ fn install_macos_menu(app: &AppHandle) -> tauri::Result<TrayMenu<tauri::Wry>> {
     )?;
     native.remove_at(0)?;
     native.insert(&application, 0)?;
-    native.insert(
-        &Submenu::with_items(app, "Vitals 服务", true, &services.items())?,
-        1,
+    let submenu = Submenu::with_items(
+        app,
+        language.choose("Vitals Service", "Vitals 服务"),
+        true,
+        &services.items(),
     )?;
+    native.insert(&submenu, 1)?;
     app.set_menu(native)?;
-    Ok(services)
+    Ok((services, submenu, quit))
 }
 
 fn known_external_link(url: &Url) -> bool {
@@ -379,7 +599,7 @@ impl MainPage {
     }
 }
 
-fn navigation_target(role: &Role, status: Status, hub_url: &Url) -> MainPage {
+fn navigation_target(role: &Role, status: Status, hub_url: &Url, language: Language) -> MainPage {
     let target = match (role, status) {
         (Role::Hub, Status::Running | Status::External) => Some(hub_url.clone()),
         (Role::Remote(remote), Status::Running | Status::Failed) => Some(remote.address()),
@@ -403,7 +623,8 @@ fn navigation_target(role: &Role, status: Status, hub_url: &Url) -> MainPage {
     };
     url.query_pairs_mut()
         .append_pair("mode", mode)
-        .append_pair("status", status);
+        .append_pair("status", status)
+        .append_pair("language", language.tag());
     MainPage::Startup(url)
 }
 
@@ -435,6 +656,11 @@ fn allow_dashboard_ipc(app: &AppHandle, origin: &Url, registered: &mut HashSet<S
         .window(MAIN_WINDOW)
         .permission_scoped(
             "allow-dashboard-mode",
+            vec![origin.clone()],
+            Vec::<String>::new(),
+        )
+        .permission_scoped(
+            "allow-desktop-preferences",
             vec![origin.clone()],
             Vec::<String>::new(),
         );
@@ -501,13 +727,18 @@ fn build_main_window(app: &AppHandle, url: WebviewUrl) -> tauri::Result<WebviewW
         .build()
 }
 
+fn settings_title(language: Language) -> &'static str {
+    language.choose("Vitals Desktop Settings", "Vitals 桌面设置")
+}
+
 fn build_settings_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+    let language = desktop_language(app);
     WebviewWindowBuilder::new(
         app,
         SETTINGS_WINDOW,
-        WebviewUrl::App("settings.html".into()),
+        WebviewUrl::App(format!("settings.html?language={}", language.tag()).into()),
     )
-    .title("Vitals 桌面设置")
+    .title(settings_title(language))
     .inner_size(540.0, 495.0)
     .min_inner_size(410.0, 430.0)
     .visible(false)
@@ -525,6 +756,8 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let home = desktop_home(app.path().app_local_data_dir()?)?;
     let (store, role) = SettingsStore::load(&home);
     app.manage(store);
+    app.manage(LanguageStore::load(&home));
+    let language = desktop_language(app.handle());
     app.manage::<DashboardOrigin>(Arc::new(Mutex::new(None)));
     app.manage(ManagedHub::default());
     let initial_status = if role == Role::Unconfigured {
@@ -533,17 +766,33 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         Status::Starting
     };
     app.manage(Mutex::new(DashboardNavigation {
-        current: navigation_target(&role, initial_status, &hub_url),
+        current: navigation_target(&role, initial_status, &hub_url, language),
         registered_origins: HashSet::new(),
     }));
 
-    let tray_menu = TrayMenu::new(app.handle())?;
+    let launches_at_login = autostart::is_enabled().unwrap_or_else(|error| {
+        eprintln!("Could not read Vitals launch at login: {error}");
+        false
+    });
+    let tray_menu = TrayMenu::new(app.handle(), language, launches_at_login)?;
     let actions = Menu::with_items(app, &tray_menu.items())?;
     #[cfg(target_os = "macos")]
-    let menus = [tray_menu, install_macos_menu(app.handle())?];
+    let (services, service_submenu, application_quit) =
+        install_macos_menu(app.handle(), language, launches_at_login)?;
+    #[cfg(target_os = "macos")]
+    let menus = vec![tray_menu, services];
     #[cfg(not(target_os = "macos"))]
-    let menus = [tray_menu];
-    let autostart_items = menus.each_ref().map(|menu| menu.autostart.clone());
+    let menus = vec![tray_menu];
+    let native_menus = NativeMenus {
+        menus,
+        status: Mutex::new((role.clone(), initial_status)),
+        #[cfg(target_os = "macos")]
+        service_submenu,
+        #[cfg(target_os = "macos")]
+        application_quit,
+    };
+    native_menus.update(language, role.clone(), initial_status);
+    app.manage(native_menus);
     let (send, receive) = mpsc::channel();
     app.manage(send.clone());
     let tray = TrayIconBuilder::with_id("vitals");
@@ -591,19 +840,11 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 "restart" => Operation::Restart,
                 "quit" => Operation::Quit,
                 "autostart" => {
-                    let manager = app.autolaunch();
-                    let enabled = manager.is_enabled().unwrap_or(false);
-                    let result = if enabled {
-                        manager.disable()
-                    } else {
-                        manager.enable()
-                    };
-                    if let Err(error) = result {
-                        eprintln!("Vitals auto-start: {error}");
-                    }
-                    let enabled = manager.is_enabled().unwrap_or(false);
-                    for item in &autostart_items {
-                        let _ = item.set_checked(enabled);
+                    match autostart::is_enabled() {
+                        Ok(enabled) => {
+                            let _ = apply_launch_at_login(app, !enabled);
+                        }
+                        Err(error) => eprintln!("Could not read Vitals launch at login: {error}"),
                     }
                     return;
                 }
@@ -614,7 +855,7 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .build(app)?;
 
     let app = app.handle().clone();
-    let background = std::env::args_os().any(|arg| arg == "--background");
+    let background = std::env::args_os().any(|arg| arg == autostart::BACKGROUND_ARG);
     if !background {
         open_window(&app, MAIN_WINDOW);
     }
@@ -626,13 +867,18 @@ fn build_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 matches!(role, Role::Hub) && state == Status::Running,
                 Ordering::Release,
             );
-            for menu in &menus {
-                menu.update(role, state);
-            }
-            navigation
-                .lock()
-                .unwrap()
-                .report(&app, navigation_target(role, state, &hub_url));
+            let menu_app = app.clone();
+            let menu_role = role.clone();
+            let _ = app.run_on_main_thread(move || {
+                let language = desktop_language(&menu_app);
+                menu_app
+                    .state::<NativeMenus>()
+                    .update(language, menu_role, state);
+            });
+            navigation.lock().unwrap().report(
+                &app,
+                navigation_target(role, state, &hub_url, desktop_language(&app)),
+            );
         });
         app.exit(0);
     });
@@ -644,11 +890,6 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             reopen_and_start(app)
         }))
-        .plugin(
-            tauri_plugin_autostart::Builder::new()
-                .arg("--background")
-                .build(),
-        )
         .invoke_handler(tauri::generate_handler![
             start_service,
             open_desktop_settings,
@@ -656,7 +897,10 @@ fn main() {
             save_desktop_settings,
             get_desktop_mode,
             set_desktop_mode,
-            restart_desktop_hub
+            restart_desktop_hub,
+            get_launch_at_login,
+            set_launch_at_login,
+            set_desktop_language
         ])
         .setup(build_app)
         .build(tauri::generate_context!())
@@ -756,7 +1000,7 @@ mod tests {
             device_id: "fixture-device".into(),
         });
         let hub = Url::parse("http://127.0.0.1:3993/").unwrap();
-        let page = navigation_target(&remote, Status::Running, &hub);
+        let page = navigation_target(&remote, Status::Running, &hub, Language::English);
         let target = page.url();
         assert_eq!(target.as_str(), "https://vitals.example.test/");
         assert!(!is_bundled_page(target, "/index.html"));
@@ -772,7 +1016,7 @@ mod tests {
         ] {
             assert!(!is_allowed_origin(&allowed, &Url::parse(other).unwrap()));
         }
-        let waiting = navigation_target(&remote, Status::Stopped, &hub);
+        let waiting = navigation_target(&remote, Status::Stopped, &hub, Language::English);
         assert!(is_bundled_page(waiting.url(), "/index.html"));
         assert!(waiting.origin().is_none());
     }
@@ -796,7 +1040,7 @@ mod tests {
             (&remote, Status::Running, &remote_url, &hub),
             (&remote, Status::Failed, &remote_url, &hub),
         ] {
-            let page = navigation_target(role, status, &hub);
+            let page = navigation_target(role, status, &hub, Language::English);
             let WebviewUrl::External(initial) = page.initial_url() else {
                 panic!("running dashboard must open directly");
             };
@@ -835,7 +1079,7 @@ mod tests {
                 "unconfigured",
             ),
         ] {
-            let page = navigation_target(role, status, &hub);
+            let page = navigation_target(role, status, &hub, Language::Chinese);
             let WebviewUrl::App(initial) = page.initial_url() else {
                 panic!("waiting service status must open the bundled page");
             };
@@ -844,7 +1088,7 @@ mod tests {
             assert!(is_bundled_page(&url, "/index.html"));
             assert_eq!(
                 url.query(),
-                Some(format!("mode={mode}&status={status_name}").as_str())
+                Some(format!("mode={mode}&status={status_name}&language=zh-CN").as_str())
             );
             assert!(page.origin().is_none());
         }

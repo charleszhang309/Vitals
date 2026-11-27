@@ -24,6 +24,7 @@ from .config import GIB, MIB, SamplingMode, Settings, WebhookConfig
 logger = logging.getLogger(__name__)
 REALTIME_INTERVAL = 1.0
 ECO_INTERVAL = 5.0
+IDLE_INTERVAL = 15.0
 RULES_GAP_SECONDS = 10.0
 LHM_RETRY_SECONDS = 5.0
 NUMBER = re.compile(r"^\s*([-+]?\d+(?:[.,]\d+)*)\s*(.*?)\s*$")
@@ -433,10 +434,12 @@ class Rules:
         self.last_alert_times: dict[tuple[str, str], float] = {}
         self.previous_sample: float | None = None
 
-    def evaluate(self, sample: Snapshot, cpu_temperatures: dict[str, float], now: float) -> list[Snapshot]:
+    def evaluate(self, sample: Snapshot, cpu_temperatures: dict[str, float], now: float,
+                 *, expected_interval: float = REALTIME_INTERVAL) -> list[Snapshot]:
         timestamp = sample["timestamp"]
         events = []
-        if self.previous_sample is not None and now - self.previous_sample > RULES_GAP_SECONDS:
+        gap_limit = max(RULES_GAP_SECONDS, expected_interval + ECO_INTERVAL)
+        if self.previous_sample is not None and now - self.previous_sample > gap_limit:
             # 长时间缺样时重新计时，避免把休眠或采集停顿当作连续超阈值。
             self.high_since.clear()
             self.hot_since.clear()
@@ -532,7 +535,7 @@ class Monitor:
         self.system = MacSystemSampler() if self.identity["platform"] == "macos" else SystemSampler()
         self.rules = Rules(settings)
         self.latest: Snapshot | None = None
-        self.subscribers: set[asyncio.Queue[Snapshot]] = set()
+        self.subscribers: dict[asyncio.Queue[Snapshot], float] = {}
         self.sampling_mode = settings.sampling_mode
         self.sampling_changed = asyncio.Event()
         self.notifications: asyncio.Queue[Snapshot] = asyncio.Queue(maxsize=64)
@@ -540,9 +543,11 @@ class Monitor:
 
     @property
     def sampling_interval(self) -> float:
-        if self.sampling_mode == "realtime" or (self.sampling_mode == "smart" and self.subscribers):
+        if self.sampling_mode == "realtime":
             return REALTIME_INTERVAL
-        return ECO_INTERVAL
+        if self.sampling_mode == "eco":
+            return ECO_INTERVAL
+        return min(self.subscribers.values(), default=IDLE_INTERVAL)
 
     def set_sampling_mode(self, mode: SamplingMode):
         if self.sampling_mode != mode:
@@ -553,14 +558,23 @@ class Monitor:
         mailbox = asyncio.Queue(maxsize=1)
         if self.latest is not None:
             mailbox.put_nowait(self.latest)
-        self.subscribers.add(mailbox)
-        if self.sampling_mode == "smart" and len(self.subscribers) == 1:
+        self.subscribers[mailbox] = ECO_INTERVAL
+        if self.sampling_mode == "smart":
             self.sampling_changed.set()
         return mailbox
 
+    def set_client_state(self, mailbox: asyncio.Queue[Snapshot], *, visible: bool, active_telemetry: bool):
+        interval = IDLE_INTERVAL
+        if visible:
+            interval = REALTIME_INTERVAL if active_telemetry else ECO_INTERVAL
+        if self.subscribers[mailbox] != interval:
+            self.subscribers[mailbox] = interval
+            if self.sampling_mode == "smart":
+                self.sampling_changed.set()
+
     def unsubscribe(self, mailbox: asyncio.Queue[Snapshot]):
-        self.subscribers.remove(mailbox)
-        if self.sampling_mode == "smart" and not self.subscribers:
+        del self.subscribers[mailbox]
+        if self.sampling_mode == "smart":
             self.sampling_changed.set()
 
     def publish(self, snapshot: Snapshot):
@@ -595,6 +609,7 @@ class Monitor:
         return hardware
 
     async def run(self, client: httpx.AsyncClient, power_snapshot=None):
+        expected_interval = self.sampling_interval
         while True:
             started = monotonic()
             try:
@@ -608,7 +623,7 @@ class Monitor:
                 temperatures = merge_hardware(sample, hardware)
                 if power_snapshot is not None:
                     sample["power"] = power_snapshot()
-                events = self.rules.evaluate(sample, temperatures, monotonic())
+                events = self.rules.evaluate(sample, temperatures, monotonic(), expected_interval=expected_interval)
                 self.publish(sample)
                 if self.settings.webhook.kind != "disabled":
                     for event in events:
@@ -619,11 +634,17 @@ class Monitor:
             except Exception:
                 logger.exception("本轮硬件采集失败")
             # 以本轮开始时间为基准，订阅或模式变化只重算下一轮的等待时间。
-            while (delay := started + self.sampling_interval - monotonic()) > 0:
+            expected_interval = self.sampling_interval
+            while True:
+                interval = self.sampling_interval
+                expected_interval = max(expected_interval, interval)
+                delay = started + interval - monotonic()
+                if delay <= 0:
+                    break
                 self.sampling_changed.clear()
                 try:
                     await asyncio.wait_for(self.sampling_changed.wait(), timeout=delay)
-                except TimeoutError:
+                except asyncio.TimeoutError:
                     pass
 
     async def send_notifications(self, client: httpx.AsyncClient):

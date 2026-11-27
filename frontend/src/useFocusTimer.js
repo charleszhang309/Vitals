@@ -1,3 +1,4 @@
+import { t } from './i18n/messages.js';
 import { useEffect, useRef, useState } from 'react';
 import { postJson } from './api.js';
 
@@ -65,11 +66,11 @@ export function useFocusTimer(enabled = true) {
           completed_at: new Date(completed).toISOString() });
         if (active) {
           setRecord(stats);
-          setNotice('专注完成，已计入今日统计。');
+          setNotice(t('专注完成，已计入今日统计。'));
           setTimer(initial(minutes));
         }
       } catch {
-        if (active) setNotice('专注完成，等待同步记录。');
+        if (active) setNotice(t('专注完成，等待同步记录。'));
       } finally {
         writing.current = false;
       }

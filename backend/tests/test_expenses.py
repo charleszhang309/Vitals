@@ -1,5 +1,6 @@
 import asyncio
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -59,6 +60,7 @@ def test_summary_converts_known_rates_and_keeps_unavailable_amounts(ledger):
 
     app.state.external_client = httpx.AsyncClient(transport=httpx.MockTransport(exchange_rates))
     client = TestClient(app)
+    assert client.put("/api/expenses/budget", json={"amount": "10.30"}).status_code == 200
     for amount, currency in [("0.10", "CAD"), ("0.20", "CAD"), ("8", "USD"), ("100", "JPY")]:
         receipt = client.post("/api/expenses", json={"merchant": currency, "amount": amount, "currency": currency,
                                                    "occurred_at": "2026-02-25T17:00:00Z"})
@@ -69,10 +71,12 @@ def test_summary_converts_known_rates_and_keeps_unavailable_amounts(ledger):
     assert reply["monthly_count"] == 4
     assert reply["totals_by_currency"] == {"CAD": "0.30", "JPY": "100", "USD": "8.00"}
     assert reply["missing_rates"] == ["JPY"]
+    assert reply["monthly_budget"] == {"amount": "10.30", "remaining": "0.00", "used_percent": 100}
 
 
 def test_summary_reports_unavailable_rates_when_the_request_stalls(ledger, monkeypatch):
     monkeypatch.setattr("backend.rates.QUOTE_TIMEOUT", 0.01)
+    ledger.set_budget(Decimal("100"))
     ledger.add_receipt(ReceiptInput(merchant="Cafe", amount="8.00", currency="USD",
                                     occurred_at="2026-02-25T17:00:00Z"))
 
@@ -85,8 +89,49 @@ def test_summary_reports_unavailable_rates_when_the_request_stalls(ledger, monke
         assert reply["month_total"] is None
         assert reply["totals_by_currency"] == {"USD": "8.00"}
         assert reply["missing_rates"] == ["USD"]
+        assert reply["monthly_budget"] == {"amount": "100.00", "remaining": None, "used_percent": None}
 
     asyncio.run(verify())
+
+
+def test_budget_persists_and_tracks_each_month_in_base_currency(ledger, monkeypatch):
+    app = FastAPI()
+    app.include_router(expenses_router(ledger))
+    app.state.external_client = None
+    client = TestClient(app)
+    path = "/api/expenses/budget"
+    summary = "/api/expenses/summary"
+    empty = {"amount": None, "currency": "CAD"}
+
+    assert client.get(path).json() == empty
+    assert client.get(summary).json()["monthly_budget"] is None
+    amount = {"amount": "100.00", "currency": "CAD"}
+    saved = client.put(path, json={"amount": "100"})
+    assert saved.status_code == 200
+    assert saved.json() == amount
+    for payload in ({}, {"amount": 0}, {"amount": -1}, {"amount": "12.345"}, {"amount": "10", "currency": "USD"}):
+        assert client.put(path, json=payload).status_code == 422
+    reopened = ExpenseStore(ledger.connect, ledger.zone, ledger.rates)
+    reopened.initialize()
+    assert reopened.budget() == amount
+    assert ExpenseStore(ledger.connect, ledger.zone, Rates(FinanceConfig(base_currency="USD"))).budget() == {
+        "amount": None, "currency": "USD",
+    }
+
+    receipt = client.post("/api/expenses", json={"merchant": "Cafe", "amount": "1",
+                                                 "occurred_at": "2026-03-01T04:59:59Z"})
+    receipt_path = f"/api/expenses/{receipt.json()['id']}"
+    for spent, remaining, percent in [("79.99", "20.01", 79.9), ("80", "20.00", 80), ("100", "0.00", 100),
+                                      ("115", "-15.00", 115)]:
+        assert client.patch(receipt_path, json={"amount": spent}).status_code == 200
+        assert client.get(summary).json()["monthly_budget"] == {
+            "amount": "100.00", "remaining": remaining, "used_percent": percent,
+        }
+
+    monkeypatch.setattr(ledger, "local_date", lambda now=None: date(2026, 3, 1))
+    assert client.get(summary).json()["monthly_budget"] == {"amount": "100.00", "remaining": "100.00", "used_percent": 0}
+    assert client.put(path, json={"amount": None}).json() == empty
+    assert client.get(summary).json()["monthly_budget"] is None
 
 
 def test_subscription_crud_preserves_the_billing_anchor(ledger, monkeypatch):

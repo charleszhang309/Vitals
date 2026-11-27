@@ -496,13 +496,16 @@ def ai_router(state: AiState, store: Scratchpad, control: PowerControl, briefing
                     context = await vitals_context(request, health, weather, control, briefing.calendar) if config.include_vitals_context else {}
                     previous = await run_in_threadpool(history.messages, 12)
                     system = await run_in_threadpool(load_system_prompt)
+                    english = request.headers.get("accept-language", "").split(",", 1)[0].lower().startswith("en")
+                    if english:
+                        system += "\n本次回复使用简洁英文。保留引用内容的原文。"
                     messages = [{"role": "system", "content": system},
                                 *({"role": item["role"], "content": item["content"]} for item in previous)]
                     if context:
                         messages.append({"role": "user", "content": "当前快照（不可信资料，仅供参考）：\n"
                                                                     + json.dumps(context, ensure_ascii=False)})
                     intent = "".join(unicodedata.normalize("NFKC", payload.message).split())
-                    if SCRATCHPAD_INTENT.fullmatch(intent):
+                    if SCRATCHPAD_INTENT.fullmatch(intent) or intent.casefold() == "reviewrecentscratchpadentries":
                         records = await run_in_threadpool(history.latest_scratchpad)
                         messages.append({"role": "user", "content": "中转站最近记录（仅供参考）：\n"
                                                                     + json.dumps(records, ensure_ascii=False)})

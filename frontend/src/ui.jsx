@@ -1,3 +1,4 @@
+import { getLocale, t } from './i18n/messages.js';
 import { useLayoutEffect, useRef } from 'react';
 import { motion, usePresence, useReducedMotion } from 'framer-motion';
 import { ChevronRight, X } from 'lucide-react';
@@ -20,6 +21,7 @@ export function IconButton({ label, children, href, className = '', disabled, ..
 }
 
 export function Segmented({ id, label, options, value, onChange, tabs = false, disabled = false }) {
+  const locale = getLocale();
   const groupRef = useRef(null);
   const highlightRef = useRef(null);
   const hasMeasuredRef = useRef(false);
@@ -56,7 +58,7 @@ export function Segmented({ id, label, options, value, onChange, tabs = false, d
     const observer = new ResizeObserver(() => sync(false));
     observer.observe(group);
     return () => observer.disconnect();
-  }, [value, options, reduced]);
+  }, [value, options, reduced, locale]);
 
   function moveFocus(event) {
     const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
@@ -162,7 +164,7 @@ export function Modal({ id, title, onClose, className = '', headerActions, style
       <div className="modal-body surface" inert={!present || undefined}>
         <div className="modal-header flex items-center justify-between gap-4">
           <h2 id={`${id}-title`}>{title}</h2>
-          <div className="modal-controls">{headerActions}<IconButton className="modal-close" label="关闭" onClick={dismiss}><X size={19} aria-hidden="true" /></IconButton></div>
+          <div className="modal-controls">{headerActions}<IconButton className="modal-close" label={t('关闭')} onClick={dismiss}><X size={19} aria-hidden="true" /></IconButton></div>
         </div>
         {children}
       </div>
@@ -171,7 +173,7 @@ export function Modal({ id, title, onClose, className = '', headerActions, style
 }
 
 export function DetailLink({ title, onClick }) {
-  return <button className="detail-link" type="button" aria-label={`查看${title}详情`} aria-haspopup="dialog" onClick={onClick}>
+  return <button className="detail-link" type="button" aria-label={t('查看{p1}详情', { p1: title })} aria-haspopup="dialog" onClick={onClick}>
     <ChevronRight size={17} aria-hidden="true" />
   </button>;
 }

@@ -1,3 +1,4 @@
+import { t } from './i18n/messages.js';
 import { useEffect, useRef, useState } from 'react';
 import { Download, ExternalLink } from 'lucide-react';
 import DOMPurify from 'dompurify';
@@ -20,7 +21,7 @@ function ParsedDocument({ type, url }) {
       instance.terminate();
       if (!controller.signal.aborted) setFile({ error });
     };
-    instance.onerror = () => fail('无法处理此文件预览，请下载查看。');
+    instance.onerror = () => fail(t('无法处理此文件预览，请下载查看。'));
     instance.onmessage = ({ data }) => {
       clearTimeout(timer.current);
       if (data.error) { fail(data.error); return; }
@@ -35,12 +36,12 @@ function ParsedDocument({ type, url }) {
       }
     };
     request(url, { signal: controller.signal }, (response) => {
-      if (Number(response.headers.get('Content-Length')) > PREVIEW_LIMIT) throw new Error('文件超过 15 MB，请下载查看。');
+      if (Number(response.headers.get('Content-Length')) > PREVIEW_LIMIT) throw new Error(t('文件超过 15 MB，请下载查看。'));
       return response.arrayBuffer();
     }).then((buffer) => {
       if (controller.signal.aborted) return;
-      if (buffer.byteLength > PREVIEW_LIMIT) throw new Error('文件超过 15 MB，请下载查看。');
-      timer.current = setTimeout(() => fail('预览处理超时，请下载查看。'), 12_000);
+      if (buffer.byteLength > PREVIEW_LIMIT) throw new Error(t('文件超过 15 MB，请下载查看。'));
+      timer.current = setTimeout(() => fail(t('预览处理超时，请下载查看。')), 12_000);
       instance.postMessage({ type, buffer }, [buffer]);
     }).catch((error) => { if (!controller.signal.aborted) fail(error.message); });
     return () => {
@@ -56,20 +57,20 @@ function ParsedDocument({ type, url }) {
     worker.current?.postMessage({ index });
   }
 
-  if (file.error) return <p className="feedback error" role="alert">{file.error}</p>;
+  if (file.error) return <p className="feedback error" role="alert">{t(file.error)}</p>;
   if ('html' in file) return file.html
     ? <div className="document-content word-content" dangerouslySetInnerHTML={{ __html: file.html }} />
-    : <p className="section-empty muted">文档没有可预览的内容。</p>;
-  if (!file.names) return <p className="section-empty muted" role="status">正在打开预览…</p>;
+    : <p className="section-empty muted">{t('文档没有可预览的内容。')}</p>;
+  if (!file.names) return <p className="section-empty muted" role="status">{t('正在打开预览…')}</p>;
   return <>
-    <div className="sheet-tabs" role="group" aria-label="选择工作表">{file.names.map((name, index) =>
+    <div className="sheet-tabs" role="group" aria-label={t('选择工作表')}>{file.names.map((name, index) =>
       <button key={name} type="button" aria-pressed={selected === index} onClick={() => select(index)}>{name}</button>)}</div>
     {selected === file.index && (file.rows.length ? <div className="document-content sheet-scroll" tabIndex={0} aria-label={file.names[selected]}>
       <table><tbody>{file.rows.map((row, index) => <tr key={index}>
         <th scope="row">{index + 1}</th>{row.map((value, column) => <td key={column}>{value}</td>)}
       </tr>)}</tbody></table>
-    </div> : <p className="section-empty muted">此工作表为空。</p>)}
-    {selected === file.index && file.cropped && <p className="feedback muted">预览最多显示前 500 行与 60 列，可下载查看完整内容。</p>}
+    </div> : <p className="section-empty muted">{t('此工作表为空。')}</p>)}
+    {selected === file.index && file.cropped && <p className="feedback muted">{t('预览最多显示前 500 行与 60 列，可下载查看完整内容。')}</p>}
   </>;
 }
 
@@ -85,12 +86,12 @@ export default function DocumentPreview({ item, inline, download, onClose }) {
     return () => media.removeEventListener('change', update);
   }, [query]);
   return <Modal id="document-preview" title={item.filename} className="detail-dialog preview-dialog document-dialog" onClose={onClose}>
-    {oversized ? <p className="section-empty muted">文件超过 15 MB，请下载查看。</p>
+    {oversized ? <p className="section-empty muted">{t('文件超过 15 MB，请下载查看。')}</p>
       : type === 'pdf' ? <>
-        {mobile ? <p className="section-empty muted">在新标签页打开 PDF。</p>
-          : <iframe className="document-pdf" title={`PDF 预览 ${item.filename}`} src={inline} referrerPolicy="no-referrer" />}
-        <a className="button document-open" href={inline} target="_blank" rel="noopener noreferrer"><ExternalLink size={16} />在新标签页打开</a>
+        {mobile ? <p className="section-empty muted">{t('在新标签页打开 PDF。')}</p>
+          : <iframe className="document-pdf" title={t('PDF 预览 {p1}', { p1: item.filename })} src={inline} referrerPolicy="no-referrer" />}
+        <a className="button document-open" href={inline} target="_blank" rel="noopener noreferrer"><ExternalLink size={16} />{t('在新标签页打开')}</a>
       </> : <ParsedDocument url={download} type={type} />}
-    <div className="document-actions"><a className="button" href={download} download><Download size={16} />下载文件</a></div>
+    <div className="document-actions"><a className="button" href={download} download><Download size={16} />{t('下载文件')}</a></div>
   </Modal>;
 }

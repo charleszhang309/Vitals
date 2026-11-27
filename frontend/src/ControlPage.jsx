@@ -1,3 +1,4 @@
+import { t } from './i18n/messages.js';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { Maximize2, MessageSquareQuote, Mic, MicOff, Music2, Volume2, VolumeX } from 'lucide-react';
@@ -8,7 +9,7 @@ import { HardwareSummary, MacQuickControlCard, PowerCard, QuickControlCard } fro
 import { DevicePicker, RemoteControl } from './RemoteDevice.jsx';
 import Launchers from './Launchers.jsx';
 
-export const playbackLabels = { playing: '播放中', paused: '已暂停', stopped: '已停止', offline: '设备离线' };
+export const playbackLabels = { get playing() { return t('播放中'); }, get paused() { return t('已暂停'); }, get stopped() { return t('已停止'); }, get offline() { return t('设备离线'); } };
 const volumePath = '/api/media/volume';
 const AmllLyrics = lazy(() => import('./AmllLyrics.jsx'));
 
@@ -43,9 +44,9 @@ function usePosition(track, received) {
 }
 
 const emptyPlayback = {
-  desktop_unavailable: '等待 Windows 桌面会话',
-  media_unavailable: 'Windows 媒体会话暂不可用',
-  mac_media_unavailable: 'macOS 媒体会话暂不可用',
+  get desktop_unavailable() { return t('等待 Windows 桌面会话'); },
+  get media_unavailable() { return t('Windows 媒体会话暂不可用'); },
+  get mac_media_unavailable() { return t('macOS 媒体会话暂不可用'); },
 };
 
 function PlayerCard({ media, onOpen, onAction }) {
@@ -72,28 +73,28 @@ function PlayerCard({ media, onOpen, onAction }) {
   }
 
   return <section className="surface panel detail-tile player-card" aria-labelledby="player-heading">
-    <div className="panel-header"><h2 id="player-heading">正在播放</h2></div>
+    <div className="panel-header"><h2 id="player-heading">{t('正在播放')}</h2></div>
     <div className="player-track"><MediaCover track={track} />
       <div className="player-details">
         {track ? <>
-          <h3>{track.title || '未命名媒体'}</h3>
+          <h3>{track.title || t('未命名媒体')}</h3>
           {track.artist && <p>{track.artist}</p>}
           <span className="muted media-playback-status">{[track.player, playbackLabels[track.status]].filter(Boolean).join(' · ')}</span>
-        </> : <p className="section-empty">{media.offlineLabel ?? emptyPlayback[media.reason] ?? '当前未在播放媒体'}</p>}
+        </> : <p className="section-empty">{media.offlineLabel ?? emptyPlayback[media.reason] ?? t('当前未在播放媒体')}</p>}
       </div>
     </div>
     {track && duration > 0 && <div className="player-card-progress numeric">
       <span>{clockText(position)}</span>
-      <ProgressBar value={progress} tone="blue" label="播放进度" />
+      <ProgressBar value={progress} tone="blue" label={t('播放进度')} />
       <span>{clockText(duration)}</span>
     </div>}
-    {track && <div className="player-card-actions" role="group" aria-label="快捷播放控制">
-      <IconButton label="上一首" disabled={pending || !track.actions?.previous} onClick={() => send('previous')}><PlaybackGlyph kind="previous" /></IconButton>
-      <IconButton className="player-card-primary" label={playing ? '暂停' : '播放'} disabled={pending || !track.actions?.[toggleAction]}
+    {track && <div className="player-card-actions" role="group" aria-label={t('快捷播放控制')}>
+      <IconButton label={t('上一首')} disabled={pending || !track.actions?.previous} onClick={() => send('previous')}><PlaybackGlyph kind="previous" /></IconButton>
+      <IconButton className="player-card-primary" label={playing ? t('暂停') : t('播放')} disabled={pending || !track.actions?.[toggleAction]}
         onClick={() => send(toggleAction)}><PlaybackGlyph kind={playing ? 'pause' : 'play'} /></IconButton>
-      <IconButton label="下一首" disabled={pending || !track.actions?.next} onClick={() => send('next')}><PlaybackGlyph kind="next" /></IconButton>
+      <IconButton label={t('下一首')} disabled={pending || !track.actions?.next} onClick={() => send('next')}><PlaybackGlyph kind="next" /></IconButton>
     </div>}
-    {onOpen && <button className="detail-link" type="button" aria-label="展开正在播放" aria-haspopup="dialog" onClick={onOpen}>
+    {onOpen && <button className="detail-link" type="button" aria-label={t('展开正在播放')} aria-haspopup="dialog" onClick={onOpen}>
       <Maximize2 size={17} aria-hidden="true" />
     </button>}
   </section>;
@@ -138,8 +139,8 @@ function LyricsPanel({ lyrics, track, received }) {
     });
   }, [lyrics]);
 
-  return <section className="now-lyrics" id="now-playing-lyrics" aria-label="歌词">
-    {timeline.length ? <Suspense fallback={<p className="now-lyrics-empty" role="status">正在加载歌词…</p>}>
+  return <section className="now-lyrics" id="now-playing-lyrics" aria-label={t('歌词')}>
+    {timeline.length ? <Suspense fallback={<p className="now-lyrics-empty" role="status">{t('正在加载歌词…')}</p>}>
       <AmllLyrics lines={timeline} track={track} received={received} />
     </Suspense> : <p className="lyrics-scroll lyrics-plain" tabIndex={0}>{lyrics.plain}</p>}
   </section>;
@@ -235,7 +236,7 @@ function useSystemVolume(platform) {
   const hasInput = Boolean(volume?.input_devices?.length || volume?.input_device_id
     || Number.isFinite(volume?.input_percent) || typeof volume?.input_muted === 'boolean');
   return { ...channel('', volume?.available), input: hasInput ? channel('input_', true) : null, feedback,
-    unavailableLabel: platform === 'macos' ? '等待 macOS 音频设备' : undefined };
+    unavailableLabel: platform === 'macos' ? t('等待 macOS 音频设备') : undefined };
 }
 
 function PlaybackGlyph({ kind }) {
@@ -258,15 +259,15 @@ function PlaybackGlyph({ kind }) {
 function VolumeControls({ sound, immersive = false, input = false }) {
   const { available, percent, muted, switching, queue, flush, canAdjust = available, canMute = available } = sound;
   const disabled = !available || switching;
-  const muteLabel = input ? (muted ? '开启麦克风' : '关闭麦克风') : (muted ? '取消静音' : '静音');
+  const muteLabel = input ? (muted ? t('开启麦克风') : t('关闭麦克风')) : (muted ? t('取消静音') : t('静音'));
   return <div className="volume-controls">
     <IconButton label={muteLabel} aria-pressed={canMute ? Boolean(muted) : undefined}
       disabled={disabled || !canMute} onClick={() => queue({ muted: !muted }, true)}>
       {input ? (muted ? <MicOff size={20} /> : <Mic size={20} />)
         : immersive ? <PlaybackGlyph kind={muted ? 'muted' : 'volume'} /> : muted ? <VolumeX size={21} /> : <Volume2 size={21} />}
     </IconButton>
-    <input className="media-range" type="range" min="0" max="100" aria-label={input ? '麦克风音量' : '系统主音量'}
-      aria-valuetext={percent == null ? '音量不可用' : `${percent}%`}
+    <input className="media-range" type="range" min="0" max="100" aria-label={input ? t('麦克风音量') : t('系统主音量')}
+      aria-valuetext={percent == null ? t('音量不可用') : `${percent}%`}
       disabled={disabled || !canAdjust} value={percent ?? 0} style={{ '--range-fill': `${percent ?? 0}%` }}
       onChange={(event) => queue({ percent: Number(event.target.value) })} onPointerUp={flush} onBlur={flush} />
     {!immersive && <span className="numeric volume-readout">{available && percent != null ? `${percent}%` : '—'}</span>}
@@ -275,13 +276,13 @@ function VolumeControls({ sound, immersive = false, input = false }) {
 
 function AudioLayer({ sound, input = false }) {
   const { available, deviceId, switching, devices, queue } = sound;
-  const label = input ? '输入设备' : '输出设备';
+  const label = input ? t('输入设备') : t('输出设备');
   const hasSelection = devices.some((device) => device.id === deviceId);
   return <div className="audio-layer">
     <label className="volume-device"><span>{label}</span>
       <select value={hasSelection ? deviceId : ''} disabled={!available || switching || !devices.length}
         onChange={(event) => queue({ device_id: event.target.value }, true)}>
-        {!hasSelection && <option value="" disabled>{devices.length ? `选择${label}` : available ? '系统默认' : '设备暂不可用'}</option>}
+        {!hasSelection && <option value="" disabled>{devices.length ? t('选择{p1}', { p1: label }) : available ? t('系统默认') : t('设备暂不可用')}</option>}
         {devices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}
       </select>
     </label>
@@ -290,9 +291,9 @@ function AudioLayer({ sound, input = false }) {
 }
 
 function VolumeCard({ sound }) {
-  const { available, input, feedback, unavailableLabel = '等待 Windows 音频设备' } = sound;
+  const { available, input, feedback, unavailableLabel = t('等待 Windows 音频设备') } = sound;
   return <section className="surface panel volume-card" aria-labelledby="volume-heading">
-    <div className="panel-header"><h2 id="volume-heading">系统音量</h2></div>
+    <div className="panel-header"><h2 id="volume-heading">{t('系统音量')}</h2></div>
     <AudioLayer sound={sound} />
     {input && <AudioLayer sound={input} input />}
     {!available && !input && <p className="muted subtle-line">{unavailableLabel}</p>}
@@ -329,7 +330,7 @@ function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose, onAction
     }
   }
 
-  const sessionSelector = sessions.length > 1 && <select className="now-session" aria-label="切换播放器"
+  const sessionSelector = sessions.length > 1 && <select className="now-session" aria-label={t('切换播放器')}
     value={track?.session_id ?? ''} disabled={pending} onChange={(event) => {
       setFeedback('');
       media.select(event.target.value);
@@ -340,7 +341,7 @@ function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose, onAction
     </option>)}
   </select>;
 
-  return <Modal id="now-playing" title="正在播放" className="now-playing-dialog" onClose={onClose} headerActions={sessionSelector}>
+  return <Modal id="now-playing" title={t('正在播放')} className="now-playing-dialog" onClose={onClose} headerActions={sessionSelector}>
     {track?.artwork_version && <div className="now-ambient" aria-hidden="true"
       style={{ backgroundImage: `url("${artworkUrl(track)}")` }} />}
     <div className="now-stage" data-lyrics={showLyrics}>
@@ -348,23 +349,23 @@ function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose, onAction
         <div className="now-identity">
           <MediaCover track={track} />
           <div className="now-track">
-            <h3>{track ? track.title || '未命名媒体' : emptyPlayback[media.reason] ?? '当前未在播放媒体'}</h3>
+            <h3>{track ? track.title || t('未命名媒体') : emptyPlayback[media.reason] ?? t('当前未在播放媒体')}</h3>
             {track?.artist && <p>{track.artist}</p>}
             {track?.album && <p className="muted">{track.album}</p>}
           </div>
         </div>
         {track && <div className="now-progress">
-          <ProgressBar value={progress} tone="blue" label="播放进度" />
+          <ProgressBar value={progress} tone="blue" label={t('播放进度')} />
           <div className="player-times numeric">
             <span>{clockText(position)}</span><span>{clockText(duration)}</span>
           </div>
         </div>}
         <div className="now-transport">
           {track && <div className="player-actions">
-            <IconButton label="上一首" disabled={pending || !track.actions.previous} onClick={() => send('previous')}><PlaybackGlyph kind="previous" /></IconButton>
-            <IconButton className="player-primary" label={playing ? '暂停' : '播放'} disabled={pending || !track.actions[action]}
+            <IconButton label={t('上一首')} disabled={pending || !track.actions.previous} onClick={() => send('previous')}><PlaybackGlyph kind="previous" /></IconButton>
+            <IconButton className="player-primary" label={playing ? t('暂停') : t('播放')} disabled={pending || !track.actions[action]}
               onClick={() => send(action)}><PlaybackGlyph kind={playing ? 'pause' : 'play'} /></IconButton>
-            <IconButton label="下一首" disabled={pending || !track.actions.next} onClick={() => send('next')}><PlaybackGlyph kind="next" /></IconButton>
+            <IconButton label={t('下一首')} disabled={pending || !track.actions.next} onClick={() => send('next')}><PlaybackGlyph kind="next" /></IconButton>
           </div>}
           <VolumeControls sound={sound} immersive />
         </div>
@@ -376,7 +377,7 @@ function NowPlaying({ media, sound, lyricsPreferred, onLyrics, onClose, onAction
       </div>
     </div>
     <div className="now-footer">
-      {hasLyrics && <IconButton className="now-lyrics-toggle" label="歌词" aria-pressed={showLyrics}
+      {hasLyrics && <IconButton className="now-lyrics-toggle" label={t('歌词')} aria-pressed={showLyrics}
         aria-controls={showLyrics ? 'now-playing-lyrics' : undefined} onClick={() => onLyrics(!showLyrics)}>
         <MessageSquareQuote size={23} />
       </IconButton>}
@@ -417,7 +418,7 @@ function HostControl({ sample, platform, power, onMonitor, media, ...player }) {
 
 export default function ControlPage({ hub, devices, device, offlineNotice, onDevice, onAgentCommand, onAgentActivity, ...props }) {
   return <>
-    <div className="page-heading control-heading"><h1>控制</h1>
+    <div className="page-heading control-heading"><h1>{t('控制')}</h1>
       <DevicePicker id="control-device" hub={hub} devices={devices} device={device} onChange={onDevice} />
     </div>
     {offlineNotice && <p className="feedback" role="status">{offlineNotice}</p>}

@@ -1,19 +1,20 @@
+import { localizedDate, localizedNumber, t } from './i18n/messages.js';
 import { useId, useState } from 'react';
 import { number, time } from './format.js';
 import { DetailValues, Segmented } from './ui.jsx';
 
-const weekdays = ['日', '一', '', '三', '', '五', ''];
 const views = [
-  { value: 'daily', label: '每天' },
-  { value: 'weekly', label: '每周' },
-  { value: 'cumulative', label: '累计总量' },
+  { value: 'daily', get label() { return t('每天'); } },
+  { value: 'weekly', get label() { return t('每周'); } },
+  { value: 'cumulative', get label() { return t('累计总量'); } },
 ];
-const compactNumber = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
-const resetClock = new Intl.DateTimeFormat('en-US', {
-  month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-});
-const monthName = (date) => `${Number(date.slice(5, 7))}月`;
-const tokenText = (value) => Number.isFinite(value) ? `${number(value, 0)} tokens` : '暂无数据';
+const compactNumber = localizedNumber({ notation: 'compact', maximumFractionDigits: 1 });
+const resetClock = localizedDate({ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const monthName = localizedDate({ month: 'short', timeZone: 'UTC' });
+const weekdayName = localizedDate({ weekday: 'narrow', timeZone: 'UTC' });
+const calendarDate = localizedDate({ year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
+const formattedDay = (date) => calendarDate.format(new Date(date));
+const tokenText = (value) => Number.isFinite(value) ? `${number(value, 0)} tokens` : t('暂无数据');
 
 export function availableUsageSources(data) {
   return data?.sources.filter((source) => source.available) ?? [];
@@ -41,7 +42,7 @@ function useUsagePoints(points) {
     const { id: pointId, label, tokens, peak } = point;
     return {
       'data-point': pointId,
-      'aria-label': `${label} · ${tokenText(tokens)}${peak ? ' · 单日峰值' : ''}`,
+      'aria-label': `${label} · ${tokenText(tokens)}${peak ? t(' · 单日峰值') : ''}`,
       'aria-pressed': pinned === pointId,
       tabIndex: tabbable === pointId ? 0 : -1,
       onPointerEnter: (event) => { if (event.pointerType === 'mouse') setHovered(pointId); },
@@ -80,21 +81,21 @@ function UsageTooltip({ point, id, columns }) {
     style={{ '--point-x': `${(point.column + 0.5) / columns * 100}%`, '--point-row': point.row }}>
     <span className="numeric">{point.label}</span>
     <strong className="numeric">{tokenText(point.tokens)}</strong>
-    {point.peak && <span>单日峰值</span>}
+    {point.peak && <span>{t('单日峰值')}</span>}
   </div>;
 }
 
 function UsageHeatmap({ source, full = false, interactive = false, legend = false }) {
   const { weeks, peak_tokens: peak } = source;
   const days = weeks.flatMap((week, column) => week.flatMap((day, row) => day
-    ? [{ ...day, id: day.date, label: day.date, column, row, peak: day.tokens > 0 && day.tokens === peak }] : []));
+    ? [{ ...day, id: day.date, label: formattedDay(day.date), column, row, peak: day.tokens > 0 && day.tokens === peak }] : []));
   const today = days.at(-1).date;
   const interaction = useUsagePoints(days);
-  const firstWeekday = new Date(`${days[0].date}T00:00:00Z`).getUTCDay();
+  const startOfColumn = Date.parse(days[0].date) - days[0].row * 86_400_000;
   const months = new Map();
   days.forEach((day, index) => {
     const month = day.date.slice(0, 7);
-    if (month !== days[index - 1]?.date.slice(0, 7)) months.set(day.column, monthName(day.date));
+    if (month !== days[index - 1]?.date.slice(0, 7)) months.set(day.column, monthName.format(new Date(day.date)));
   });
 
   function navigate(key, { column, row }) {
@@ -107,9 +108,12 @@ function UsageHeatmap({ source, full = false, interactive = false, legend = fals
   }
 
   return <figure className={`usage-heatmap usage-heatmap-v2${full ? ' usage-heatmap-full' : ''}`}
-    aria-label={`${source.name}近 12 周每日 Token 用量`}>
-    {full && <div className="usage-weekdays" aria-hidden="true">{Array.from({ length: 7 }, (_, index) =>
-      <span key={index}>{weekdays[(firstWeekday + index) % 7]}</span>)}</div>}
+    aria-label={t('{p1}近 12 周每日 Token 用量', { p1: source.name })}>
+    {full && <div className="usage-weekdays" aria-hidden="true">{Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(startOfColumn + index * 86_400_000);
+      const weekday = date.getUTCDay();
+      return <span key={index}>{(weekday === 0 || weekday % 2 === 1) && weekdayName.format(date)}</span>;
+    })}</div>}
     <div className="usage-heatmap-grid">
       {full && [...months].map(([column, month]) => <span key={column} className="usage-month" aria-hidden="true"
         style={{ gridColumn: column + 1 }}>{month}</span>)}
@@ -128,9 +132,9 @@ function UsageHeatmap({ source, full = false, interactive = false, legend = fals
       {interactive && <UsageTooltip point={interaction.current} id={interaction.id} columns={weeks.length} />}
     </div>
     {legend && <figcaption className="usage-heatmap-caption">
-      <span className="usage-legend" aria-label="用量从零到最高"><span>0</span>
+      <span className="usage-legend" aria-label={t('用量从零到最高')}><span>0</span>
         {[0, 1, 2, 3, 4, 5].map((level) => <i key={level} className="usage-day" data-level={level} aria-hidden="true" />)}
-        <span>多</span>
+        <span>{t('多')}</span>
       </span>
     </figcaption>}
   </figure>;
@@ -143,7 +147,7 @@ function UsagePeriods({ source, cumulative }) {
     const observed = days.filter((day) => Number.isFinite(day.tokens));
     if (!days.length) return [];
     const id = days[0].date;
-    const label = `${id} 至 ${days.at(-1).date}`;
+    const label = t('{p1} 至 {p2}', { p1: formattedDay(id), p2: formattedDay(days.at(-1).date) });
     const total = observed.reduce((sum, day) => sum + day.tokens, 0);
     running += total;
     return [{ id, label, column, row: 4, tokens: observed.length ? (cumulative ? running : total) : null }];
@@ -152,7 +156,7 @@ function UsagePeriods({ source, cumulative }) {
   const interaction = useUsagePoints(points);
   const monthLabels = new Map(points
     .filter(({ id }, index) => id.slice(0, 7) !== points[index - 1]?.id.slice(0, 7))
-    .map(({ id, column }) => [column, monthName(id)]));
+    .map(({ id, column }) => [column, monthName.format(new Date(id))]));
 
   function navigate(key, point) {
     if (key === 'Home') return points[0];
@@ -161,7 +165,7 @@ function UsagePeriods({ source, cumulative }) {
     return offset && points[points.indexOf(point) + offset];
   }
 
-  return <figure className="usage-periods" aria-label={`${source.name}近 12 周${cumulative ? '累计' : '每周'} Token 用量`}>
+  return <figure className="usage-periods" aria-label={t('{p1}近 12 周{p2} Token 用量', { p1: source.name, p2: cumulative ? t('累计') : t('每周') })}>
     <div className="usage-periods-axis numeric" aria-hidden="true"><span>{number(max, 0)}</span><span>0</span></div>
     <div className="usage-periods-grid">
       {points.map((point) => <button key={point.id} type="button" className="usage-period"
@@ -179,8 +183,8 @@ function UsagePeriods({ source, cumulative }) {
 }
 
 function UsageEmpty({ resource, children }) {
-  return <p className="widget-muted" role="status">{resource.error ? 'AI 用量暂不可用'
-    : !resource.data ? '正在读取 AI 用量…' : children}</p>;
+  return <p className="widget-muted" role="status">{resource.error ? t('AI 用量暂不可用')
+    : !resource.data ? t('正在读取 AI 用量…') : children}</p>;
 }
 
 function PreviewTokenCount({ value }) {
@@ -193,26 +197,25 @@ function PreviewTokenCount({ value }) {
 
 function quotaResetText(seconds) {
   const date = new Date(seconds * 1000);
-  if (!Number.isFinite(seconds) || !Number.isFinite(date.valueOf())) return '重置时间未知';
-  const parts = Object.fromEntries(resetClock.formatToParts(date).map(({ type, value }) => [type, value]));
-  return `${parts.month}/${parts.day} ${parts.hour}:${parts.minute} 重置`;
+  if (!Number.isFinite(seconds) || !Number.isFinite(date.valueOf())) return t('重置时间未知');
+  return t('{p1} 重置', { p1: resetClock.format(date) });
 }
 
 function UsageQuota({ name, fiveHour, sevenDay }) {
   const window = fiveHour ?? sevenDay;
-  const label = fiveHour ? '5 小时窗口' : '7 天窗口';
+  const label = fiveHour ? t('5 小时窗口') : t('7 天窗口');
   const remaining = window.remaining_percent;
   return <div className="usage-quota">
     <div className="usage-quota-heading">
       <p className="usage-quota-value numeric" aria-hidden="true">{remaining}<small>%</small></p>
-      <p className="usage-quota-provider widget-muted">剩余 · {name === 'Codex' ? 'codex' : name}</p>
+      <p className="usage-quota-provider widget-muted">{t('剩余 ·')}{name === 'Codex' ? 'codex' : name}</p>
     </div>
-    <div className="usage-quota-meter" role="meter" aria-label={`${label}额度余量`} aria-valuemin={0}
+    <div className="usage-quota-meter" role="meter" aria-label={t('{p1}额度余量', { p1: label })} aria-valuemin={0}
       aria-valuemax={100} aria-valuenow={remaining} aria-valuetext={`${remaining}%`}>
       <span style={{ width: `${remaining}%` }} />
     </div>
     <p className="usage-quota-meta widget-muted numeric">
-      {label} · {quotaResetText(window.resets_at)}{fiveHour && sevenDay && ` · 7 天余量 ${sevenDay.remaining_percent}%`}
+      {label} · {quotaResetText(window.resets_at)}{fiveHour && sevenDay && t(' · 7 天余量 {p1}%', { p1: sevenDay.remaining_percent })}
     </p>
   </div>;
 }
@@ -221,7 +224,7 @@ export function AiUsagePreview({ resource, wide, preferredSource }) {
   const sources = availableUsageSources(resource.data);
   const source = sources.find((item) => item.id === preferredSource && hasTokenHistory(item))
     ?? sources.find(hasTokenHistory) ?? sources[0];
-  if (!source) return <UsageEmpty resource={resource}>暂无可用的用量来源</UsageEmpty>;
+  if (!source) return <UsageEmpty resource={resource}>{t('暂无可用的用量来源')}</UsageEmpty>;
 
   const showHistory = hasTokenHistory(source);
   const balances = source.balances ?? [];
@@ -230,20 +233,20 @@ export function AiUsagePreview({ resource, wide, preferredSource }) {
   return <div className={`usage-preview${showHistory ? ' preview-split' : ''}`}>
     <div className="usage-preview-summary">
       {showQuota ? <UsageQuota name={source.name} fiveHour={fiveHour} sevenDay={sevenDay} /> : <>
-        <p className="widget-muted">{source.name}{showHistory ? ' · 今日' : balances.length ? ' · 余额' : ''}</p>
+        <p className="widget-muted">{source.name}{showHistory ? t(' · 今日') : balances.length ? t(' · 余额') : ''}</p>
         {showHistory && <p className="widget-value numeric usage-preview-token" data-exact-count={tokenText(source.today_tokens)}>
           <PreviewTokenCount value={source.today_tokens} /> <small>tokens</small>
         </p>}
       </>}
       {wide && showHistory && !showQuota && <dl className="usage-preview-totals">
-        <div><dt>12 周累计</dt><dd className="numeric" title={tokenText(source.total_tokens)}><PreviewTokenCount value={source.total_tokens} /></dd></div>
-        <div><dt>单日峰值</dt><dd className="numeric" title={tokenText(source.peak_tokens)}><PreviewTokenCount value={source.peak_tokens} /></dd></div>
+        <div><dt>{t('12 周累计')}</dt><dd className="numeric" title={tokenText(source.total_tokens)}><PreviewTokenCount value={source.total_tokens} /></dd></div>
+        <div><dt>{t('单日峰值')}</dt><dd className="numeric" title={tokenText(source.peak_tokens)}><PreviewTokenCount value={source.peak_tokens} /></dd></div>
       </dl>}
       {!showHistory && balances.length > 0 && <p className="widget-value numeric" title={balances.map(({ amount, currency }) => `${amount} ${currency}`).join(' · ')}>
         {balances[0].amount} <small>{balances[0].currency}</small>
       </p>}
-      {!showQuota && !showHistory && !balances.length && <p className="widget-muted">暂无用量数据</p>}
-      {(source.stale || resource.error) && <p className="widget-muted">缓存数据</p>}
+      {!showQuota && !showHistory && !balances.length && <p className="widget-muted">{t('暂无用量数据')}</p>}
+      {(source.stale || resource.error) && <p className="widget-muted">{t('缓存数据')}</p>}
     </div>
     {showHistory && <UsageHeatmap key={`${source.id}-${wide}`} source={source} full={wide} interactive={wide} />}
   </div>;
@@ -254,31 +257,31 @@ export function AiUsageDetails({ resource, preferredSource, onSource, readAt }) 
   const sources = availableUsageSources(resource.data);
   const source = sources.find((item) => item.id === preferredSource) ?? sources.find(hasTokenHistory) ?? sources[0];
   if (!source) return <div className="widget-detail-stack">
-    <UsageEmpty resource={resource}>暂无可用的用量来源</UsageEmpty>
-    {resource.error && <div><button className="text-link" type="button" onClick={resource.retry}>重试</button></div>}
+    <UsageEmpty resource={resource}>{t('暂无可用的用量来源')}</UsageEmpty>
+    {resource.error && <div><button className="text-link" type="button" onClick={resource.retry}>{t('重试')}</button></div>}
   </div>;
   const balances = source.balances ?? [];
   const { five_hour: fiveHour, seven_day: sevenDay } = source.quota ?? {};
   const days = source.weeks.flat().filter(Boolean);
   return <div className="widget-detail-stack usage-details">
-    <Segmented id="ai-usage-source" label="用量来源" value={source.id} onChange={onSource}
+    <Segmented id="ai-usage-source" label={t('用量来源')} value={source.id} onChange={onSource}
       options={sources.map(({ id, name }) => ({ value: id, label: name }))} />
     {(fiveHour || sevenDay) && <UsageQuota name={source.name} fiveHour={fiveHour} sevenDay={sevenDay} />}
     {hasTokenHistory(source) ? <>
       <div className="usage-view-heading">
-        <Segmented id="ai-usage-view" label="用量视图" options={views} value={view} onChange={setView} />
-        <p className="widget-muted numeric">{days[0].date} 至 {days.at(-1).date}{source.timezone && ` · ${source.timezone}`}</p>
+        <Segmented id="ai-usage-view" label={t('用量视图')} options={views} value={view} onChange={setView} />
+        <p className="widget-muted numeric">{t('{p1} 至 {p2}', { p1: formattedDay(days[0].date), p2: formattedDay(days.at(-1).date) })}{source.timezone && ` · ${source.timezone}`}</p>
       </div>
       {view === 'daily'
         ? <UsageHeatmap key={source.id} source={source} full interactive legend />
         : <UsagePeriods key={`${source.id}-${view}`} source={source} cumulative={view === 'cumulative'} />}
       <DetailValues items={[
-        ['今日用量', tokenText(source.today_tokens)],
-        ['累计总量', tokenText(source.total_tokens)],
-        [source.updated_at ? '更新时间' : '最近读取', time(source.updated_at ?? readAt, true)],
+        [t('今日用量'), tokenText(source.today_tokens)],
+        [t('累计总量'), tokenText(source.total_tokens)],
+        [source.updated_at ? t('更新时间') : t('最近读取'), time(source.updated_at ?? readAt, true)],
       ]} />
-    </> : <p className="section-empty">{balances.length ? '此来源仅提供余额' : '暂无 Token 用量数据'}</p>}
-    {balances.length > 0 && <DetailValues items={balances.map(({ currency, amount }) => [`余额（${currency}）`, amount])} />}
-    {(source.stale || resource.error) && <p className="widget-muted" role="status">正在显示缓存数据</p>}
+    </> : <p className="section-empty">{balances.length ? t('此来源仅提供余额') : t('暂无 Token 用量数据')}</p>}
+    {balances.length > 0 && <DetailValues items={balances.map(({ currency, amount }) => [t('余额（{p1}）', { p1: currency }), amount])} />}
+    {(source.stale || resource.error) && <p className="widget-muted" role="status">{t('正在显示缓存数据')}</p>}
   </div>;
 }

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-desktop-preferences"
+description = "Manage local launch at login and the native language from the active Vitals dashboard."
+commands.allow = ["get_launch_at_login", "set_launch_at_login", "set_desktop_language"]

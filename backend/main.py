@@ -11,11 +11,13 @@ import re
 import socket
 import sys
 from threading import Lock, Thread
+from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 import httpx
+from pydantic import StrictBool, ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
@@ -56,6 +58,12 @@ logger = logging.getLogger(__name__)
 
 class SamplingPreference(ConfigModel):
     mode: SamplingMode
+
+
+class MetricsClientState(ConfigModel):
+    type: Literal["client_state"]
+    visible: StrictBool
+    active_telemetry: StrictBool
 
 
 def local_address(value: str) -> bool:
@@ -293,11 +301,21 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
                 snapshot = await queue.get()
                 await asyncio.wait_for(websocket.send_json(snapshot), timeout=5)
 
-        async def wait_for_disconnect():
-            while (await websocket.receive())["type"] != "websocket.disconnect":
-                pass
+        async def receive_client_states():
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    return
+                payload = message.get("text")
+                if not payload or len(payload) > 256:
+                    continue
+                try:
+                    state = MetricsClientState.model_validate_json(payload)
+                except ValidationError:
+                    continue
+                monitor.set_client_state(queue, visible=state.visible, active_telemetry=state.active_telemetry)
 
-        tasks = [asyncio.create_task(send_snapshots()), asyncio.create_task(wait_for_disconnect())]
+        tasks = [asyncio.create_task(send_snapshots()), asyncio.create_task(receive_client_states())]
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             results = await asyncio.gather(*done, return_exceptions=True)

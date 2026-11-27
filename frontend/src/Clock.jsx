@@ -1,3 +1,4 @@
+import { localizedDate, t } from './i18n/messages.js';
 import { useEffect, useRef, useState } from 'react';
 import { useReducedMotion } from 'framer-motion';
 import { Clock3, Hourglass, Timer } from 'lucide-react';
@@ -6,12 +7,12 @@ import { FocusDetails } from './FocusControls.jsx';
 import { focusClock } from './useFocusTimer.js';
 import useResource from './useOverviewResource.js';
 
-const minuteFormat = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-const secondFormat = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
-const dateFormat = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
+const minuteFormat = localizedDate({ hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const secondFormat = localizedDate({ hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+const dateFormat = localizedDate({ year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
 export const clockStyles = [
-  { value: 'flip', label: '翻页' }, { value: 'digital', label: '极简数字' },
-  { value: 'analog', label: '模拟表盘' },
+  { value: 'flip', get label() { return t('翻页'); } }, { value: 'digital', get label() { return t('极简数字'); } },
+  { value: 'analog', get label() { return t('模拟表盘'); } },
 ];
 
 function useClock(period) {
@@ -38,7 +39,7 @@ function useClock(period) {
 export function HeaderClock({ onOpen }) {
   const now = useClock(60_000);
   return <Button className="header-clock numeric" aria-haspopup="dialog" onClick={onOpen}>
-    <span className="sr-only">打开全屏时钟，当前时间 </span><time>{minuteFormat.format(now)}</time>
+    <span className="sr-only">{t('打开全屏时钟，当前时间')}</span><time>{minuteFormat.format(now)}</time>
   </Button>;
 }
 
@@ -96,7 +97,8 @@ function ClockReading({ style }) {
       {style === 'digital' ? reading : <>
         <span className="sr-only">{reading}</span>
         {style === 'flip' ? <span className="flip-clock" aria-hidden="true">
-          {reading.split(':').map((value, index) => <FlipUnit key={index} value={value} reduced={reduced} />)}
+          {secondFormat.formatToParts(now).filter(({ type }) => type !== 'literal')
+            .map(({ type, value }) => <FlipUnit key={type} value={value} reduced={reduced} />)}
         </span> : <AnalogFace now={now} reduced={reduced} />}
       </>}
     </time>
@@ -124,19 +126,19 @@ export function ClockDialog({ style, focus, onClose }) {
   const active = focus.running || focus.paused || focus.finishing;
   const showing = active && showFocus;
   const actions = <>
-    {active && <IconButton label={showing ? '显示时钟' : '显示专注倒计时'} onClick={() => setShowFocus(!showing)}>
+    {active && <IconButton label={showing ? t('显示时钟') : t('显示专注倒计时')} onClick={() => setShowFocus(!showing)}>
       {showing ? <Clock3 size={18} /> : <Hourglass size={18} />}
     </IconButton>}
-    <IconButton label="专注计时" aria-expanded={panel} aria-controls={panel ? 'clock-focus-panel' : undefined}
+    <IconButton label={t('专注计时')} aria-expanded={panel} aria-controls={panel ? 'clock-focus-panel' : undefined}
       onClick={() => setPanel(!panel)}><Timer size={20} /></IconButton>
   </>;
-  return <Modal id="standby-clock" title="全屏时钟" className="clock-dialog" onClose={onClose} headerActions={actions}>
+  return <Modal id="standby-clock" title={t('全屏时钟')} className="clock-dialog" onClose={onClose} headerActions={actions}>
     {showing ? <div className="clock-reading clock-focus-reading">
-      <div className="clock-digits numeric" role="timer" aria-label="专注剩余时间">{focusClock(focus.remaining)}</div>
-      <p className="clock-date">{focus.finishing ? '正在记录专注' : focus.paused ? '专注已暂停' : '专注中'}</p>
+      <div className="clock-digits numeric" role="timer" aria-label={t('专注剩余时间')}>{focusClock(focus.remaining)}</div>
+      <p className="clock-date">{focus.finishing ? t('正在记录专注') : focus.paused ? t('专注已暂停') : t('专注中')}</p>
     </div> : <ClockReading style={style} />}
     {focus.notice && <p className="clock-notice" role="status">{focus.notice}</p>}
-    {panel && <section className="clock-focus-panel" id="clock-focus-panel" aria-label="专注计时设置">
+    {panel && <section className="clock-focus-panel" id="clock-focus-panel" aria-label={t('专注计时设置')}>
       <FocusDetails resource={totals} focus={{ ...focus, toggle: () => {
         if (!focus.running) { setShowFocus(true); setPanel(false); }
         focus.toggle();

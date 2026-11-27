@@ -1,3 +1,4 @@
+import { t } from './i18n/messages.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { Activity, Clipboard, Coffee, LockKeyhole, MonitorOff, Moon } from 'lucide-react';
@@ -27,9 +28,9 @@ export function DevicePicker({ id, hub, devices, device, onChange }) {
   if (choices.length >= (compact ? 3 : 4)) {
     return <div className="device-picker device-picker-select" data-offline={!selected.online}>
       <DeviceDot online={selected.online} />
-      <select aria-label="设备" value={selected.device_id} onChange={(event) => onChange(event.target.value)}>
+      <select aria-label={t('设备')} value={selected.device_id} onChange={(event) => onChange(event.target.value)}>
         {choices.map(({ device_id: key, name, online }) => <option key={key} value={key} data-online={Boolean(online)}>
-          {online ? '●' : '○'} {name}{!online ? ' · 离线' : ''}
+          {online ? '●' : '○'} {name}{!online ? t(' · 离线') : ''}
         </option>)}
       </select>
     </div>;
@@ -37,54 +38,54 @@ export function DevicePicker({ id, hub, devices, device, onChange }) {
   const options = choices.map(({ device_id: key, name, online }) => ({
     value: key, label: <span className="device-segment-label" data-offline={!online} title={name}>
       <DeviceDot online={online} /><span>{name}</span>
-      {!online && <span className="sr-only">（离线）</span>}
+      {!online && <span className="sr-only">{t('（离线）')}</span>}
     </span>,
   }));
-  return <div className="device-picker"><Segmented id={id} label="设备" options={options}
+  return <div className="device-picker"><Segmented id={id} label={t('设备')} options={options}
     value={selected.device_id} onChange={onChange} /></div>;
 }
 
 const batteryStates = {
-  charging: '充电中', charged: '已充满', discharging: '使用电池', not_charging: '未充电', unknown: '状态未知',
+  get charging() { return t('充电中'); }, get charged() { return t('已充满'); }, get discharging() { return t('使用电池'); }, get not_charging() { return t('未充电'); }, get unknown() { return t('状态未知'); },
 };
 
 export function batteryNote(battery) {
   return battery && [
-    batteryStates[battery.state] ?? (battery.charging ? '充电中' : '使用电池'),
-    battery.minutes_left != null && `${battery.charging ? '距充满' : '剩余'} ${sleepTime(battery.minutes_left)}`,
+    batteryStates[battery.state] ?? (battery.charging ? t('充电中') : t('使用电池')),
+    battery.minutes_left != null && `${battery.charging ? t('距充满') : t('剩余')} ${sleepTime(battery.minutes_left)}`,
   ].filter(Boolean).join(' · ');
 }
 
 function RemoteStatus({ device }) {
   return <span className="remote-status"><span className={`state-dot ${device.online ? 'live-dot' : ''}`} aria-hidden="true" />
-    {device.online ? '在线' : '已休眠或离线'}</span>;
+    {device.online ? t('在线') : t('已休眠或离线')}</span>;
 }
 
 function RemoteLastSeen({ device }) {
-  return !device.online && <p className="muted subtle-line">上次在线 <time dateTime={device.last_seen}>{time(device.last_seen, true)}</time></p>;
+  return !device.online && <p className="muted subtle-line">{t('上次在线')}<time dateTime={device.last_seen}>{time(device.last_seen, true)}</time></p>;
 }
 
 function RemoteHardwareSummary({ device, onOpen }) {
   const { battery, cpu, memory, disks, network } = device.snapshot;
   const mainDisk = disks.find((disk) => disk.mountpoint === '/');
   const readings = [
-    ...(battery ? [['电池', measure(battery.percent, '%', 0), batteryNote(battery)]] : []),
+    ...(battery ? [[t('电池'), measure(battery.percent, '%', 0), batteryNote(battery)]] : []),
     ['CPU', measure(cpu?.usage_percent, '%', 0)],
-    ['内存', measure(memory?.percent, '%', 0)],
-    ['网络', `↓ ${rateText(network?.download_bytes_per_sec)}`, `↑ ${rateText(network?.upload_bytes_per_sec)}`],
-    ['主盘剩余', bytes(mainDisk?.free_bytes)],
+    [t('内存'), measure(memory?.percent, '%', 0)],
+    [t('网络'), `↓ ${rateText(network?.download_bytes_per_sec)}`, `↑ ${rateText(network?.upload_bytes_per_sec)}`],
+    [t('主盘剩余'), bytes(mainDisk?.free_bytes)],
   ];
   return <section className="surface panel detail-tile control-hardware remote-hardware" data-offline={!device.online}
     style={{ '--metrics-count': readings.length }}>
     <div className="panel-header">
       <span className="metric-icon tone-blue" aria-hidden="true"><Activity size={21} /></span>
-      <h2>硬件监控</h2><RemoteStatus device={device} />
+      <h2>{t('硬件监控')}</h2><RemoteStatus device={device} />
     </div>
     <dl>{readings.map(([label, value, note]) => <div key={label}>
       <dt>{label}</dt><dd className="numeric">{value}{note && <small>{note}</small>}</dd>
     </div>)}</dl>
     <RemoteLastSeen device={device} />
-    <DetailLink title="硬件监控" onClick={onOpen} />
+    <DetailLink title={t('硬件监控')} onClick={onOpen} />
   </section>;
 }
 
@@ -94,37 +95,37 @@ export function RemoteHardware({ device }) {
     <div className="remote-detail-header"><h3>{device.name}</h3><RemoteStatus device={device} /></div>
     <RemoteLastSeen device={device} />
     <div className="remote-detail-grid">
-      {battery && <section><h4>电池</h4><DetailValues items={[
-        ['电量', measure(battery.percent, '%')], ['供电状态', batteryNote(battery)],
-        ['电池健康度', measure(battery.health_percent, '%')], ['循环次数', battery.cycle_count],
-        ['温度', measure(battery.temperature_c, '°C')],
+      {battery && <section><h4>{t('电池')}</h4><DetailValues items={[
+        [t('电量'), measure(battery.percent, '%')], [t('供电状态'), batteryNote(battery)],
+        [t('电池健康度'), measure(battery.health_percent, '%')], [t('循环次数'), battery.cycle_count],
+        [t('温度'), measure(battery.temperature_c, '°C')],
       ]} /></section>}
-      <section><h4>CPU 与内存</h4><DetailValues items={[
-        ['CPU 使用率', measure(cpu?.usage_percent, '%')], ['处理器', cpu?.name],
-        ['核心 / 线程', cpu?.physical_cores && cpu?.logical_cores ? `${cpu.physical_cores} / ${cpu.logical_cores}` : null],
-        ['内存使用率', measure(memory?.percent, '%')],
-        ['已用 / 总量', memory && `${bytes(memory.used_bytes)} / ${bytes(memory.total_bytes)}`],
-        ['可用内存', bytes(memory?.available_bytes)],
+      <section><h4>{t('CPU 与内存')}</h4><DetailValues items={[
+        [t('CPU 使用率'), measure(cpu?.usage_percent, '%')], [t('处理器'), cpu?.name],
+        [t('核心 / 线程'), cpu?.physical_cores && cpu?.logical_cores ? `${cpu.physical_cores} / ${cpu.logical_cores}` : null],
+        [t('内存使用率'), measure(memory?.percent, '%')],
+        [t('已用 / 总量'), memory && `${bytes(memory.used_bytes)} / ${bytes(memory.total_bytes)}`],
+        [t('可用内存'), bytes(memory?.available_bytes)],
       ]} /></section>
-      <section><h4>磁盘空间</h4>
+      <section><h4>{t('磁盘空间')}</h4>
         {disks.length ? <ul className="remote-disks">
           {disks.map((disk, index) => <li key={`${disk.mountpoint}-${index}`}>
             <div className="hardware-label"><strong>{disk.name || (disk.mountpoint === '/' ? 'Macintosh HD' : disk.mountpoint)}</strong>
-              <span className="muted numeric">剩余 {bytes(disk.free_bytes)} / {bytes(disk.total_bytes)}</span></div>
-            <ProgressBar value={disk.total_bytes ? (1 - disk.free_bytes / disk.total_bytes) * 100 : null} label={`${disk.mountpoint} 使用率`} />
+              <span className="muted numeric">{t('剩余 {p1} / {p2}', { p1: bytes(disk.free_bytes), p2: bytes(disk.total_bytes) })}</span></div>
+            <ProgressBar value={disk.total_bytes ? (1 - disk.free_bytes / disk.total_bytes) * 100 : null} label={t('{p1} 使用率', { p1: disk.mountpoint })} />
           </li>)}
-        </ul> : <p className="muted">暂无磁盘数据</p>}
+        </ul> : <p className="muted">{t('暂无磁盘数据')}</p>}
       </section>
-      <section><h4>内存占用前 5 进程</h4>
+      <section><h4>{t('内存占用前 5 进程')}</h4>
         {processes.length ? <ol className="remote-processes">
           {processes.map((process, index) => <li key={process.pid ?? index}>
             <span>{process.name}</span><strong className="numeric">{bytes(process.rss_bytes)}</strong>
           </li>)}
-        </ol> : <p className="muted">暂无进程数据</p>}
+        </ol> : <p className="muted">{t('暂无进程数据')}</p>}
       </section>
-      <section className="remote-network"><h4>网络与 IP</h4>
+      <section className="remote-network"><h4>{t('网络与 IP')}</h4>
         <DetailValues items={[
-          ['下载', rateText(network?.download_bytes_per_sec)], ['上传', rateText(network?.upload_bytes_per_sec)],
+          [t('下载'), rateText(network?.download_bytes_per_sec)], [t('上传'), rateText(network?.upload_bytes_per_sec)],
           ...(network?.interfaces ?? []).map(({ name, addresses, tailscale }) => [
             tailscale ? name + ' · Tailscale' : name, addresses.join(' · '),
           ]),
@@ -135,12 +136,12 @@ export function RemoteHardware({ device }) {
 }
 
 const actions = {
-  lock: '锁屏', display_sleep: '息屏', display_lock: '息屏', sleep: '休眠', volume_set: '调整音量',
-  volume_mute: '切换静音', audio_device_set: '切换输出设备', caffeinate_toggle: '保持唤醒', clipboard_push: '推送剪贴板',
-  input_volume_set: '调整麦克风音量', input_volume_mute: '切换麦克风静音', input_audio_device_set: '切换输入设备',
-  media_previous: '上一首', media_play_pause: '播放或暂停', media_next: '下一首',
+  get lock() { return t('锁屏'); }, get display_sleep() { return t('息屏'); }, get display_lock() { return t('息屏'); }, get sleep() { return t('休眠'); }, get volume_set() { return t('调整音量'); },
+  get volume_mute() { return t('切换静音'); }, get audio_device_set() { return t('切换输出设备'); }, get caffeinate_toggle() { return t('保持唤醒'); }, get clipboard_push() { return t('推送剪贴板'); },
+  get input_volume_set() { return t('调整麦克风音量'); }, get input_volume_mute() { return t('切换麦克风静音'); }, get input_audio_device_set() { return t('切换输入设备'); },
+  get media_previous() { return t('上一首'); }, get media_play_pause() { return t('播放或暂停'); }, get media_next() { return t('下一首'); },
 };
-const results = { queued: '等待设备接收', delivered: '等待设备回报', succeeded: '已执行', failed: '执行失败', expired: '等待超时' };
+const results = { get queued() { return t('等待设备接收'); }, get delivered() { return t('等待设备回报'); }, get succeeded() { return t('已执行'); }, get failed() { return t('执行失败'); }, get expired() { return t('等待超时'); } };
 const transportActions = { toggle: 'media_play_pause', next: 'media_next', previous: 'media_previous' };
 const pending = (command) => command?.status === 'queued' || command?.status === 'delivered';
 
@@ -209,7 +210,7 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
     actions: { toggle: device.online && !awaiting('media_play_pause'), previous: device.online, next: device.online },
   } : null;
   const received = playingOverride?.received ?? sampledAt;
-  const offlineLabel = device.online ? undefined : `${device.name} 已休眠或离线`;
+  const offlineLabel = device.online ? undefined : t('{p1} 已休眠或离线', { p1: device.name });
   const playback = { track, sessions: [], received, reload: onCommand, offlineLabel };
 
   function predict(action, value) {
@@ -312,25 +313,25 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
   }
 
   const commandText = command && [actions[command.action], results[command.status],
-    command.status === 'failed' && command.message].filter(Boolean).join(' · ');
+    command.status === 'failed' && t(command.message)].filter(Boolean).join(' · ');
   const commandFailed = command?.status === 'failed' || command?.status === 'expired';
 
   return <>
     <RemoteHardwareSummary device={device} onOpen={onMonitor} />
     <section className="surface panel quick-card remote-quick" aria-labelledby="remote-quick-heading">
-      <div className="panel-header"><h2 id="remote-quick-heading">主机快捷控制</h2></div>
-      <div className="quick-control-row remote-quick-row" role="group" aria-label={`${device.name} 操作`}>
-        {upgraded ? <Button disabled={disabled} onClick={() => send('display_lock')}><LockKeyhole size={15} /><span>息屏</span></Button> : <>
-          <Button disabled={disabled} onClick={() => setConfirm('lock')} aria-haspopup="dialog"><LockKeyhole size={15} /><span>锁屏</span></Button>
-          <Button disabled={disabled} onClick={() => send('display_sleep')}><MonitorOff size={15} /><span>熄屏</span></Button>
+      <div className="panel-header"><h2 id="remote-quick-heading">{t('主机快捷控制')}</h2></div>
+      <div className="quick-control-row remote-quick-row" role="group" aria-label={t('{p1} 操作', { p1: device.name })}>
+        {upgraded ? <Button disabled={disabled} onClick={() => send('display_lock')}><LockKeyhole size={15} /><span>{t('息屏')}</span></Button> : <>
+          <Button disabled={disabled} onClick={() => setConfirm('lock')} aria-haspopup="dialog"><LockKeyhole size={15} /><span>{t('锁屏')}</span></Button>
+          <Button disabled={disabled} onClick={() => send('display_sleep')}><MonitorOff size={15} /><span>{t('熄屏')}</span></Button>
         </>}
-        <Button disabled={disabled} onClick={() => setConfirm('sleep')} aria-haspopup="dialog"><Moon size={15} /><span>休眠</span></Button>
+        <Button disabled={disabled} onClick={() => setConfirm('sleep')} aria-haspopup="dialog"><Moon size={15} /><span>{t('休眠')}</span></Button>
         {upgraded && <>
           <Button disabled={disabled || awaiting('caffeinate_toggle')} aria-pressed={caffeinate} onClick={() => send('caffeinate_toggle')}>
-            <Coffee size={15} /><span>保持唤醒</span>
+            <Coffee size={15} /><span>{t('保持唤醒')}</span>
           </Button>
-          <Button disabled={disabled || awaiting('clipboard_push')} title="发送 Mac 剪贴板内容到中转站"
-            onClick={() => send('clipboard_push')}><Clipboard size={15} /><span>推剪贴板</span></Button>
+          <Button disabled={disabled || awaiting('clipboard_push')} title={t('发送 Mac 剪贴板内容到中转站')}
+            onClick={() => send('clipboard_push')}><Clipboard size={15} /><span>{t('推剪贴板')}</span></Button>
         </>}
         {device.os === 'macos' && device.snapshot.capabilities?.includes('screenshot') &&
           <ScreenshotControl deviceId={device.device_id} deviceName={device.name} disabled={disabled} />}
@@ -341,16 +342,16 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
       commandStatus: '', commandError: error || (commandFailed ? commandText : ''),
       sound: {
         ...audioChannel(''), input: hasInput ? audioChannel('input_') : null,
-        unavailableLabel: offlineLabel ?? '当前输出设备未提供音量',
+        unavailableLabel: offlineLabel ?? t('当前输出设备未提供音量'),
       },
     })}
     <AnimatePresence>
       {confirm && <Modal id="remote-confirm" className="detail-dialog shutdown-dialog"
-        title={`确认${actions[confirm]}`} onClose={() => setConfirm(null)}>
-        <p className="muted">确定让 {device.name} {actions[confirm]}吗？</p>
+        title={t('确认{p1}', { p1: actions[confirm] })} onClose={() => setConfirm(null)}>
+        <p className="muted">{t('确定让 {p1} {p2}吗？', { p1: device.name, p2: actions[confirm] })}</p>
         <div className="quick-confirm-actions">
-          <Button onClick={() => setConfirm(null)}>取消</Button>
-          <Button disabled={disabled} onClick={() => { send(confirm); setConfirm(null); }}>确认</Button>
+          <Button onClick={() => setConfirm(null)}>{t('取消')}</Button>
+          <Button disabled={disabled} onClick={() => { send(confirm); setConfirm(null); }}>{t('确认')}</Button>
         </div>
       </Modal>}
     </AnimatePresence>

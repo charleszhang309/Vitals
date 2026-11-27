@@ -63,12 +63,7 @@ fn tray_owned_hub_lifecycle() {
     });
     let wait = |expected: Status| {
         let actual = statuses.recv_timeout(Duration::from_secs(35)).unwrap();
-        assert!(
-            actual == expected,
-            "expected {}, got {}",
-            expected.label(&Role::Hub),
-            actual.label(&Role::Hub)
-        );
+        assert_eq!(actual, expected);
     };
     let probe = || {
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();

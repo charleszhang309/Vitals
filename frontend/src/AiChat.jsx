@@ -1,3 +1,4 @@
+import { t } from './i18n/messages.js';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUp, Sparkles, Square, Trash2 } from 'lucide-react';
 import { request } from './api.js';
@@ -16,7 +17,7 @@ function streamChat(message, signal, append, toolEvent) {
 
 async function readChatStream(response, append, toolEvent) {
   if (!response.body || !response.headers.get('Content-Type')?.includes('text/event-stream')) {
-    throw new Error('服务器没有返回实时聊天流。');
+    throw new Error(t('服务器没有返回实时聊天流。'));
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -35,10 +36,10 @@ async function readChatStream(response, append, toolEvent) {
         const payload = JSON.parse(data);
         if (type === 'delta') append(payload.text);
         else if (type === 'tool') toolEvent(payload);
-        else if (type === 'error') throw new Error(payload.message);
+        else if (type === 'error') throw new Error(t(payload.message));
         else if (type === 'done') return payload.message_id;
       }
-      if (part.done) throw new Error('连接中断，请重试。');
+      if (part.done) throw new Error(t('连接中断，请重试。'));
     }
   } finally {
     await reader.cancel().catch(() => {});
@@ -70,8 +71,8 @@ function MessageContent({ text }) {
 function AssistantMessage({ text, tools = [], confirmations, children }) {
   const badges = tools.filter((event) => !event.confirmation);
   return <div className="ai-answer">
-    {badges.length > 0 && <div className="ai-tool-badges" aria-label="工具操作状态">
-      {badges.map((event, index) => <span key={index} data-ok={event.ok}><span aria-hidden="true">{event.ok ? '✓' : '!'}</span> {event.label}</span>)}
+    {badges.length > 0 && <div className="ai-tool-badges" aria-label={t('工具操作状态')}>
+      {badges.map((event, index) => <span key={index} data-ok={event.ok}><span aria-hidden="true">{event.ok ? '✓' : '!'}</span> {t(event.label)}</span>)}
     </div>}
     <div className="ai-bubble ai-assistant" aria-label="Vitals AI"><MessageContent text={text} />{children}</div>
     {tools.filter((event) => event.confirmation).map(({ confirmation }) => <AiConfirmation key={confirmation.id}
@@ -185,39 +186,39 @@ export default function AiChat({ settings, onClose }) {
   }
 
   return <Modal id="vitals-ai" title="Vitals AI" className="detail-dialog ai-chat" style={viewportStyle} onClose={onClose}
-    headerActions={<IconButton label="清空对话" disabled={running || clearing || (!messages?.length && !turn)}
+    headerActions={<IconButton label={t('清空对话')} disabled={running || clearing || (!messages?.length && !turn)}
       onClick={() => setConfirmClear((previous) => !previous)}><Trash2 size={17} /></IconButton>}>
     {confirmClear && <div className="ai-clear">
-      <span>清空所有设备上的聊天记录？</span>
-      <Button onClick={() => setConfirmClear(false)} disabled={clearing}>取消</Button>
-      <Button onClick={clear} disabled={clearing}>清空</Button>
+      <span>{t('清空所有设备上的聊天记录？')}</span>
+      <Button onClick={() => setConfirmClear(false)} disabled={clearing}>{t('取消')}</Button>
+      <Button onClick={clear} disabled={clearing}>{t('清空')}</Button>
     </div>}
     <div className="ai-chat-scroll" ref={body} onScroll={(event) => {
       const el = event.currentTarget;
       stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     }}>
-      {!settings.configured && <p className="ai-empty muted">请在服务器 config.json 中配置 ai.api_key</p>}
+      {!settings.configured && <p className="ai-empty muted">{t('请在服务器 config.json 中配置 ai.api_key')}</p>}
       {settings.configured && messages?.length === 0 && !turn && <div className="ai-quick">
         <Sparkles size={26} aria-hidden="true" />
-        {shortcuts.map((prompt) => <Button key={prompt} onClick={() => send(prompt)}>{prompt}</Button>)}
+        {shortcuts.map((prompt) => <Button key={prompt} onClick={() => send(t(prompt))}>{t(prompt)}</Button>)}
       </div>}
-      {messages === null && !error && <p className="ai-empty muted" role="status">正在读取对话…</p>}
+      {messages === null && !error && <p className="ai-empty muted" role="status">{t('正在读取对话…')}</p>}
       {messages?.map((message) => message.role === 'assistant'
         ? <AssistantMessage key={message.id} text={message.content} tools={toolReplies[message.id]} confirmations={confirmations} />
-        : <div key={message.id} className="ai-bubble ai-user" aria-label="你"><MessageContent text={message.content} /></div>)}
+        : <div key={message.id} className="ai-bubble ai-user" aria-label={t('你')}><MessageContent text={message.content} /></div>)}
       {turn && <>
         <div className="ai-bubble ai-user"><MessageContent text={turn.prompt} /></div>
-        <AssistantMessage text={turn.answer || (running ? '正在生成…' : '回复未完成')} tools={turn.tools} confirmations={confirmations}>
+        <AssistantMessage text={turn.answer || (running ? t('正在生成…') : t('回复未完成'))} tools={turn.tools} confirmations={confirmations}>
           {running && <span className="ai-cursor" aria-hidden="true" />}
-          {turn.interrupted && turn.answer && <small className="muted">回复未完整保存</small>}
+          {turn.interrupted && turn.answer && <small className="muted">{t('回复未完整保存')}</small>}
         </AssistantMessage>
       </>}
     </div>
     {error && <div className="feedback error ai-error" role="alert">{error}
-      {messages === null && <Button onClick={() => { setError(''); setRevision((value) => value + 1); }}>重试</Button>}
+      {messages === null && <Button onClick={() => { setError(''); setRevision((value) => value + 1); }}>{t('重试')}</Button>}
     </div>}
     <form className="ai-composer" onSubmit={(event) => { event.preventDefault(); send(input); }}>
-      <textarea aria-label="聊天消息" placeholder="发消息给 Vitals AI" value={input} maxLength={6000}
+      <textarea aria-label={t('聊天消息')} placeholder={t('发消息给 Vitals AI')} value={input} maxLength={6000}
         disabled={!settings.configured} rows={1} onChange={(event) => setInput(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !running) {
@@ -225,8 +226,8 @@ export default function AiChat({ settings, onClose }) {
             send(input);
           }
         }} />
-      {running ? <IconButton label="停止" onClick={() => stream.current?.abort()}><Square size={16} fill="currentColor" /></IconButton>
-        : <IconButton label="发送" type="submit" disabled={!input.trim() || messages === null || !settings.configured || clearing}>
+      {running ? <IconButton label={t('停止')} onClick={() => stream.current?.abort()}><Square size={16} fill="currentColor" /></IconButton>
+        : <IconButton label={t('发送')} type="submit" disabled={!input.trim() || messages === null || !settings.configured || clearing}>
           <ArrowUp size={20} />
         </IconButton>}
     </form>

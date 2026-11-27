@@ -1,10 +1,11 @@
+import { localizedDate, localizedNumber, t } from './i18n/messages.js';
 const numberFormats = new Map();
-const clock = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
-const dateTime = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const clock = localizedDate({ hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+const dateTime = localizedDate({ year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
 export function number(value, digits = 1) {
   if (!Number.isFinite(value)) return '—';
-  if (!numberFormats.has(digits)) numberFormats.set(digits, new Intl.NumberFormat('zh-CN', { maximumFractionDigits: digits }));
+  if (!numberFormats.has(digits)) numberFormats.set(digits, localizedNumber({ maximumFractionDigits: digits }));
   return numberFormats.get(digits).format(value);
 }
 
@@ -45,7 +46,7 @@ export function time(value, date = false) {
 export function sleepTime(minutes) {
   if (!Number.isFinite(minutes)) return '—';
   const whole = Math.round(minutes);
-  return whole < 60 ? `${whole} 分` : `${Math.floor(whole / 60)} 小时 ${whole % 60} 分`;
+  return whole < 60 ? t('{p1} 分', { p1: whole }) : t('{p1} 小时 {p2} 分', { p1: Math.floor(whole / 60), p2: whole % 60 });
 }
 
 export function duration(start, end) {
@@ -54,5 +55,6 @@ export function duration(start, end) {
   const seconds = Math.floor(delta / 1000);
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-  return `${hours ? `${hours} 小时 ` : ''}${hours || minutes ? `${minutes} 分 ` : ''}${seconds % 60} 秒`;
+  return [hours ? t('{p1} 小时', { p1: hours }) : '', hours || minutes ? t('{p1} 分', { p1: minutes }) : '',
+    t('{p1} 秒', { p1: seconds % 60 })].filter(Boolean).join(' ');
 }

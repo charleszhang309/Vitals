@@ -1,3 +1,4 @@
+import { t } from './i18n/messages.js';
 import { useState } from 'react';
 import { AppWindow, ExternalLink } from 'lucide-react';
 import { httpUrl, request } from './api.js';
@@ -19,7 +20,7 @@ export default function Launchers() {
     setFeedback(null);
     try {
       await request(`${base}/${encodeURIComponent(entry.id)}`, { method: 'POST' });
-      setFeedback({ message: `已请求启动 ${entry.name}` });
+      setFeedback({ message: t('已请求启动 {p1}', { p1: entry.name }) });
     } catch (error) {
       setFeedback({ message: error.message, failed: true });
     } finally {
@@ -28,7 +29,7 @@ export default function Launchers() {
   }
 
   return <section className="surface panel launcher-card" aria-labelledby="launcher-heading">
-    <div className="panel-header"><h2 id="launcher-heading">快捷启动</h2></div>
+    <div className="panel-header"><h2 id="launcher-heading">{t('快捷启动')}</h2></div>
     <div className="launcher-actions">
       {entries.map((entry) => entry.kind === 'url'
         ? <a key={entry.id} className="button"
@@ -37,7 +38,7 @@ export default function Launchers() {
           <ExternalLink size={17} aria-hidden="true" /><span>{entry.name}</span>
         </a>
         : <Button key={entry.id} disabled={Boolean(busy)} onClick={() => launch(entry)}>
-          <AppWindow size={17} aria-hidden="true" /><span>{busy === entry.id ? '正在启动…' : entry.name}</span>
+          <AppWindow size={17} aria-hidden="true" /><span>{busy === entry.id ? t('正在启动…') : entry.name}</span>
         </Button>)}
     </div>
     {feedback && <p className={`feedback${feedback.failed ? ' error' : ''}`} role={feedback.failed ? 'alert' : 'status'}>

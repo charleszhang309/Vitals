@@ -1,3 +1,4 @@
+import { t } from './i18n/messages.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, ExternalLink, RefreshCw } from 'lucide-react';
 import { version as frontendVersion } from '../package.json';
@@ -93,31 +94,30 @@ export function AboutSettings({ updates, enabled, onToggle }) {
     <div className="about-app">
       <img src={httpUrl('/icon-192.png').href} alt="" width="54" height="54" />
       <div><h3>Vitals</h3>
-        <p className="muted">v{currentVersion}{platform ? ` · ${platform}` : ''}{identity?.desktop ? ' · 桌面版' : ''}</p>
+        <p className="muted">v{currentVersion}{platform ? ` · ${platform}` : ''}{identity?.desktop ? t(' · 桌面版') : ''}</p>
       </div>
     </div>
     <a className="button about-repository" href={REPOSITORY} target="_blank" rel="noopener noreferrer">
-      <ExternalLink size={16} />GitHub 仓库
-    </a>
+      <ExternalLink size={16} />{t('GitHub 仓库')}</a>
     <section className="settings-subsection about-updates">
       <div className="settings-row">
-        <h3>更新</h3>
-        <Button onClick={() => check()} disabled={busy}><RefreshCw size={16} />{busy ? '正在查找…' : '查找更新'}</Button>
+        <h3>{t('更新')}</h3>
+        <Button onClick={() => check()} disabled={busy}><RefreshCw size={16} />{busy ? t('正在查找…') : t('查找更新')}</Button>
       </div>
-      <label className="settings-row"><span>自动检查更新</span>
+      <label className="settings-row"><span>{t('自动检查更新')}</span>
         <input type="checkbox" role="switch" className="toggle-switch" checked={enabled}
           onChange={(event) => onToggle(event.target.checked)} />
       </label>
       {error && <p className="feedback error" role="alert">{error}</p>}
       {release?.has_update && <div className="about-release" role="status">
-        <strong>发现新版本 v{release.latest_version}</strong>
+        <strong>{t('发现新版本 v{p1}', { p1: release.latest_version })}</strong>
         {release.notes && <p className="about-notes">{release.notes}</p>}
         <a className="button" href={release.download_url} target="_blank" rel="noopener noreferrer">
-          <Download size={16} />{release.download_url === release.release_url ? '查看发布页' : '下载安装包'}
+          <Download size={16} />{release.download_url === release.release_url ? t('查看发布页') : t('下载安装包')}
         </a>
       </div>}
       {!error && release && !release.has_update && <p className="muted" role="status">
-        {release.latest_version ? '已是最新版本' : 'GitHub 暂无公开发布版本'}
+        {release.latest_version ? t('已是最新版本') : t('GitHub 暂无公开发布版本')}
       </p>}
     </section>
   </div>;

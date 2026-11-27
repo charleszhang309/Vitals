@@ -9,6 +9,16 @@ use uuid::Uuid;
 const SETTINGS_FILE: &str = "desktop-settings.json";
 const INVALID_URL: &str = "主机地址必须是 HTTPS 服务地址，例如 https://vitals.example.com。";
 const INVALID_TOKEN: &str = "请输入主机的配对令牌。令牌不能包含空白或非 ASCII 字符。";
+const SAVE_FAILED: &str = "无法保存 Vitals 桌面设置。";
+
+pub fn english_error(error: &'static str) -> &'static str {
+    match error {
+        INVALID_URL => "Enter the hub's HTTPS address, such as https://vitals.example.com.",
+        INVALID_TOKEN => "Enter the hub's pairing token using ASCII characters without spaces.",
+        SAVE_FAILED => "Could not save Vitals desktop settings.",
+        _ => error,
+    }
+}
 
 #[derive(Clone, Copy, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -158,9 +168,9 @@ impl SettingsStore {
             }
         };
         let settings = Settings { role, remote };
-        save_settings(&self.path, &settings).map_err(|error| {
+        save_json(&self.path, &settings).map_err(|error| {
             eprintln!("Could not save Vitals desktop settings: {error}");
-            "无法保存 Vitals 桌面设置。"
+            SAVE_FAILED
         })?;
         let active = settings.role();
         *current = Some(settings);
@@ -215,7 +225,7 @@ fn read_settings(file: File) -> Result<Settings, &'static str> {
     Ok(settings)
 }
 
-fn save_settings(path: &Path, settings: &Settings) -> io::Result<()> {
+pub fn save_json(path: &Path, settings: &impl Serialize) -> io::Result<()> {
     let directory = path.parent().expect("settings directory");
     fs::create_dir_all(directory)?;
     // NamedTempFile is created owner-only on Unix and inherits the user's profile ACL on Windows.

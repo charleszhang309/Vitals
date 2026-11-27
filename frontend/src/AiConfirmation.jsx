@@ -1,3 +1,4 @@
+import { t } from './i18n/messages.js';
 import { useEffect, useRef, useState } from 'react';
 import { postJson, request } from './api.js';
 import { Button } from './ui.jsx';
@@ -40,13 +41,13 @@ export default function AiConfirmation({ confirmation, state, onResolve }) {
     return () => window.clearTimeout(timer);
   }, [confirmation.expires_at]);
 
-  return <div className="ai-confirmation" aria-label="待确认的操作">
-    <strong>{confirmation.label}</strong>
+  return <div className="ai-confirmation" aria-label={t('待确认的操作')}>
+    <strong>{t(confirmation.label)}</strong>
     {state?.message || expired && !state?.busy ? <span className={state?.error ? 'feedback error' : 'muted'} role="status">
-      {state?.message ?? '已过期'}
+      {t(state?.message ?? '已过期')}
     </span> : <div className="ai-confirmation-actions">
-      <Button disabled={state?.busy} onClick={() => onResolve(confirmation, false)}>取消</Button>
-      <Button disabled={state?.busy} className="primary-button" onClick={() => onResolve(confirmation, true)}>确认执行</Button>
+      <Button disabled={state?.busy} onClick={() => onResolve(confirmation, false)}>{t('取消')}</Button>
+      <Button disabled={state?.busy} className="primary-button" onClick={() => onResolve(confirmation, true)}>{t('确认执行')}</Button>
     </div>}
   </div>;
 }

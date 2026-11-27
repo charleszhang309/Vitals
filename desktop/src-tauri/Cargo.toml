@@ -1,6 +1,6 @@
 [package]
 name = "vitals-desktop"
-version = "2.3.1"
+version = "2.4.0"
 edition = "2021"
 
 [build-dependencies]
@@ -11,11 +11,15 @@ open = "5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["tray-icon", "dynamic-acl"] }
-tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
 tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Globalization"] }
+winreg = "0.56"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+plist = "1"
 tauri = { version = "2", features = ["image-png"] }

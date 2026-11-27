@@ -1,3 +1,4 @@
+import { t } from './i18n/messages.js';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'framer-motion';
 import { Activity, RefreshCw, Settings, Sparkles } from 'lucide-react';
@@ -16,12 +17,13 @@ import { useFocusTimer } from './useFocusTimer.js';
 import useOverviewResource from './useOverviewResource.js';
 import { HUB_DEVICE_ID } from './RemoteDevice.jsx';
 import { request, sendJson } from './api.js';
+import { useI18n } from './i18n/index.jsx';
 
 const AiChat = lazy(() => import('./AiChat.jsx'));
 const SetupWizard = lazy(() => import('./SetupWizard.jsx'));
 const setupWizardKey = 'vitals.setup-wizard.seen';
-const views = [{ value: 'today', label: '今日概览' }, { value: 'control', label: '控制' },
-  { value: 'scratchpad', label: '中转站' }];
+const views = [{ value: 'today', get label() { return t('今日概览'); } }, { value: 'control', get label() { return t('控制'); } },
+  { value: 'scratchpad', get label() { return t('中转站'); } }];
 
 function useHostUpdate() {
   const host = useOverviewResource('/api/system/version', 300_000).data;
@@ -63,6 +65,7 @@ function rememberSetupWizard() {
 }
 
 export default function App() {
+  useI18n();
   const [view, setView] = useState('today');
   const [playerOpen, setPlayerOpen] = useState(false);
   const [clockOpen, setClockOpen] = useState(false);
@@ -94,13 +97,12 @@ export default function App() {
   const primaryDevice = devices.find((item) => item.device_id === defaultDevice);
   const waitingForPrimary = defaultDevice !== HUB_DEVICE_ID && !agents.data;
   const waitingForSelection = (selectedDevice ?? defaultDevice) !== HUB_DEVICE_ID && !agents.data && !agents.error;
-  const telemetry = useTelemetry(settings || ((monitorOpen || view === 'control') && !device && !waitingForSelection) ||
-    (view === 'today' && !primaryDevice && !waitingForPrimary && widgets.host !== false));
+  const telemetry = useTelemetry(true, { activeTelemetry: monitorOpen || view === 'control' });
   const platform = info.data?.platform ?? telemetry.sample?.platform;
   const hub = {
     device_id: HUB_DEVICE_ID, platform,
     reportedName: info.data?.name,
-    name: aliases[HUB_DEVICE_ID] ?? (platform === 'macos' ? '本机 Mac' : platform === 'windows' ? 'Windows' : '本机'),
+    name: aliases[HUB_DEVICE_ID] ?? (platform === 'macos' ? t('本机 Mac') : platform === 'windows' ? 'Windows' : t('本机')),
     online: Boolean((info.data && !info.error) || telemetry.connection === 'online'),
   };
   const power = usePowerControls((view === 'control' || monitorOpen) && !device && !waitingForSelection && platform === 'windows');
@@ -145,7 +147,7 @@ export default function App() {
     const id = selectedDevice ?? defaultDevice;
     const offline = agentData.devices.find((item) => item.device_id === id && !item.online);
     if (offline) {
-      setOfflineNotice(`${aliases[id] ?? offline.name} 已离线，已切回本机。`);
+      setOfflineNotice(t('{p1} 已离线，已切回本机。', { p1: aliases[id] ?? offline.name }));
       setSelectedDevice(HUB_DEVICE_ID);
       setPlayerOpen(false);
     }
@@ -192,20 +194,20 @@ export default function App() {
               <span className="brand-icon" aria-hidden="true"><Activity size={26} strokeWidth={2} /></span>
               <div className="brand-name"><strong lang="en">Vitals</strong></div>
             </div>
-            <nav className="header-tabs" aria-label="功能页面">
-              <Segmented id="navigation" label="功能页面" tabs options={views} value={view} onChange={navigate} />
+            <nav className="header-tabs" aria-label={t('功能页面')}>
+              <Segmented id="navigation" label={t('功能页面')} tabs options={views} value={view} onChange={navigate} />
             </nav>
             <div className="header-actions">
               <HeaderClock onOpen={() => setClockOpen(true)} />
-              {ai.settings?.enabled && <IconButton label="打开 Vitals AI" className="ai-trigger" aria-haspopup="dialog"
+              {ai.settings?.enabled && <IconButton label={t('打开 Vitals AI')} className="ai-trigger" aria-haspopup="dialog"
                 onClick={() => setChat(true)}><Sparkles size={21} /></IconButton>}
-              <IconButton label="个性化设置" onClick={() => openSettings('appearance')} aria-haspopup="dialog"><Settings size={21} /></IconButton>
+              <IconButton label={t('个性化设置')} onClick={() => openSettings('appearance')} aria-haspopup="dialog"><Settings size={21} /></IconButton>
             </div>
           </div>
         </header>
         <main className="main-content" id="main-content">
           {hostUpdated && <div className="host-update-notice" role="status">
-            <Button onClick={() => window.location.reload()}><RefreshCw size={16} aria-hidden="true" />Vitals 已更新，点击刷新</Button>
+            <Button onClick={() => window.location.reload()}><RefreshCw size={16} aria-hidden="true" />{t('Vitals 已更新，点击刷新')}</Button>
           </div>}
           <AnimatePresence initial={false} mode="wait">
             <motion.section key={view} role="tabpanel" aria-labelledby={`tab-${view}`} id={`panel-${view}`}
@@ -220,7 +222,7 @@ export default function App() {
                 }}
                 briefingEnabled={Boolean(ai.settings?.enabled && ai.settings.configured && ai.settings.include_vitals_context)} />}
               {view === 'control' && (waitingForSelection
-                ? <p className="feedback" role="status">{agents.error || '正在读取设备…'}</p>
+                ? <p className="feedback" role="status">{agents.error || t('正在读取设备…')}</p>
                 : <ControlPage media={media} open={playerOpen} onOpenChange={setPlayerOpen} hub={hub}
                 sample={telemetry.sample} power={power} onMonitor={() => setMonitorOpen(true)}
                 devices={onlineDevices} device={device} offlineNotice={offlineNotice} onDevice={chooseDevice}

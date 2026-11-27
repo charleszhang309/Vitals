@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 import httpx
 
 
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.4.0"
 REPOSITORY = "https://github.com/charleszhang309/Vitals"
 RELEASES_URL = f"{REPOSITORY}/releases"
 LATEST_RELEASE_API = "https://api.github.com/repos/charleszhang309/Vitals/releases/latest"
