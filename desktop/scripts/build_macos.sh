@@ -41,6 +41,10 @@ pyinstaller=(
     --noconfirm --onefile --console --name vitals-hub --target-architecture "$arch"
     --paths "$project" --distpath "$build/frozen" --workpath "$build/work" --specpath "$build"
     --add-data "$static:backend/static" --add-data "$project/backend/agent.md:backend"
+    --add-data "$project/plugins/obs-studio/manifest.json:plugins/obs-studio"
+    --add-data "$project/plugins/obs-studio/plugin.py:plugins/obs-studio"
+    --add-data "$project/plugins/davinci-resolve/manifest.json:plugins/davinci-resolve"
+    --add-data "$project/plugins/davinci-resolve/plugin.py:plugins/davinci-resolve"
     --collect-submodules uvicorn --hidden-import mac_agent.agent
     --osx-entitlements-file "$desktop/src-tauri/Entitlements.plist"
 )

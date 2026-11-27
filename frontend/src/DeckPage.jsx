@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import {
   ArrowLeft, Camera, Check, ChevronLeft, ChevronRight, Cpu, Download, FolderOpen,
-  Globe, Grip, Keyboard, Layers, Lock, Maximize, MonitorOff, Pause, Pencil, Play,
+  Globe, Grip, Keyboard, Layers, Lock, Maximize, MonitorOff, Pause, Pencil, Play, Plug,
   Plus, SkipBack, SkipForward, Sliders, Sparkles, Thermometer, Timer, Upload,
   Volume1, Volume2, VolumeX, X, Zap,
 } from 'lucide-react';
@@ -12,6 +12,7 @@ import useResource from './useOverviewResource.js';
 import { focusClock } from './useFocusTimer.js';
 import { getLocale, t } from './i18n/messages.js';
 import { freshTile, grids, liveLabels, SceneEditor, TileEditor } from './DeckEditor.jsx';
+import DeckPlugins from './DeckPlugins.jsx';
 import ScreenshotControl from './ScreenshotControl.jsx';
 import { desktopPlatform } from './DesktopChrome.jsx';
 import './deck.css';
@@ -60,8 +61,24 @@ const defaultIconMap = {
   '✦': 'ai', '✨': 'ai', '▦': 'folder', '📁': 'folder',
 };
 
+const vectorIcons = {
+  camera: Camera, cpu: Cpu, 'folder-open': FolderOpen, globe: Globe, keyboard: Keyboard,
+  layers: Layers, lock: Lock, 'monitor-off': MonitorOff, pause: Pause, play: Play, plug: Plug,
+  'skip-back': SkipBack, 'skip-forward': SkipForward, sliders: Sliders, sparkles: Sparkles,
+  thermometer: Thermometer, timer: Timer, 'volume-1': Volume1, 'volume-2': Volume2, 'volume-x': VolumeX, zap: Zap,
+};
+
 function KeyIcon({ tile, state }) {
   if (!tile) return <span className="deck-key-badge deck-key-badge-empty"><Plus size={22} /></span>;
+  if (/^\/api\/deck\/icons\/[a-f0-9]{64}\.(?:png|jpg|webp|svg)$/.test(tile.icon)) {
+    return <span className="deck-key-badge"><img src={httpUrl(tile.icon).href} width={28} height={28}
+      style={{ objectFit: 'contain' }} alt="" decoding="async" draggable={false} /></span>;
+  }
+  if (tile.icon?.startsWith('lucide:')) {
+    const name = tile.icon.slice(7);
+    const Icon = Object.hasOwn(vectorIcons, name) ? vectorIcons[name] : Zap;
+    return <span className="deck-key-badge" aria-hidden="true"><Icon size={24} strokeWidth={2.1} /></span>;
+  }
   const action = tile.steps?.[0]?.action;
   const actionId = action?.id;
   const mapped = tile.icon ? defaultIconMap[tile.icon.trim()] : null;
@@ -128,6 +145,8 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
   const [moveFrom, setMoveFrom] = useState(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(null);
+  const [pluginsOpen, setPluginsOpen] = useState(false);
+  const [managementKey, setManagementKey] = useState('');
   const [message, setMessage] = useState(null);
   const [syncConflict, setSyncConflict] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -146,7 +165,7 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
   const scene = selectedScene(layout, sceneId);
   const list = layout?.scenes.filter((item) => draft || !item.folder) ?? [];
   const [columns, rows] = grids[scene?.grid] ?? [3, 2];
-  const { data: catalog } = useResource(`${root}/catalog`, 60_000);
+  const { data: catalog, retry: refreshCatalog } = useResource(`${root}/catalog`, 60_000);
   const { data: hostAudio, retry: refreshAudio } = useResource(`${root}/audio?target=hub`, 2500, target.device_id === HUB);
   const audio = target.device_id === HUB ? hostAudio : target.snapshot?.volume;
   const audioTarget = target.device_id;
@@ -253,7 +272,7 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
     setMoveFrom(null);
   }
   function handleKeys(event) {
-    if (event.defaultPrevented || event.target.closest('input, select, textarea, [role="dialog"]')) return;
+    if (pluginsOpen || event.defaultPrevented || event.target.closest('input, select, textarea, dialog, [role="dialog"]')) return;
     if (event.key === 'Escape' && !draft && !confirm) {
       if (trail.length) back();
       else leave();
@@ -463,6 +482,9 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
             </select>
           </label>
           <div className="deck-toolbar-actions">
+            <IconButton label={t('Deck 插件')} aria-haspopup="dialog" onClick={() => setPluginsOpen(true)}>
+              <Plug size={17} aria-hidden="true" />
+            </IconButton>
             {draft && <>
               <IconButton label={t('导入布局')} onClick={() => fileInput.current?.click()}><Upload size={16} /></IconButton>
               <IconButton label={t('导出布局')} onClick={exportLayout}><Download size={16} /></IconButton>
@@ -553,7 +575,9 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
         <ScreenshotControl key={audioTarget} deviceId={localTarget ? null : audioTarget} deviceName={target.name} controlRef={screenshot} />
       </div>
       <AnimatePresence>
-        {confirm !== null && <Modal id={confirmationId} title={t('确认锁屏')} onClose={() => setConfirm(null)}>
+        {pluginsOpen && <DeckPlugins key="plugins" close={() => setPluginsOpen(false)} initialKey={managementKey}
+          rememberKey={setManagementKey} onChange={refreshCatalog} />}
+        {confirm !== null && <Modal key="lock" id={confirmationId} title={t('确认锁屏')} onClose={() => setConfirm(null)}>
           <p>{t('要锁定 {p1} 吗？', { p1: target.name })}</p>
           <div className="deck-editor-actions">
             <Button onClick={() => setConfirm(null)}>{t('取消')}</Button>

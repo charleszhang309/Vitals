@@ -9,7 +9,7 @@ from math import isfinite
 from pathlib import Path
 import re
 import sys
-from threading import Lock
+from threading import Lock, RLock
 from types import ModuleType
 from typing import Annotated, Iterable, Literal
 from uuid import uuid4
@@ -91,6 +91,33 @@ class _ParameterizedItem(_Item):
     parameters: Annotated[list[_Parameter], Field(max_length=24), AfterValidator(_unique_ids)] = Field(default_factory=list)
 
 
+class _ConfigField(_Parameter):
+    secret: bool = False
+    minimum: float | None = None
+    maximum: float | None = None
+    max_length: int = Field(default=1024, ge=1, le=4096)
+
+    def accepts(self, value: object) -> bool:
+        if not super().accepts(value):
+            return False
+        if isinstance(value, str):
+            return len(value) <= self.max_length and (not self.required or bool(value.strip()))
+        if self.type in {"integer", "number"}:
+            return (self.minimum is None or value >= self.minimum) and (self.maximum is None or value <= self.maximum)
+        return True
+
+    @model_validator(mode="after")
+    def check_config_field(self):
+        if re.search(r"password|passphrase|(?:^|[_-])(?:key|token|secret|credential)s?(?:$|[_-])|apikey", self.id):
+            self.secret = True
+        if self.secret and (self.type != "string" or self.default is not None or self.choices is not None):
+            raise ValueError("Secret plugin configuration cannot declare public defaults or choices")
+        if ((self.minimum is not None or self.maximum is not None) and self.type not in {"integer", "number"}
+                or self.minimum is not None and self.maximum is not None and self.minimum > self.maximum):
+            raise ValueError("Invalid Deck plugin configuration limits")
+        return self
+
+
 class _Variable(_Item):
     type: ValueType
 
@@ -102,6 +129,7 @@ class _Manifest(_PluginModel):
     actions: Annotated[list[_ParameterizedItem], Field(max_length=64), AfterValidator(_unique_ids)] = Field(default_factory=list)
     feedbacks: Annotated[list[_ParameterizedItem], Field(max_length=64), AfterValidator(_unique_ids)] = Field(default_factory=list)
     variables: Annotated[list[_Variable], Field(max_length=64), AfterValidator(_unique_ids)] = Field(default_factory=list)
+    config_schema: Annotated[list[_ConfigField], Field(max_length=24), AfterValidator(_unique_ids)] = Field(default_factory=list)
 
 
 @dataclass
@@ -109,6 +137,7 @@ class _Plugin:
     directory: Path
     manifest: _Manifest
     enabled: bool
+    settings: dict = field(default_factory=dict)
     lock: Lock = field(default_factory=Lock)
     module: ModuleType | None = None
 
@@ -131,6 +160,12 @@ def _unique_json_object(pairs):
     return result
 
 
+def parse_manifest(content: bytes) -> _Manifest:
+    if len(content) > MAX_MANIFEST_BYTES:
+        raise ValueError("Deck plugin manifest is too large")
+    return _Manifest.model_validate(json.loads(content.decode("utf-8-sig"), object_pairs_hook=_unique_json_object))
+
+
 def _read_manifest(directory: Path) -> _Manifest:
     manifest_path = directory / "manifest.json"
     source_path = directory / "plugin.py"
@@ -140,9 +175,7 @@ def _read_manifest(directory: Path) -> _Manifest:
         raise ValueError("Invalid Deck plugin files")
     with manifest_path.open("rb") as manifest_file:
         content = manifest_file.read(MAX_MANIFEST_BYTES + 1)
-    if len(content) > MAX_MANIFEST_BYTES:
-        raise ValueError("Deck plugin manifest is too large")
-    manifest = _Manifest.model_validate(json.loads(content.decode("utf-8"), object_pairs_hook=_unique_json_object))
+    manifest = parse_manifest(content)
     if manifest.id != directory.name:
         raise ValueError("Deck plugin ID must match its directory name")
     return manifest
@@ -184,6 +217,8 @@ def _load_module(plugin: _Plugin) -> ModuleType:
         loader.exec_module(module)
         if not callable(vars(module).get("execute_action")):
             raise ValueError("Missing required Deck plugin hook")
+        if callable(configure := vars(module).get("configure")):
+            configure(dict(plugin.settings))
     except (Exception, SystemExit):
         sys.modules.pop(name, None)
         raise DeckPluginError("unavailable") from None
@@ -194,6 +229,8 @@ def _load_module(plugin: _Plugin) -> ModuleType:
 
 def _call(plugin: _Plugin, method: str, *args) -> JsonValue:
     with plugin.lock:
+        if not plugin.enabled:
+            raise DeckPluginError("disabled")
         callback = vars(_load_module(plugin)).get(method)
         if not callable(callback):
             raise DeckPluginError("unavailable")
@@ -208,6 +245,7 @@ def _call(plugin: _Plugin, method: str, *args) -> JsonValue:
 class DeckPluginRegistry:
     def __init__(self, directory: Path, enabled: Iterable[str] = ()):
         self._plugins: dict[str, _Plugin] = {}
+        self._lock = RLock()
         enabled_ids = frozenset(enabled)
         directory = Path(directory)
         try:
@@ -227,8 +265,71 @@ class DeckPluginRegistry:
                 continue
             self._plugins[manifest.id] = _Plugin(candidate, manifest, manifest.id in enabled_ids)
 
+    def inventory(self) -> tuple[_Plugin, ...]:
+        with self._lock:
+            return tuple(self._plugins.values())
+
+    def find(self, plugin_id):
+        with self._lock:
+            plugin = self._plugins.get(plugin_id)
+        if plugin is None:
+            raise DeckPluginError("not_found")
+        return plugin
+
+    def register(self, directory, enabled, settings, *, activate=True):
+        plugin = _Plugin(directory, _read_manifest(directory), enabled, dict(settings))
+        with self._lock:
+            old = self._plugins.get(plugin.manifest.id)
+            if old and old.directory != directory:
+                raise ValueError("Deck plugin ID is already registered")
+            if enabled and activate:
+                _load_module(plugin)
+            self._plugins[plugin.manifest.id] = plugin
+        return plugin
+
+    def update(self, plugin_id, enabled, settings, *, activate=True):
+        plugin = self.find(plugin_id)
+        with plugin.lock:
+            previous = plugin.settings
+            plugin.settings = dict(settings)
+            try:
+                if enabled and activate:
+                    if plugin.module is None:
+                        _load_module(plugin)
+                    elif previous != settings and callable(configure := vars(plugin.module).get("configure")):
+                        configure(dict(settings))
+                elif not enabled:
+                    self._unload(plugin)
+                plugin.enabled = enabled
+            except (Exception, SystemExit):
+                plugin.settings = previous
+                self._unload(plugin)
+                raise DeckPluginError("unavailable") from None
+
+    def remove(self, plugin_id):
+        with self._lock:
+            plugin = self.find(plugin_id)
+            with plugin.lock:
+                plugin.enabled = False
+                self._unload(plugin)
+                del self._plugins[plugin_id]
+
+    @staticmethod
+    def _unload(plugin):
+        module = plugin.module
+        if module is None:
+            return
+        try:
+            if callable(shutdown := vars(module).get("shutdown")):
+                shutdown()
+        except (Exception, SystemExit):
+            logger.warning("Deck plugin shutdown failed (%s)", plugin.manifest.id)
+        finally:
+            sys.modules.pop(module.__name__, None)
+            plugin.module = None
+
     def load_enabled(self):
-        for plugin in self._plugins.values():
+        for plugin in self.inventory():
             if plugin.enabled:
                 with plugin.lock:
                     try:
@@ -238,14 +339,12 @@ class DeckPluginRegistry:
 
     def catalog(self) -> list[dict]:
         return [
-            {**plugin.manifest.model_dump(mode="json", exclude_none=True), "enabled": plugin.enabled}
-            for plugin in self._plugins.values()
+            {**plugin.manifest.model_dump(mode="json", exclude_none=True, exclude={"config_schema"}), "enabled": plugin.enabled}
+            for plugin in self.inventory()
         ]
 
     def _enabled(self, plugin_id: str) -> _Plugin:
-        plugin = self._plugins.get(plugin_id)
-        if plugin is None:
-            raise DeckPluginError("not_found")
+        plugin = self.find(plugin_id)
         if not plugin.enabled:
             raise DeckPluginError("disabled")
         return plugin

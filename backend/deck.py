@@ -5,10 +5,11 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from .agents import DEVICE_PATTERN
 from .deck_actions import DeckActions, execute_macro, parameters
+from .deck_icons import MAX_ICON_VALUE_LENGTH, validate_icon_value
 
 
 GRIDS = {"3x2": 6, "4x3": 12, "5x3": 15, "6x3": 18}
@@ -52,12 +53,17 @@ class Feedback(Model):
 class Tile(Model):
     kind: Literal["action", "toggle", "live", "folder"] = "action"
     title: str = Field(default="", max_length=40)
-    icon: str = Field(default="", max_length=16)
+    icon: str = Field(default="", max_length=MAX_ICON_VALUE_LENGTH)
     color: Literal[PALETTES] = "slate"
     steps: list[Step] = Field(default_factory=list, max_length=8)
     page: Key | None = None
     live: Literal["cpu", "gpu", "focus", "ai"] | None = None
     feedback: Feedback | None = None
+
+    @field_validator("icon")
+    @classmethod
+    def check_icon(cls, icon: str) -> str:
+        return validate_icon_value(icon)
 
     @model_validator(mode="after")
     def check_kind(self):

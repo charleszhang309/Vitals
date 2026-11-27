@@ -2,9 +2,10 @@ import chinese from './zh-CN.js';
 import english from './en-US.js';
 import serverEnglish, { translateServerPattern } from './server-en-US.js';
 import deckEnglish from './deck-en-US.js';
+import pluginEnglish from './plugin-en-US.js';
 
 export const languageKey = 'vitals.language';
-const catalogs = { 'zh-CN': chinese, 'en-US': { ...english, ...deckEnglish } };
+const catalogs = { 'zh-CN': chinese, 'en-US': { ...english, ...deckEnglish, ...pluginEnglish } };
 
 export function validPreference(value) {
   return Object.hasOwn(catalogs, value) ? value : 'auto';

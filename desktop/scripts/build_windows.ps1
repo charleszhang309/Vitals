@@ -46,6 +46,10 @@ try {
         '-m', 'PyInstaller', '--noconfirm', '--onedir', '--console', '--name', 'vitals-hub', '--paths', $project,
         '--distpath', $frozen, '--workpath', (Join-Path $build 'work'), '--specpath', $build,
         '--add-data', "$static;backend/static", '--add-data', "$(Join-Path $project 'backend/agent.md');backend",
+        '--add-data', "$(Join-Path $project 'plugins/obs-studio/manifest.json');plugins/obs-studio",
+        '--add-data', "$(Join-Path $project 'plugins/obs-studio/plugin.py');plugins/obs-studio",
+        '--add-data', "$(Join-Path $project 'plugins/davinci-resolve/manifest.json');plugins/davinci-resolve",
+        '--add-data', "$(Join-Path $project 'plugins/davinci-resolve/plugin.py');plugins/davinci-resolve",
         '--collect-submodules', 'uvicorn', '--collect-submodules', 'winrt', '--collect-submodules', 'pycaw',
         '--hidden-import', 'caldav.davclient',
         (Join-Path $PSScriptRoot 'sidecar_entry.py')

@@ -1,7 +1,12 @@
 {
   "id": "obs-studio",
   "name": {"en": "OBS Studio", "zh-CN": "OBS Studio"},
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "config_schema": [
+    {"id": "host", "name": {"en": "Host", "zh-CN": "主机地址"}, "type": "string", "required": true, "default": "127.0.0.1", "max_length": 255},
+    {"id": "port", "name": {"en": "Port", "zh-CN": "端口"}, "type": "integer", "default": 4455, "minimum": 1, "maximum": 65535},
+    {"id": "password", "name": {"en": "WebSocket Password", "zh-CN": "WebSocket 密码"}, "type": "string", "secret": true}
+  ],
   "actions": [
     {"id": "start-recording", "name": {"en": "Start Recording", "zh-CN": "开始录屏"}},
     {"id": "stop-recording", "name": {"en": "Stop Recording", "zh-CN": "停止录屏"}},

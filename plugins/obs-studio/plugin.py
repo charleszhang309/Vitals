@@ -20,6 +20,7 @@ except ImportError:
 
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
+_configured = {}
 CONNECT_OPTIONS = {"proxy": None} if connect and "proxy" in signature(connect).parameters else {}
 REQUEST_TIMEOUT = 1.5
 SNAPSHOT_TTL = 0.5
@@ -51,15 +52,21 @@ class RequestRejected(Exception):
         self.code = code
 
 
-def _connection_settings():
+def _connection_settings(overrides=None):
+    overrides = _configured if overrides is None else overrides
     try:
         config = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     except FileNotFoundError:
         config = {}
     except (OSError, ValueError):
-        raise InvalidConfig from None
+        if not overrides:
+            raise InvalidConfig from None
+        config = {}
     if not isinstance(config, dict):
-        raise InvalidConfig
+        if not overrides:
+            raise InvalidConfig
+        config = {}
+    config.update(overrides)
 
     host = config.get("host", "127.0.0.1")
     port = config.get("port", 4455)
@@ -201,6 +208,20 @@ class OBSClient:
 _client = OBSClient()
 
 
+def configure(settings):
+    global _configured
+    if settings:
+        _connection_settings(settings)
+    if _configured != settings:
+        _configured = dict(settings)
+        _client.disconnect()
+        _client.refresh_at = 0.0
+
+
+def shutdown():
+    _client.disconnect()
+
+
 def execute_action(action_id, params):
     deadline = monotonic() + REQUEST_TIMEOUT
     try:
@@ -230,7 +251,7 @@ def execute_action(action_id, params):
                    if error.code == 600 else "OBS 拒绝了该请求。 / OBS rejected the request.")
         return {"ok": False, "code": error.code, "message": message}
     except InvalidConfig:
-        return {"ok": False, "message": "请检查 OBS 插件的 config.json。 / Check the OBS plugin's config.json."}
+        return {"ok": False, "message": "请检查 Deck 插件管理中的 OBS 连接设置。 / Check the OBS connection in Deck Plugins."}
     except TRANSPORT_ERRORS:
         _client.disconnect()
         return {"ok": False, "message": OFFLINE_MESSAGE}
