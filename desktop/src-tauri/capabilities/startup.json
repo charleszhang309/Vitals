@@ -1,7 +1,7 @@
 {
   "identifier": "startup",
-  "description": "Allow the bundled Vitals waiting page to start the local hub.",
+  "description": "Allow the bundled Vitals waiting page to start the selected role or open desktop settings.",
   "local": true,
   "windows": ["main"],
-  "permissions": ["allow-start-service"]
+  "permissions": ["allow-start-service", "allow-open-desktop-settings"]
 }

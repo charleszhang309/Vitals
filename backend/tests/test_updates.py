@@ -50,37 +50,37 @@ def test_city_search_handles_no_matches_and_timeout(tmp_path):
 
 
 @pytest.mark.parametrize(("platform", "asset"), [
-    ("windows", "Vitals_2.0.10_x64-setup.exe"),
-    ("macos", "Vitals_2.0.10_x64.dmg"),
+    ("windows", "Vitals_2.1.10_x64-setup.exe"),
+    ("macos", "Vitals_2.1.10_x64.dmg"),
     ("linux", None),
 ])
 def test_update_checks_semver_selects_platform_asset_and_caches(tmp_path, monkeypatch, platform, asset):
     calls = []
-    page = f"{REPO}/releases/tag/v2.0.10"
-    base = f"{REPO}/releases/download/v2.0.10"
+    page = f"{REPO}/releases/tag/v2.1.10"
+    base = f"{REPO}/releases/download/v2.1.10"
 
     def release(request):
         calls.append(str(request.url))
-        return httpx.Response(200, json={"tag_name": "v2.0.10", "html_url": page, "body": "Update notes", "assets": [
+        return httpx.Response(200, json={"tag_name": "v2.1.10", "html_url": page, "body": "Update notes", "assets": [
             {"name": "external.exe", "browser_download_url": "https://example.invalid/download.exe"},
-            {"name": "Vitals_2.0.10_arm64-setup.exe", "browser_download_url": f"{base}/Vitals_2.0.10_arm64-setup.exe"},
-            {"name": "Vitals_2.0.10_x64-setup.exe", "browser_download_url": f"{base}/Vitals_2.0.10_x64-setup.exe"},
-            {"name": "Vitals_2.0.10_x64.dmg", "browser_download_url": f"{base}/Vitals_2.0.10_x64.dmg"},
+            {"name": "Vitals_2.1.10_arm64-setup.exe", "browser_download_url": f"{base}/Vitals_2.1.10_arm64-setup.exe"},
+            {"name": "Vitals_2.1.10_x64-setup.exe", "browser_download_url": f"{base}/Vitals_2.1.10_x64-setup.exe"},
+            {"name": "Vitals_2.1.10_x64.dmg", "browser_download_url": f"{base}/Vitals_2.1.10_x64.dmg"},
         ]})
 
     monkeypatch.setattr("backend.main.host_identity", lambda: {"platform": platform, "name": "test"})
     monkeypatch.setattr("platform.machine", lambda: "AMD64")
     client = mock_client(tmp_path, release)
-    assert client.get("/api/system/version").json() == {"version": "2.0.0", "platform": platform, "desktop": False}
+    assert client.get("/api/system/version").json() == {"version": "2.1.0", "platform": platform, "desktop": False}
     for _ in range(2):
         assert client.get("/api/system/update/check").json() == {
-            "current_version": "2.0.0", "latest_version": "2.0.10", "has_update": True,
+            "current_version": "2.1.0", "latest_version": "2.1.10", "has_update": True,
             "release_url": page, "notes": "Update notes", "download_url": f"{base}/{asset}" if asset else page,
         }
     assert calls == ["https://api.github.com/repos/charleszhang309/Vitals/releases/latest"]
 
 
-@pytest.mark.parametrize("tag", ["v2.0.0+build.5", "v2.0.0-rc.10", "v1.99.99"])
+@pytest.mark.parametrize("tag", ["v2.1.0+build.5", "v2.1.0-rc.10", "v1.99.99"])
 def test_update_does_not_offer_equal_or_older_versions(tmp_path, tag):
     client = mock_client(tmp_path, lambda _: httpx.Response(200, json={"tag_name": tag, "assets": []}))
     assert client.get("/api/system/update/check").json()["has_update"] is False

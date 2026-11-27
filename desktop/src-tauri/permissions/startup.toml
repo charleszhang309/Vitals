@@ -1,4 +1,14 @@
 [[permission]]
 identifier = "allow-start-service"
-description = "Start the local Vitals hub from its bundled waiting page."
+description = "Start the selected role from the bundled waiting page."
 commands.allow = ["start_service"]
+
+[[permission]]
+identifier = "allow-open-desktop-settings"
+description = "Open the bundled desktop settings window."
+commands.allow = ["open_desktop_settings"]
+
+[[permission]]
+identifier = "allow-manage-desktop-settings"
+description = "Read and save desktop settings from the bundled settings window."
+commands.allow = ["read_desktop_settings", "save_desktop_settings"]

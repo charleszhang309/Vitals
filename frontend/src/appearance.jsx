@@ -1,15 +1,16 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Activity, Download, ImagePlus, Inbox, Info, LayoutGrid, Palette, RotateCcw, ServerCog, Sparkles, Upload } from 'lucide-react';
+import { Activity, ArrowDown, ArrowUp, Download, ImagePlus, Inbox, Info, LayoutGrid, Palette, RotateCcw, ServerCog, Sparkles, Upload } from 'lucide-react';
 import { httpUrl, request, sendJson } from './api.js';
-import { Button, Modal, Segmented } from './ui.jsx';
-import { overviewModules } from './overviewCards.js';
+import { Button, IconButton, Modal, Segmented } from './ui.jsx';
+import { defaultCardOrder, orderedCards, overviewModules, overviewStrips, readCardOrder, readCardWidths } from './overviewCards.js';
 import { clockStyles } from './Clock.jsx';
 import { DeviceDot, HUB_DEVICE_ID } from './RemoteDevice.jsx';
 import { AboutSettings, useReleaseUpdates } from './AboutSettings.jsx';
 const HostSetup = lazy(() => import('./HostSetup.jsx'));
 
 const STORAGE_KEY = 'pcc-appearance';
-const defaults = { theme: 'light', material: 'glass', opacity: 46, strength: 60, clockStyle: 'flip', widgets: {}, defaultDevice: HUB_DEVICE_ID, autoUpdateCheck: true };
+const defaults = { theme: 'light', material: 'glass', opacity: 46, strength: 60, clockStyle: 'flip', widgets: {},
+  cardOrder: defaultCardOrder, cardWidths: {}, defaultDevice: HUB_DEVICE_ID, autoUpdateCheck: true };
 const level = (value, fallback) => Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : fallback;
 const themes = [{ value: 'light', label: '浅色' }, { value: 'dark', label: '深色' }, { value: 'system', label: '跟随系统' }];
 const systemColorScheme = '(prefers-color-scheme: dark)';
@@ -32,6 +33,8 @@ function initialPreferences() {
       strength: level(stored?.strength, defaults.strength),
       clockStyle: clockStyles.some(({ value }) => value === stored?.clockStyle) ? stored.clockStyle : defaults.clockStyle,
       widgets: Object.fromEntries(overviewModules.map(({ id }) => [id, stored?.widgets?.[id] !== false])),
+      cardOrder: readCardOrder(stored?.cardOrder),
+      cardWidths: readCardWidths(stored?.cardWidths),
       defaultDevice: typeof stored?.defaultDevice === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(stored.defaultDevice)
         ? stored.defaultDevice : defaults.defaultDevice,
       autoUpdateCheck: stored?.autoUpdateCheck !== false,
@@ -131,6 +134,7 @@ export function useAppearance(immersiveView) {
         setWallpaper(null);
         setPreferences((current) => ({
           ...defaults, widgets: current.widgets, clockStyle: current.clockStyle, defaultDevice: current.defaultDevice,
+          cardOrder: current.cardOrder, cardWidths: current.cardWidths,
           autoUpdateCheck: current.autoUpdateCheck,
         }));
       }
@@ -142,7 +146,22 @@ export function useAppearance(immersiveView) {
     }
   }
 
-  return { preferences, theme, wallpaper, busy, appearanceError, update, changeWallpaper, updates };
+  function moveCard(id, offset) {
+    setPreferences((current) => {
+      const index = current.cardOrder.indexOf(id);
+      const target = index + offset;
+      if (index < 0 || target < 0 || target >= current.cardOrder.length) return current;
+      const cardOrder = [...current.cardOrder];
+      [cardOrder[index], cardOrder[target]] = [cardOrder[target], cardOrder[index]];
+      return { ...current, cardOrder };
+    });
+  }
+
+  function resetCardLayout() {
+    setPreferences((current) => ({ ...current, cardOrder: defaults.cardOrder, cardWidths: defaults.cardWidths }));
+  }
+
+  return { preferences, theme, wallpaper, busy, appearanceError, update, changeWallpaper, updates, moveCard, resetCardLayout };
 }
 
 export function AppearanceFrame({ appearance, children }) {
@@ -171,6 +190,44 @@ function Slider({ label, value, onChange }) {
       <input type="range" min="0" max="100" value={value} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
   );
+}
+
+function OverviewSettings({ appearance }) {
+  const { preferences: { widgets, cardOrder, cardWidths }, update, moveCard, resetCardLayout } = appearance;
+  const setVisible = (id, checked) => update('widgets', { ...widgets, [id]: checked });
+  const hasCustomLayout = Object.values(cardWidths).includes('wide')
+    || cardOrder.some((id, index) => id !== defaultCardOrder[index]);
+
+  return <div className="settings-fields">
+    <div className="settings-switches">
+      {overviewStrips.map(({ id, title }) => <label className="settings-row" key={id}><span>{title}</span>
+        <input className="toggle-switch" type="checkbox" role="switch" checked={widgets[id] !== false}
+          onChange={(event) => setVisible(id, event.target.checked)} />
+      </label>)}
+    </div>
+    <section className="settings-subsection">
+      <div className="settings-row"><h3>概览卡片</h3>
+        <Button className="reset-overview-layout" disabled={!hasCustomLayout} onClick={resetCardLayout}>
+          <RotateCcw size={14} aria-hidden="true" />恢复默认布局
+        </Button>
+      </div>
+      <ol className="overview-settings-cards">
+        {orderedCards(cardOrder).map(({ id, title, Icon }, index) => <li className="overview-settings-card" key={id}>
+          <span><Icon size={16} aria-hidden="true" />{title}</span>
+          <select aria-label={`${title}卡片尺寸`} value={cardWidths[id] ?? 'standard'}
+            onChange={(event) => update('cardWidths', { ...cardWidths, [id]: event.target.value })}>
+            <option value="standard">标准 1×1</option><option value="wide">加宽 2×1</option>
+          </select>
+          <div className="overview-settings-move">
+            <IconButton label={`上移${title}`} disabled={index === 0} onClick={() => moveCard(id, -1)}><ArrowUp size={15} aria-hidden="true" /></IconButton>
+            <IconButton label={`下移${title}`} disabled={index === cardOrder.length - 1} onClick={() => moveCard(id, 1)}><ArrowDown size={15} aria-hidden="true" /></IconButton>
+          </div>
+          <input className="toggle-switch" type="checkbox" role="switch" aria-label={`显示${title}`}
+            checked={widgets[id] !== false} onChange={(event) => setVisible(id, event.target.checked)} />
+        </li>)}
+      </ol>
+    </section>
+  </div>;
 }
 
 function CleanupSettings() {
@@ -422,12 +479,7 @@ export function AppearanceDialog({ appearance, onClose, ai, telemetry, deviceSet
             </label>
             {appearanceError && <p className="feedback error" role="alert">{appearanceError}</p>}
           </div>}
-          {category === 'overview' && <div className="settings-switches">
-              {overviewModules.map(({ id, title }) => <label className="settings-row" key={id}><span>{title}</span>
-                <input className="toggle-switch" type="checkbox" role="switch" checked={preferences.widgets[id] !== false}
-                  onChange={(event) => update('widgets', { ...preferences.widgets, [id]: event.target.checked })} />
-              </label>)}
-          </div>}
+          {category === 'overview' && <OverviewSettings appearance={appearance} />}
           {category === 'scratchpad' && <CleanupSettings />}
           {category === 'system' && <div className="settings-fields">
             <SystemStatus telemetry={telemetry} platform={deviceSettings.hub.platform} />

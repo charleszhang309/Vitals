@@ -384,6 +384,21 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .settings-switches { display: grid; gap: 12px; font-size: 14px; }
 .settings-switches > p { font-size: 13px; }
+.reset-overview-layout.button { min-height: 32px; padding: 4px 8px; font-size: 12px; }
+.overview-settings-cards { display: grid; gap: 4px; }
+.overview-settings-card { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center;
+  gap: 8px; min-height: 44px; padding: 3px 0; border-bottom: 1px solid var(--border); }
+.overview-settings-card > span { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; font-weight: 640; }
+.overview-settings-card > span > svg { flex: none; color: var(--muted); }
+.overview-settings-card > select { min-height: 34px; min-width: 0; padding: 3px 6px; border: 1px solid var(--field-border);
+  border-radius: 9px; background: var(--surface); font-size: 12px; }
+.overview-settings-move { display: flex; gap: 4px; }
+.overview-settings-move .icon-button { width: 33px; min-height: 33px; padding: 0; }
+@media (max-width: 380px) {
+  .overview-settings-card { gap: 5px; }
+  .overview-settings-card > span > svg { display: none; }
+  .overview-settings-card > select { padding-inline: 4px; }
+}
 @media (width < 680px) {
   .settings-dialog { width: calc(100vw - 22px); height: min(560px, calc(100dvh - 28px)); }
   .settings-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
@@ -715,8 +730,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .host-warning { color: var(--amber-text); }
 .host-link { display: flex; align-items: center; gap: 4px; color: var(--link); white-space: nowrap; font-size: 12px; font-weight: 650; }
 
-.overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 184px; gap: 12px; margin-top: 16px; }
+.overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-flow: row dense;
+  grid-auto-rows: 184px; gap: 12px; margin-top: 16px; }
 .overview-widget { min-width: 0; padding: 13px 15px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.overview-widget[data-width="wide"] { grid-column: span 2; }
 .overview-widget > header { display: flex; align-items: center; gap: 8px; padding-right: 17px; min-width: 0; }
 .overview-widget > header .metric-icon { width: 29px; height: 29px; border-radius: 9px; flex: none; }
 .overview-widget h2 { font-size: 14px; font-weight: 730; line-height: 1.2; }
@@ -741,16 +758,31 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .widget-weather-facts > div { justify-content: center; }
 .widget-weather-facts dt, .widget-weather-range dt { font-size: 11px; line-height: 1.2; color: var(--muted); }
 .widget-weather-facts dd, .widget-weather-range dd { font-size: 13px; line-height: 1.2; font-weight: 680; white-space: nowrap; }
+.overview-widget[data-width="wide"] .weather-preview:has(.widget-weather-forecast) {
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); column-gap: 12px;
+}
+.widget-weather-forecast { display: grid; grid-column: 2; grid-row: 1 / span 2; align-content: center;
+  padding-inline-start: 10px; border-inline-start: 1px solid var(--border); gap: 7px; }
+.widget-weather-forecast li { display: flex; justify-content: space-between; align-items: center; gap: 4px; white-space: nowrap; font-size: 12px; }
+.widget-weather-forecast li > svg { color: var(--link); flex: none; }
 .calendar-preview { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 8px; min-width: 0; }
+.overview-widget[data-width="wide"] .calendar-preview { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  grid-template-rows: minmax(0, 1fr); align-items: center; }
 .calendar-preview-date { display: grid; align-content: center; justify-content: start; grid-template-columns: auto auto; column-gap: 7px; align-items: baseline; }
 .calendar-preview-date > span { grid-column: 1 / -1; color: color-mix(in srgb, var(--red) 76%, var(--text)); font-size: 12px; font-weight: 700; }
 .calendar-preview-date strong { font-size: clamp(32px, 4vw, 48px); font-weight: 740; letter-spacing: -.05em; line-height: .98; }
 .calendar-preview-date small { color: var(--muted); font-size: 12px; }
+.calendar-preview-events { display: grid; gap: 5px; min-width: 0; }
 .calendar-preview-event { display: grid; gap: 2px; border-top: 1px solid var(--border); min-width: 0; padding-top: 6px; }
+.overview-widget[data-width="wide"] .calendar-preview-events { gap: 3px; }
+.overview-widget[data-width="wide"] .calendar-preview-event { gap: 1px; padding-top: 3px; }
+.overview-widget[data-width="wide"] .calendar-preview-event:first-child { border-top: 0; padding-top: 0; }
 .calendar-preview-title { display: flex; align-items: center; min-width: 0; font-size: 13px; }
+.overview-widget[data-width="wide"] .calendar-preview-title { line-height: 1.15; }
 .calendar-preview-title .calendar-source-dot { flex: none; }
 .widget-truncate, .widget-lines li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .widget-lines { display: grid; gap: 2px; padding: 0; list-style: none; font-size: 12px; min-width: 0; }
+.overview-widget[data-width="wide"] .widget-lines { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 10px; }
 .widget-lines:empty { display: none; }
 .widget-health { display: grid; grid-template-columns: minmax(42px, 32%) minmax(0, 1fr); gap: 10px; align-items: center; }
 .health-rings { width: 100%; max-width: 96px; height: auto; }
@@ -762,6 +794,43 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .health-import-status { font-size: 13px; margin-bottom: 10px; }
 .overview-dialog { overscroll-behavior: contain; }
 .overview-dialog.weather-dialog, .overview-dialog.health-dialog { width: min(850px, calc(100% - 28px)); }
+.overview-dialog.ai-usage-dialog { width: min(650px, calc(100% - 28px)); }
+.usage-preview { display: grid; align-content: start; gap: 7px; min-width: 0; }
+.usage-preview-summary { display: grid; gap: 3px; min-width: 0; align-content: center; }
+.usage-preview-summary .widget-value { font-size: clamp(22px, 2.6vw, 34px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-widget[data-width="wide"] .usage-preview { min-height: 112px; grid-template-columns: minmax(0, 3fr) minmax(0, 5fr); align-items: center; }
+.usage-preview .usage-heatmap { position: relative; z-index: 1; }
+.usage-heatmap { --heat-gap: 3px; --heat-height: 7px; --heat-label-row: 15px; --heat-label-column: 13px;
+  --heat-0: #eff2f5; --heat-1: #aceebb; --heat-2: #4ac26b; --heat-3: #2da44e; --heat-4: #116329;
+  --heat-border: #68778845; display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; width: min(100%, 157px); }
+:root[data-theme="dark"] .usage-heatmap { --heat-0: #343941; --heat-1: #0e4429; --heat-2: #006d32; --heat-3: #26a641; --heat-4: #56d364;
+  --heat-border: #b1bac446; }
+.usage-heatmap-full { --heat-height: 11px; grid-template-columns: var(--heat-label-column) minmax(0, 1fr);
+  gap: 4px; width: min(100%, 310px); }
+.usage-heatmap-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: repeat(7, var(--heat-height)); gap: var(--heat-gap); }
+.usage-heatmap-full .usage-heatmap-grid { grid-template-rows: var(--heat-label-row) repeat(7, var(--heat-height)); }
+.usage-weekdays { display: grid; grid-template-rows: repeat(7, var(--heat-height)); gap: var(--heat-gap);
+  margin-top: calc(var(--heat-label-row) + var(--heat-gap)); align-items: center; }
+.usage-month, .usage-weekdays { color: var(--muted); font-size: 10px; line-height: 1; }
+.usage-month { grid-row: 1; align-self: end; padding-bottom: 2px; white-space: nowrap; }
+.usage-day { display: block; min-width: 0; border: 1px solid transparent; border-radius: 2px; padding: 0; }
+.usage-day[data-level] { border-color: var(--heat-border); }
+.usage-day[data-level="0"] { background: var(--heat-0); }
+.usage-day[data-level="1"] { background: var(--heat-1); }
+.usage-day[data-level="2"] { background: var(--heat-2); }
+.usage-day[data-level="3"] { background: var(--heat-3); }
+.usage-day[data-level="4"] { background: var(--heat-4); }
+.usage-day[aria-current="date"], .usage-day[aria-pressed="true"] { border-color: var(--text); }
+.usage-day:focus-visible { outline-width: 2px; outline-offset: 1px; }
+.usage-heatmap-caption { color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center;
+  justify-content: space-between; grid-column: 1 / -1; min-height: 24px; margin-top: 4px; font-size: 12px; }
+.usage-legend { display: flex; align-items: center; gap: 3px; }
+.usage-legend > i { width: 11px; height: 11px; }
+.usage-details > .segments { flex-wrap: wrap; justify-self: start; }
+.usage-details .segment { flex: none; min-height: 32px; padding-inline: 10px; font-size: 12px; }
+.usage-details .usage-heatmap-full { --heat-height: 15px; width: min(100%, 430px); }
+.usage-details .detail-values { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.usage-details .detail-values dd { font-size: 14px; }
 .weather-dialog .weather-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); }
 .weather-dialog .forecast-card { grid-column: 1 / -1; }
 .weather-chart-header { flex-wrap: wrap; }
@@ -818,7 +887,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .focus-feedback { display: flex; align-items: center; gap: 6px; }
 @media (max-width: 850px) { .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 620px) {
-  .overview-grid { grid-auto-rows: 168px; gap: 8px; margin-top: 12px; }
+  .overview-grid { grid-template-columns: minmax(0, 1fr); grid-auto-rows: 168px; gap: 8px; margin-top: 12px; }
+  .overview-widget[data-width="wide"] { grid-column: span 1; }
   .overview-widget { padding: 10px 9px; }
   .overview-widget > header { gap: 5px; }
   .overview-widget > header .metric-icon { width: 24px; height: 24px; }
@@ -833,6 +903,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .widget-health { gap: 6px; }
   .widget-health dl { grid-template-columns: minmax(0, 1fr); gap: 3px; }
   .widget-health .health-rings { align-self: start; margin-top: 5px; }
+  .usage-preview .usage-heatmap-full { --heat-height: 10px; --heat-gap: 2px; }
   .weather-dialog .weather-grid, .health-dialog .health-detail-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 370px) {
@@ -844,6 +915,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .widget-form-pair { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 440px) {
+  .usage-details .detail-values { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .widget-weather-current .widget-truncate {
     display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
     white-space: normal; overflow-wrap: anywhere;

@@ -73,7 +73,7 @@ function Dot({ color }) {
   return <span className="calendar-source-dot" style={{ backgroundColor: color }} aria-hidden="true" />;
 }
 
-export function CalendarPreview({ resource }) {
+export function CalendarPreview({ resource, wide }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 20_000);
@@ -88,21 +88,24 @@ export function CalendarPreview({ resource }) {
   )) ?? [];
   const next = remaining.find((item) => item.all_day ? item.start >= today : Date.parse(item.start) > now) ?? remaining[0];
   const unavailable = error || (data?.sources.length > 0 && !data.sources.some((source) => ['live', 'stale'].includes(source.status)));
-  const eventDay = next && calendarDate(next.start, zone);
-  const eventStart = next && (next.all_day ? '全天' : localDateTime(next.start, zone).slice(11));
-  const starts = next && (eventDay < today || (!next.all_day && Date.parse(next.start) <= now)
-    ? '进行中' : `${relativeDay(eventDay, today)} ${eventStart}`);
+  const upcoming = next ? remaining.slice(remaining.indexOf(next), remaining.indexOf(next) + (wide ? 3 : 1)) : [];
   return <div className="calendar-preview">
     <time className="calendar-preview-date" dateTime={today} aria-label={namedDate.format(new Date(today))}>
       <span>{weekday.format(new Date(today))}</span>
       <strong className="numeric">{Number(today.slice(8))}</strong>
       <small className="numeric">{Number(today.slice(5, 7))}月</small>
     </time>
-    <div className="calendar-preview-event">
-      {next ? <><p className="widget-muted numeric">{starts}</p>
-        <p className="calendar-preview-title"><Dot color={next.color} /><strong className="widget-truncate" title={next.title}>{next.title}</strong></p></>
-        : <p className="widget-muted">{unavailable ? '日历暂不可用' : data ? '近期暂无日程' : '正在读取日历…'}</p>}
-    </div>
+    {upcoming.length ? <ul className="calendar-preview-events">{upcoming.map((item, index) => {
+      const eventDay = calendarDate(item.start, zone);
+      const eventStart = item.all_day ? '全天' : localDateTime(item.start, zone).slice(11);
+      const starts = eventDay < today || (!item.all_day && Date.parse(item.start) <= now)
+        ? '进行中' : `${relativeDay(eventDay, today)} ${eventStart}`;
+      return <li className="calendar-preview-event" key={index}>
+        <p className="widget-muted numeric">{starts}</p>
+        <p className="calendar-preview-title"><Dot color={item.color} /><strong className="widget-truncate" title={item.title}>{item.title}</strong></p>
+      </li>;
+    })}</ul> : <div className="calendar-preview-event"><p className="widget-muted">
+      {unavailable ? '日历暂不可用' : data ? '近期暂无日程' : '正在读取日历…'}</p></div>}
   </div>;
 }
 

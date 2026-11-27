@@ -293,6 +293,14 @@ export default function HostSetup({ config, onConfig }) {
         <SetupField label="OpenAI API Key" name="api_key" secret configured={config.ai.has_api_key} />
       </div>
     </SetupForm>
+    <SetupForm title="AI 用量" onSave={(data) => save({ ai_usage: Object.fromEntries(data) })}>
+      <p className="muted">本机日志和 Vitals 用量自动统计。只有查询云端用量或余额时才需要填写密钥。</p>
+      <div className="host-setup-grid">
+        <SetupField label="DeepSeek API Key" name="deepseek_api_key" secret configured={config.ai_usage?.has_deepseek_api_key} />
+        <SetupField label="OpenAI Admin Key" name="openai_admin_key" secret configured={config.ai_usage?.has_openai_admin_key} />
+        <SetupField label="Anthropic Admin Key" name="anthropic_admin_key" secret configured={config.ai_usage?.has_anthropic_admin_key} />
+      </div>
+    </SetupForm>
     <WeatherSetup weather={config.weather} timezone={config.health.timezone} save={save} />
     <SetupForm title="Bark 推送" onTest={() => postJson(`${BASE}/webhook/test`, {})}
       onSave={(data) => save({ webhook: {

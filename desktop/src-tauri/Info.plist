@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSAppleEventsUsageDescription</key>
-  <string>Vitals uses Apple Events to read and control playback in Music and Spotify.</string>
+  <string>Vitals uses Apple Events to control playback and sync Apple Reminders when the Mac agent is running.</string>
 </dict>
 </plist>

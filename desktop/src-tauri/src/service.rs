@@ -1,8 +1,11 @@
+#[cfg(target_os = "macos")]
+use crate::settings::Remote;
+use crate::settings::Role;
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -16,17 +19,28 @@ pub enum Status {
     Stopped,
     Occupied,
     Failed,
+    Unconfigured,
 }
 
 impl Status {
-    pub fn label(self) -> &'static str {
+    pub fn label(self, role: &Role) -> &'static str {
+        if matches!(role, Role::Remote(_)) {
+            return match self {
+                Self::Running if cfg!(target_os = "macos") => "远程模式：Mac agent 运行中",
+                Self::Running => "远程模式：已启用",
+                Self::Starting => "远程模式：正在启动",
+                Self::Failed => "远程模式：Mac agent 启动失败或已退出",
+                _ => "远程模式：已停止",
+            };
+        }
         match self {
-            Self::Starting => "服务状态：正在启动",
-            Self::Running => "服务状态：运行中",
-            Self::External => "服务状态：运行中（外部托管）",
-            Self::Stopped => "服务状态：已停止",
-            Self::Occupied => "服务状态：端口已被占用",
-            Self::Failed => "服务状态：启动失败",
+            Self::Starting => "主机模式：正在启动",
+            Self::Running => "主机模式：运行中",
+            Self::External => "主机模式：运行中（外部托管）",
+            Self::Stopped => "主机模式：已停止",
+            Self::Occupied => "主机模式：端口已被占用",
+            Self::Failed => "主机模式：启动失败",
+            Self::Unconfigured => "桌面模式：请检查设置",
         }
     }
 }
@@ -35,6 +49,7 @@ pub enum Operation {
     Start,
     Stop,
     Restart,
+    Configure(Role),
     Quit,
 }
 
@@ -50,6 +65,7 @@ pub struct Hub {
     dev_project: Option<PathBuf>,
     port: u16,
     child: Option<Child>,
+    starting: Option<(String, Instant)>,
 }
 
 impl Hub {
@@ -70,10 +86,7 @@ impl Hub {
         } else {
             (home, dev_project)
         };
-        let home = match std::env::var_os("VITALS_DESKTOP_HOME") {
-            Some(path) => std::path::absolute(path)?,
-            None => home,
-        };
+        let home = desktop_home(home)?;
         let port = match std::env::var("VITALS_DESKTOP_PORT") {
             Ok(port) => port.parse::<std::num::NonZeroU16>()?.get(),
             Err(std::env::VarError::NotPresent) => 3993,
@@ -85,6 +98,7 @@ impl Hub {
             dev_project,
             port,
             child: None,
+            starting: None,
         })
     }
 
@@ -127,15 +141,21 @@ impl Hub {
         Probe::Busy
     }
 
-    fn spawn(&self, instance: &str) -> io::Result<Child> {
-        fs::create_dir_all(&self.home)?;
+    fn command(
+        &self,
+        home: &Path,
+        log_name: &str,
+        module: &str,
+        sidecar_args: &[&str],
+    ) -> io::Result<Command> {
+        fs::create_dir_all(home)?;
         let log = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(self.home.join("desktop-hub.log"))?;
+            .open(home.join(log_name))?;
         let mut command = if self.sidecar.is_file() {
             let mut command = Command::new(&self.sidecar);
-            command.current_dir(&self.home);
+            command.current_dir(home).args(sidecar_args);
             command
         } else if let Some(root) = &self.dev_project {
             let python = root.join(if cfg!(windows) {
@@ -144,12 +164,12 @@ impl Hub {
                 ".venv/bin/python"
             });
             let mut command = Command::new(python);
-            command.current_dir(root).args(["-B", "-m", "backend.main"]);
+            command.current_dir(root).args(["-B", "-m", module]);
             command
         } else {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                "Vitals hub sidecar missing",
+                "Vitals sidecar missing",
             ));
         };
         #[cfg(windows)]
@@ -164,6 +184,15 @@ impl Hub {
             command.process_group(0);
         }
         command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::from(log.try_clone()?))
+            .stderr(Stdio::from(log))
+            .env("PYTHONUTF8", "1");
+        Ok(command)
+    }
+
+    fn spawn(&self, instance: &str) -> io::Result<Child> {
+        self.command(&self.home, "desktop-hub.log", "backend.main", &[])?
             .arg("--config")
             .arg(self.home.join("config.json"))
             .arg("--data-dir")
@@ -171,16 +200,11 @@ impl Hub {
             .arg("--port")
             .arg(self.port.to_string())
             .arg("--desktop-stdio")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::from(log.try_clone()?))
-            .stderr(Stdio::from(log))
-            .env("PYTHONUTF8", "1")
             .env("VITALS_DESKTOP_INSTANCE", instance)
             .spawn()
     }
 
-    fn start(&mut self, report: &mut impl FnMut(Status)) -> Status {
-        report(Status::Starting);
+    fn start(&mut self) -> Status {
         match self.probe() {
             Probe::Vitals(_) => return Status::External,
             Probe::Busy => return Status::Occupied,
@@ -194,94 +218,229 @@ impl Hub {
                 return Status::Failed;
             }
         }
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while Instant::now() < deadline {
-            let child = self.child.as_mut().expect("hub child");
-            if !matches!(child.try_wait(), Ok(None)) {
-                self.stop();
-                return if matches!(self.probe(), Probe::Vitals(_)) {
-                    Status::External
-                } else {
+        self.starting = Some((instance, Instant::now() + Duration::from_secs(30)));
+        Status::Starting
+    }
+
+    fn poll(&mut self, status: Status) -> Status {
+        match status {
+            Status::Starting => {
+                if !child_running(&mut self.child) {
+                    self.stop();
+                    return if matches!(self.probe(), Probe::Vitals(_)) {
+                        Status::External
+                    } else {
+                        Status::Failed
+                    };
+                }
+                let (instance, deadline) = self.starting.as_ref().expect("hub startup");
+                if matches!(self.probe(), Probe::Vitals(Some(found)) if &found == instance) {
+                    self.starting = None;
+                    Status::Running
+                } else if Instant::now() >= *deadline {
+                    self.stop();
                     Status::Failed
-                };
+                } else {
+                    Status::Starting
+                }
             }
-            if matches!(self.probe(), Probe::Vitals(Some(found)) if found == instance) {
-                return Status::Running;
+            Status::Running if !child_running(&mut self.child) => {
+                self.stop();
+                Status::Failed
             }
-            std::thread::sleep(Duration::from_millis(180));
+            Status::External | Status::Occupied => match self.probe() {
+                Probe::Vitals(_) => Status::External,
+                Probe::Busy => Status::Occupied,
+                Probe::Free => Status::Stopped,
+            },
+            _ => status,
         }
-        self.stop();
-        Status::Failed
     }
 
     fn stop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            drop(child.stdin.take());
-            let deadline = Instant::now() + Duration::from_secs(8);
-            while Instant::now() < deadline {
-                match child.try_wait() {
-                    Ok(Some(_)) => return,
-                    Ok(None) => std::thread::sleep(Duration::from_millis(100)),
-                    Err(_) => break,
-                }
-            }
+        self.starting = None;
+        stop_child(&mut self.child);
+    }
+}
+
+pub fn desktop_home(default: PathBuf) -> io::Result<PathBuf> {
+    match std::env::var_os("VITALS_DESKTOP_HOME") {
+        Some(path) => std::path::absolute(path),
+        None => Ok(default),
+    }
+}
+
+fn child_running(child: &mut Option<Child>) -> bool {
+    child
+        .as_mut()
+        .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+}
+
+fn stop_child(child: &mut Option<Child>) {
+    let Some(mut child) = child.take() else {
+        return;
+    };
+    drop(child.stdin.take());
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(_) => break,
+        }
+    }
+    #[cfg(target_os = "macos")]
+    // The unreaped bootloader PID is also the process group ID.
+    unsafe {
+        libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+pub struct Supervisor {
+    hub: Hub,
+    role: Role,
+    #[cfg(target_os = "macos")]
+    home: PathBuf,
+    #[cfg(target_os = "macos")]
+    agent: Option<Child>,
+}
+
+impl Supervisor {
+    pub fn new(hub: Hub, role: Role, _home: PathBuf) -> Self {
+        Self {
+            hub,
+            role,
             #[cfg(target_os = "macos")]
-            // The unreaped bootloader PID is also the process group ID.
-            unsafe {
-                libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
-            }
-            let _ = child.kill();
-            let _ = child.wait();
+            home: _home,
+            #[cfg(target_os = "macos")]
+            agent: None,
         }
     }
 
-    pub fn run(mut self, operations: Receiver<Operation>, mut report: impl FnMut(Status)) {
-        let mut status = self.start(&mut report);
-        report(status);
+    #[cfg(target_os = "macos")]
+    fn spawn_agent(&self, remote: &Remote) -> io::Result<Child> {
+        let input = serde_json::to_vec(&serde_json::json!({
+            "server_url": remote.url,
+            "token": remote.token,
+            "device_id": remote.device_id,
+        }))?;
+        let mut child = Some(
+            self.hub
+                .command(
+                    &self.home,
+                    "desktop-agent.log",
+                    "mac_agent.agent",
+                    &["--mac-agent"],
+                )?
+                .arg("--desktop-stdio")
+                .spawn()?,
+        );
+        let stdin = child
+            .as_mut()
+            .unwrap()
+            .stdin
+            .as_mut()
+            .expect("agent input pipe");
+        if let Err(error) = stdin
+            .write_all(&input)
+            .and_then(|()| stdin.write_all(b"\n"))
+        {
+            stop_child(&mut child);
+            return Err(error);
+        }
+        Ok(child.unwrap())
+    }
+
+    fn start(&mut self) -> Status {
+        match &self.role {
+            Role::Hub => self.hub.start(),
+            #[cfg(target_os = "macos")]
+            Role::Remote(remote) => match self.spawn_agent(remote) {
+                Ok(child) => {
+                    self.agent = Some(child);
+                    Status::Running
+                }
+                Err(error) => {
+                    eprintln!("Could not start Vitals Mac agent: {error}");
+                    Status::Failed
+                }
+            },
+            #[cfg(not(target_os = "macos"))]
+            Role::Remote(_) => Status::Running,
+            Role::Unconfigured => Status::Unconfigured,
+        }
+    }
+
+    fn stop(&mut self) {
+        self.hub.stop();
+        #[cfg(target_os = "macos")]
+        stop_child(&mut self.agent);
+    }
+
+    fn poll(&mut self, status: Status) -> Status {
+        match self.role {
+            Role::Hub => self.hub.poll(status),
+            #[cfg(target_os = "macos")]
+            Role::Remote(_) if status == Status::Running && !child_running(&mut self.agent) => {
+                stop_child(&mut self.agent);
+                Status::Failed
+            }
+            _ => status,
+        }
+    }
+
+    pub fn run(mut self, operations: Receiver<Operation>, mut report: impl FnMut(&Role, Status)) {
+        if self.role != Role::Unconfigured {
+            report(&self.role, Status::Starting);
+        }
+        let mut status = self.start();
+        if status != Status::Starting {
+            report(&self.role, status);
+        }
         loop {
-            let next = match operations.recv_timeout(Duration::from_secs(2)) {
+            let refresh = if status == Status::Starting {
+                Duration::from_millis(180)
+            } else {
+                Duration::from_secs(2)
+            };
+            let next = match operations.recv_timeout(refresh) {
                 Ok(Operation::Quit) | Err(RecvTimeoutError::Disconnected) => {
                     self.stop();
                     return;
                 }
-                Ok(Operation::Start) if !matches!(status, Status::Running | Status::External) => {
+                Ok(Operation::Start)
+                    if matches!(status, Status::Stopped | Status::Failed | Status::Occupied) =>
+                {
+                    report(&self.role, Status::Starting);
                     status = Status::Starting;
-                    self.start(&mut report)
+                    self.start()
                 }
-                Ok(Operation::Stop) if status == Status::Running => {
+                Ok(Operation::Stop)
+                    if matches!(status, Status::Starting | Status::Running | Status::Failed) =>
+                {
                     self.stop();
                     Status::Stopped
                 }
                 Ok(Operation::Restart) if status == Status::Running => {
+                    report(&self.role, Status::Starting);
                     self.stop();
                     status = Status::Starting;
-                    self.start(&mut report)
+                    self.start()
                 }
-                Err(RecvTimeoutError::Timeout) if status == Status::Running => {
-                    if self
-                        .child
-                        .as_mut()
-                        .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
-                    {
-                        status
-                    } else {
-                        self.stop();
-                        Status::Failed
-                    }
+                Ok(Operation::Configure(role)) if self.role != role => {
+                    report(&role, Status::Starting);
+                    self.stop();
+                    self.role = role;
+                    status = Status::Starting;
+                    self.start()
                 }
-                Err(RecvTimeoutError::Timeout)
-                    if matches!(status, Status::External | Status::Occupied) =>
-                {
-                    match self.probe() {
-                        Probe::Vitals(_) => Status::External,
-                        Probe::Busy => Status::Occupied,
-                        Probe::Free => Status::Stopped,
-                    }
-                }
+                Err(RecvTimeoutError::Timeout) => self.poll(status),
                 _ => status,
             };
             if next != status {
-                report(next);
+                report(&self.role, next);
                 status = next;
             }
         }

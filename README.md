@@ -37,7 +37,8 @@
 - **快捷状态条**：顶部直达主机实时状态与当前正在播放的媒体。
 - **天气与空气质量**：接入 Open-Meteo，详情包括紫外线指数、US AQI、24 小时曲线与未来 7 天预报。
 - **个人健康状态**：从 iPhone Health Auto Export 和 Android Health Connect 导入步数、睡眠、心率和活动能量。详情保留小时明细、趋势、血氧、呼吸频率与 7 天对比。
-- **生活小组件**：双向日历、今日待办与微习惯、倒数日，以及支持换算和历史走势的参考汇率。在「个性化设置 → 今日概览」可分别开关状态条、简报和六张卡片。偏好保存在当前浏览器，关闭模块会暂停该模块的首页轮询。
+- **生活小组件**：双向日历、今日待办与微习惯、倒数日，以及支持换算和历史走势的参考汇率。在「个性化设置 → 今日概览」可分别开关模块、调整卡片顺序和标准/宽卡尺寸，或恢复默认布局。偏好保存在当前浏览器，关闭模块会暂停该模块的首页轮询。
+- **AI 用量**：查看本机 Codex、Claude Code 和 Vitals 最近 84 天的 Token 活动、今日用量和单日峰值。Vitals 仅从 `~/.codex/sessions/` 与 `~/.claude/projects/` 的日志文件提取时间和用量字段，聊天与每日简报用量从上游返回的计数开始记录。各来源分别展示。
 - **每日一句 AI 状态简报（可选）**：按本地自然日缓存，结合天气、健康与今日日程，支持 Bark 定时推送。
 
 ### 2. 控制中心（支持 Windows & MacBook 多设备切换）
@@ -74,6 +75,8 @@
 
 运行 `.exe`（NSIS）或 `.msi` 安装包，再从开始菜单打开 **Vitals**。托盘图标左键显示窗口，关闭窗口会将其隐藏到托盘。右键菜单提供本机服务的启动、停止、重启、登录自启与退出。登录自启在该 Windows 用户登录时启动托盘程序。若需要登录前运行，继续使用现有任务计划程序方式。
 
+托盘或等待页的「切换运行模式」可选择本机主机或连接远程主机。远程模式填写中心端的 HTTPS 地址和 Agent Token，窗口直接打开中心端界面。本机已有的主机数据保留在原目录。Windows 远程模式提供客户端界面，Mac 远程模式还会启动内置 Agent，将本机注册到中心端。
+
 桌面版自带 Python 服务、网页资源和 Windows 媒体与音量控制。打包版将配置和数据保存在当前用户的 `%LOCALAPPDATA%\org.vitals.desktop\`。安装前如已用任务计划程序或脚本运行 Vitals，请先从旧实例导出 ZIP 备份，再停止旧服务并关闭其自启，以免占用 3993。桌面版可识别同端口的兼容 Vitals 服务并打开其界面，外部服务的启停仍由原启动方式管理。需要迁移时，在桌面版导入 ZIP，并重新填写集成凭据。安装程序目前未做代码签名。
 
 在本机窗口打开「个性化设置 → 主机配置」即可设置 OpenAI、天气与时区、Bark、日历和设备配对。已保存的密码与密钥在表单中仅显示掩码，留空会保留原值。修改配置后按提示从托盘重启服务。Agent Token 可以在本机查看、复制或重新生成，换发时需同步更新所有配对设备。该页面也可通过本机 `http://127.0.0.1:3993/` 或已监听的 `http://[::1]:3993/` 打开。Tailscale 远程访问不会获得这些接口。
@@ -96,7 +99,7 @@
 
 打开与 Mac 架构相符的 `.dmg`，将 **Vitals.app** 拖入 **Applications**，然后从「应用程序」打开。顶部菜单栏的脉搏图标会随系统外观切换明暗。点击图标可打开窗口、查看服务状态、启动、停止、重启服务，或启用「开机自启」。前台应用菜单中的「Vitals 服务」也提供这些操作。点击红色关闭按钮或登录时静默启动，Vitals 会在后台运行，Dock 图标自动隐藏。用顶部菜单栏的「打开 Vitals」可恢复窗口和 Dock 图标。「退出 Vitals」和 `⌘Q` 会关闭应用启动的本机服务。
 
-在「个性化设置 → 主机配置」保存配置后，从菜单栏重启服务。桌面版的数据与日志默认位于 `~/Library/Application Support/org.vitals.desktop/`。桌面版用于让 Mac 担任 Vitals 主机。如果 Windows 继续担任主机，使用 [Mac Agent](mac_agent/README.md) 即可。已有独立 Mac Hub 自启时，可先导出备份并停止旧服务，再在桌面版导入。
+在「个性化设置 → 主机配置」保存配置后，从菜单栏重启服务。桌面版的数据与日志默认位于 `~/Library/Application Support/org.vitals.desktop/`。如果另一台电脑已担任主机，可在菜单栏切换到远程模式，并填写中心端地址和 Agent Token。切换前可退出旧的独立 Mac Agent，以免同一台 Mac 重复注册。已有独立 Mac Hub 自启时，可先导出备份并停止旧服务，再在桌面版导入。
 
 #### 在 macOS 构建桌面安装包
 
@@ -275,6 +278,7 @@ Vitals 默认仅允许本机回环与 Tailscale 私有网络访问（内置 `Pri
 
 - **OpenAI 助手**：在 `config.json` 中配置 `ai.api_key`（默认 `gpt-6-luna`，官方端点 `https://api.openai.com/v1`），在网页右上角「个性化设置」中控制总开关与实时状态联动开关。编辑 `backend/agent.md` 可热加载自定义角色人设。
 - **AI 技能**：在聊天里直接说明希望查询或执行的操作。待办、日历、中转站和媒体等操作会显示状态标签。锁屏、熄屏、睡眠和关机需要在 60 秒内点击一次「确认执行」。MacBook 关机需要支持关机能力的 Agent 和 macOS 自动化许可。若到点时 MacBook 不在线，中心端放弃本次关机。
+- **云端 AI 用量（可选）**：在「主机配置 → AI 用量」填写对应密钥后重启，或直接维护 `config.json` 的 `ai_usage`。DeepSeek API Key 用于查余额。OpenAI Admin Key 和 Anthropic Admin Key 用于查询组织级日用量，按 UTC 日期展示。汇总结果可通过 `GET /api/ai/usage` 读取，密钥仅由中心端用于各自提供商的 API。
 - **Bark 推送**：在 `config.json` 中将 `webhook.kind` 设为 `"bark"`，将 `bark_url_template` 设为 `https://api.day.app/<YOUR_DEVICE_KEY>/{title}/{body}`，重启后可通过 `POST /api/control/webhook/test` 测试连通性。
 - **iPhone 快捷指令**：在「快捷指令」中新建共享表单指令，文本/URL `POST` JSON `{"text": ...}` 至 `/api/scratchpad/text`，图片/文件 `POST` 表单字段 `file` 至 `/api/scratchpad/file`。
 - **任务计划程序开机自启**：创建计划任务，程序填 `powershell.exe`，参数填 `-NoProfile -NonInteractive -WindowStyle Hidden -File "<项目路径>\start_vitals_autorun.ps1"`，起始于项目根目录，并启用 Tailscale 的 **Run unattended**。

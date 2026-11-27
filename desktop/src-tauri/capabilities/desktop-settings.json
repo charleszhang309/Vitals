@@ -1,0 +1,7 @@
+{
+  "identifier": "desktop-settings",
+  "description": "Allow the bundled desktop settings window to read and save the role.",
+  "local": true,
+  "windows": ["desktop-settings"],
+  "permissions": ["allow-manage-desktop-settings"]
+}

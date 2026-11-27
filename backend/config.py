@@ -197,6 +197,12 @@ class AiConfig(ConfigModel):
         return self.enabled and self.configured
 
 
+class AiUsageConfig(ConfigModel):
+    deepseek_api_key: SecretStr | None = None
+    openai_admin_key: SecretStr | None = None
+    anthropic_admin_key: SecretStr | None = None
+
+
 def default_modes() -> dict[str, PowerMode]:
     return {
         "silent": PowerMode(guid=UUID("a1841308-3541-4fab-bc81-f71556f20b4a")),
@@ -220,6 +226,7 @@ class Settings(ConfigModel):
     calendar: CalendarConfig = Field(default_factory=CalendarConfig)
     finance: FinanceConfig = Field(default_factory=FinanceConfig)
     ai: AiConfig = Field(default_factory=AiConfig)
+    ai_usage: AiUsageConfig = Field(default_factory=AiUsageConfig)
     fancontrol_mode_sensor: bool = False
     fancontrol_exe: Path | None = None
     power_modes: dict[str, PowerMode] = Field(default_factory=default_modes)

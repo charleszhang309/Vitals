@@ -23,6 +23,7 @@ from websockets.exceptions import ConnectionClosed
 from .agents import AgentRegistry, agents_router, require_agent_token
 from .ai import AiState, DailyBriefing, ai_router
 from .ai_tools import AiTools
+from .ai_usage import AiUsage, UsageLedger, usage_router
 from .backup import Backups, backup_router
 from .calendar_service import CalendarService, calendar_router
 from .config import MIB, ROOT, Settings, load_settings
@@ -164,7 +165,8 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     power = MacPowerControl(settings) if macos else PowerControl(settings, sensor_file=sensor_file)
     weather = Weather(settings.weather)
     ai_state = AiState(settings.ai, config_path)
-    briefing = DailyBriefing(store, health, weather, calendar)
+    usage_ledger = UsageLedger(store.connect)
+    briefing = DailyBriefing(store, health, weather, calendar, usage_ledger)
     if interactive_media and identity["platform"] == "windows":
         from .media_desktop import InteractiveMediaBridge
 
@@ -182,6 +184,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
             life.initialize()
             rate_pins.initialize()
             rate_history.initialize()
+            usage_ledger.initialize()
             agents.restore_profiles()
 
     @asynccontextmanager
@@ -235,6 +238,7 @@ def create_app(settings: Settings | None = None, data_dir: Path = ROOT / "data",
     app.include_router(life_router(life, agent_auth))
     app.include_router(rates_router(rates, rate_pins, rate_history))
     app.include_router(ai_router(ai_state, store, power, briefing, ai_tools))
+    app.include_router(usage_router(AiUsage(usage_ledger, settings.ai_usage, health.zone)))
     app.include_router(media_router(media, LyricsCache(store), agents))
 
     @app.websocket("/ws/metrics")

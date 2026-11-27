@@ -27,7 +27,10 @@ class Config:
     @classmethod
     def load(cls, path: Path, *, require_token: bool = True):
         with path.open(encoding="utf-8") as source:
-            data = json.load(source)
+            return cls.from_data(json.load(source), require_token=require_token)
+
+    @classmethod
+    def from_data(cls, data, *, require_token: bool = True):
         if not isinstance(data, dict):
             raise ValueError("配置必须是 JSON 对象")
 

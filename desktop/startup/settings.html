@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vitals 桌面设置</title>
+<link rel="stylesheet" href="./startup.css">
+<script src="./settings.js" defer></script>
+<main class="settings">
+  <h1>桌面模式</h1>
+  <form autocomplete="off">
+    <fieldset class="roles">
+      <legend>选择运行方式</legend>
+      <label><input type="radio" name="role" value="hub" checked> 主机（Hub）</label>
+      <label><input type="radio" name="role" value="remote"> 远程（Remote）</label>
+    </fieldset>
+    <p id="description">在本机运行 Vitals 服务并保存数据。</p>
+    <fieldset id="remote" class="connection" aria-label="远程主机连接" disabled hidden>
+      <label for="url">主机 HTTPS 地址</label>
+      <input id="url" name="url" type="url" maxlength="2048" placeholder="https://vitals.example.com" spellcheck="false" required>
+      <label for="token">配对令牌</label>
+      <input id="token" name="token" type="password" maxlength="4096" autocomplete="new-password" spellcheck="false">
+    </fieldset>
+    <p id="feedback" class="feedback" role="alert"></p>
+    <button type="submit" disabled>保存并应用</button>
+  </form>
+</main>
+</html>

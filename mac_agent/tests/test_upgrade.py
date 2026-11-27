@@ -1,3 +1,4 @@
+import os
 import plistlib
 from queue import Queue
 from threading import Event, Thread
@@ -11,6 +12,25 @@ from mac_agent import agent, macos, playback
 
 
 class UpgradeTests(unittest.TestCase):
+    @patch("mac_agent.agent.socket.gethostname", return_value="Test-Mac.local")
+    def test_desktop_agent_reads_config_then_stops_on_parent_eof(self, _):
+        read_fd, write_fd = os.pipe()
+        stopped = Event()
+        with os.fdopen(read_fd, "rb") as source:
+            with os.fdopen(write_fd, "wb") as parent:
+                parent.write(b'{"server_url":"https://fixture.test/","token":"fixture","device_id":"mac-test"}\n')
+                parent.flush()
+                config = agent.desktop_config(source)
+                monitor = Thread(target=agent.watch_desktop, args=(source, stopped), daemon=True)
+                monitor.start()
+                self.assertEqual(config.server_url, "https://fixture.test")
+                self.assertEqual(config.token, "fixture")
+                self.assertEqual(config.device_id, "mac-test")
+                self.assertEqual(config.device_name, "Test-Mac")
+                self.assertFalse(stopped.is_set())
+            monitor.join(1)
+            self.assertTrue(stopped.is_set())
+
     @patch("mac_agent.macos.psutil.disk_usage")
     @patch("mac_agent.macos.psutil.disk_partitions")
     @patch("mac_agent.macos.native")

@@ -35,13 +35,14 @@ mkdir -p "$build" "$binaries"
 
 npm --prefix "$project/frontend" ci
 npm --prefix "$project/frontend" run build -- --outDir "$static"
-"$python" -m pip install pyinstaller==6.22.3 -r "$project/backend/requirements.txt"
+"$python" -m pip install pyinstaller==6.22.3 -r "$project/backend/requirements.txt" -r "$project/mac_agent/requirements.txt"
 
 pyinstaller=(
     --noconfirm --onefile --console --name vitals-hub --target-architecture "$arch"
     --paths "$project" --distpath "$build/frozen" --workpath "$build/work" --specpath "$build"
     --add-data "$static:backend/static" --add-data "$project/backend/agent.md:backend"
-    --collect-submodules uvicorn
+    --collect-submodules uvicorn --hidden-import mac_agent.agent
+    --osx-entitlements-file "$desktop/src-tauri/Entitlements.plist"
 )
 if [[ "$APPLE_SIGNING_IDENTITY" != "-" ]]; then
     pyinstaller+=(--codesign-identity "$APPLE_SIGNING_IDENTITY")

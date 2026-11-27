@@ -6,10 +6,12 @@ from contextlib import closing
 from datetime import datetime, timezone
 import json
 import logging
+import os
 from pathlib import Path
 from queue import Empty, Queue
 import re
 import signal
+import socket
 import subprocess
 import sys
 from threading import Event, Lock, Thread
@@ -314,6 +316,24 @@ def run_agent(config, directory, stopped):
             media_refresh.set()
 
 
+def desktop_config(source):
+    line = source.readline(16_384)
+    if not line.endswith(b"\n"):
+        raise ValueError("无法读取 Vitals 桌面代理设置")
+    data = json.loads(line)
+    if not isinstance(data, dict):
+        raise ValueError("配置必须是 JSON 对象")
+    data["device_name"] = socket.gethostname().strip().removesuffix(".local")[:200] or "Mac"
+    return Config.from_data(data)
+
+
+def watch_desktop(source, stopped):
+    try:
+        os.read(source.fileno(), 1)
+    finally:
+        stopped.set()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=CONFIG_PATH)
@@ -321,6 +341,7 @@ def main() -> int:
     modes.add_argument("--sample", action="store_true", help="采集一次本机快照，不联网")
     modes.add_argument("--sync-reminders-once", action="store_true", help="同步提醒事项一次")
     modes.add_argument("--check-config", action="store_true", help="校验配置，不联网")
+    modes.add_argument("--desktop-stdio", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO,
@@ -334,7 +355,7 @@ def main() -> int:
         if args.sample:
             print(json.dumps({"caffeinate": False, **Sampler(allow_artwork_download=False).sample()}, ensure_ascii=False, indent=2))
             return 0
-        config = Config.load(args.config)
+        config = desktop_config(sys.stdin.buffer) if args.desktop_stdio else Config.load(args.config)
         if args.check_config:
             return 0
         directory = state_directory(config)
@@ -346,6 +367,8 @@ def main() -> int:
                 stopped = Event()
                 for signal_type in (signal.SIGTERM, signal.SIGINT):
                     signal.signal(signal_type, lambda *_: stopped.set())
+                if args.desktop_stdio:
+                    Thread(target=watch_desktop, args=(sys.stdin.buffer, stopped), daemon=True).start()
                 logger.info("Vitals Mac agent 已启动 (%s)", config.device_id)
                 run_agent(config, directory, stopped)
     except FAILURES as exc:

@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 import httpx
 
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 REPOSITORY = "https://github.com/charleszhang309/Vitals"
 RELEASES_URL = f"{REPOSITORY}/releases"
 LATEST_RELEASE_API = "https://api.github.com/repos/charleszhang309/Vitals/releases/latest"

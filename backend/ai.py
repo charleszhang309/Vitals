@@ -151,8 +151,11 @@ def sse(event, payload):
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-async def stream_completion(client, config, messages, tools, expires):
+async def stream_completion(client, config, messages, tools, expires, usage=None):
     payload = {"model": config.model, "stream": True, "max_completion_tokens": 1800, "messages": messages}
+    if usage is not None:
+        payload["stream_options"] = {"include_usage": True}
+    recorded = False
     if tools:
         payload["tools"] = tools
         if config.model.casefold().startswith("gpt-6-luna"):
@@ -176,6 +179,8 @@ async def stream_completion(client, config, messages, tools, expires):
             chunk = json.loads(payload)
             if not isinstance(chunk, dict) or chunk.get("error"):
                 raise ValueError("invalid chat event")
+            if usage is not None and not recorded and chunk.get("usage") is not None:
+                recorded = await usage.record(chunk["usage"], "chat")
             for choice in chunk.get("choices") or []:
                 if choice.get("index", 0) == 0:
                     yield choice
@@ -197,7 +202,7 @@ def collect_calls(calls, deltas):
                 raise ValueError("oversize tool call")
 
 
-async def chat_rounds(request, config, messages, tools, prompt, parts):
+async def chat_rounds(request, config, messages, tools, prompt, parts, usage=None):
     allowed = allowed_writes(prompt)
     definitions = tools.definitions(allowed)
     used, seen = set(), set()
@@ -206,7 +211,7 @@ async def chat_rounds(request, config, messages, tools, prompt, parts):
     for round_number in range(TOOL_ROUNDS + 1):
         calls, text_parts, finish = {}, [], None
         offered = definitions if round_number < TOOL_ROUNDS else None
-        async with aclosing(stream_completion(request.app.state.external_client, config, messages, offered, expires)) as stream:
+        async with aclosing(stream_completion(request.app.state.external_client, config, messages, offered, expires, usage)) as stream:
             async for choice in stream:
                 delta = choice.get("delta") or {}
                 finish = choice.get("finish_reason") or finish
@@ -280,7 +285,7 @@ async def vitals_context(request, health, weather, control, calendar=None):
     return context
 
 
-async def complete_text(client: httpx.AsyncClient, config: AiConfig, system: str, text: str, max_tokens: int) -> str:
+async def complete_text(client: httpx.AsyncClient, config: AiConfig, system: str, text: str, max_tokens: int, usage=None) -> str:
     response = await asyncio.wait_for(client.post(
         str(config.base_url).rstrip("/") + "/chat/completions",
         headers={"Authorization": f"Bearer {config.api_key.get_secret_value().strip()}"},
@@ -290,7 +295,12 @@ async def complete_text(client: httpx.AsyncClient, config: AiConfig, system: str
         timeout=18,
     ), timeout=20)
     response.raise_for_status()
-    value = response.json()["choices"][0]["message"]["content"]
+    completion = response.json()
+    if not isinstance(completion, dict):
+        raise ValueError("invalid completion")
+    if usage is not None:
+        await usage.record(completion.get("usage"), "briefing")
+    value = completion["choices"][0]["message"]["content"]
     if not isinstance(value, str) or not value.strip():
         raise ValueError("empty completion")
     return value.strip()
@@ -309,11 +319,12 @@ async def analyze_text(client: httpx.AsyncClient, config: AiConfig, text: str, s
 
 
 class DailyBriefing:
-    def __init__(self, store: Scratchpad, health, weather, calendar=None):
+    def __init__(self, store: Scratchpad, health, weather, calendar=None, usage=None):
         self.store = store
         self.health = health
         self.weather = weather
         self.calendar = calendar
+        self.usage = usage
         self.lock = asyncio.Lock()
         self.retry = None
 
@@ -352,7 +363,8 @@ class DailyBriefing:
                 if self.calendar and self.calendar.sources:
                     context["agenda_today"] = self.calendar.agenda(requested)
                 system = await run_in_threadpool(load_system_prompt)
-                result = await complete_text(client, config, f"{system}\n\n{BRIEFING_SYSTEM}", json.dumps(context, ensure_ascii=False), 240)
+                result = await complete_text(client, config, f"{system}\n\n{BRIEFING_SYSTEM}",
+                                             json.dumps(context, ensure_ascii=False), 240, self.usage)
                 content = " ".join(result.split())[:180]
                 created_at = datetime.now(timezone.utc).isoformat()
                 await run_in_threadpool(self.save, day, content, created_at)
@@ -496,7 +508,7 @@ def ai_router(state: AiState, store: Scratchpad, control: PowerControl, briefing
                                                                     + json.dumps(records, ensure_ascii=False)})
                     messages.append({"role": "user", "content": payload.message})
                     parts = []
-                    async with aclosing(chat_rounds(request, config, messages, tools, payload.message, parts)) as stream:
+                    async with aclosing(chat_rounds(request, config, messages, tools, payload.message, parts, briefing.usage)) as stream:
                         async for event in stream:
                             yield event
                     answer = "".join(parts)

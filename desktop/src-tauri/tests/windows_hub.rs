@@ -1,7 +1,33 @@
 #![cfg(windows)]
 
 // Exercise the same supervisor that receives native tray menu operations.
+#[path = "../src/settings.rs"]
+mod settings;
 include!("../src/service.rs");
+use settings::{Selection, SettingsStore};
+
+fn remote_role(home: &Path) -> Role {
+    let (store, default) = SettingsStore::load(home);
+    assert!(default == Role::Hub);
+    let (send, receive) = std::sync::mpsc::channel();
+    store
+        .apply(
+            Selection::Remote,
+            "https://vitals.example.test/",
+            "test-only-token",
+            |role| send.send(role).map_err(|_| "Supervisor stopped"),
+        )
+        .unwrap();
+    assert!(!serde_json::to_string(&store.view())
+        .unwrap()
+        .contains("test-only-token"));
+    let active = receive.recv().unwrap();
+    let Role::Remote(remote) = &active else {
+        panic!("configured remote role")
+    };
+    assert_eq!(remote.address().host_str(), Some("vitals.example.test"));
+    active
+}
 
 #[test]
 #[ignore = "requires the packaged sidecar from build_windows.ps1"]
@@ -21,16 +47,17 @@ fn tray_owned_hub_lifecycle() {
     drop(socket);
 
     let hub = Hub {
-        home,
+        home: home.clone(),
         sidecar,
         dev_project: None,
         port,
         child: None,
+        starting: None,
     };
     let (send, receive) = std::sync::mpsc::channel();
     let (report, statuses) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        hub.run(receive, |status| {
+        Supervisor::new(hub, Role::Hub, PathBuf::new()).run(receive, |_, status| {
             let _ = report.send(status);
         })
     });
@@ -39,8 +66,8 @@ fn tray_owned_hub_lifecycle() {
         assert!(
             actual == expected,
             "expected {}, got {}",
-            expected.label(),
-            actual.label()
+            expected.label(&Role::Hub),
+            actual.label(&Role::Hub)
         );
     };
     let probe = || {
@@ -81,7 +108,47 @@ fn tray_owned_hub_lifecycle() {
     send.send(Operation::Start).unwrap();
     wait(Status::Starting);
     wait(Status::Running);
+    let remote = remote_role(&home);
+    send.send(Operation::Configure(remote)).unwrap();
+    wait(Status::Starting);
+    wait(Status::Running);
+    assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err());
+    send.send(Operation::Restart).unwrap();
+    wait(Status::Starting);
+    wait(Status::Running);
+    assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err());
+    send.send(Operation::Configure(Role::Hub)).unwrap();
+    wait(Status::Starting);
+    wait(Status::Running);
+    probe();
     send.send(Operation::Quit).unwrap();
     worker.join().unwrap();
     assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err());
+}
+
+#[test]
+fn remote_start_never_creates_hub_home() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("hub");
+    let hub = Hub {
+        home: home.clone(),
+        sidecar: directory.path().join("missing.exe"),
+        dev_project: None,
+        port: 3993,
+        child: None,
+        starting: None,
+    };
+    let remote = remote_role(directory.path());
+    let (send, receive) = std::sync::mpsc::channel();
+    send.send(Operation::Quit).unwrap();
+    let mut running = false;
+    Supervisor::new(hub, remote.clone(), directory.path().to_owned()).run(
+        receive,
+        |role, status| {
+            assert!(role == &remote);
+            running |= status == Status::Running;
+        },
+    );
+    assert!(running);
+    assert!(!home.exists());
 }

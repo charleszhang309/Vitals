@@ -35,10 +35,12 @@ CALENDAR_SECRETS = {
     "ics": ("url",),
 }
 CALENDAR_FIELDS = {"id", "name", "type", "color", "writable", "calendar_id", "tenant"}
+AI_USAGE_KEYS = ("deepseek_api_key", "openai_admin_key", "anthropic_admin_key")
 SECTION_FIELDS = {
     "weather": {"city_name", "latitude", "longitude"},
     "health": {"timezone"},
     "ai": {"model", "base_url", "api_key"},
+    "ai_usage": set(AI_USAGE_KEYS),
     "webhook": {"kind", "device_key", "daily_briefing_time"},
     "calendar": {"sources"},
 }
@@ -102,6 +104,7 @@ def config_view(settings: Settings, running: Settings):
         "health": {"timezone": settings.health.timezone},
         "ai": {"model": settings.ai.model, "base_url": str(settings.ai.base_url),
                "has_api_key": bool(settings.ai.api_key)},
+        "ai_usage": {f"has_{name}": bool(getattr(settings.ai_usage, name)) for name in AI_USAGE_KEYS},
         "webhook": {"kind": settings.webhook.kind, "daily_briefing_time": settings.webhook.daily_briefing_time,
                     "has_key": bool(settings.webhook.bark_url_template)},
         "calendar": {"sources": [
@@ -111,7 +114,7 @@ def config_view(settings: Settings, running: Settings):
         ]},
         "agents": {"has_token": bool(settings.agents.token)},
         "restart_required": any(getattr(settings, section) != getattr(running, section)
-                                for section in ("weather", "health", "webhook", "calendar", "agents")) or any(
+                                for section in ("weather", "health", "webhook", "calendar", "agents", "ai_usage")) or any(
             getattr(settings.ai, key) != getattr(running.ai, key) for key in ("api_key", "model", "base_url")
         ),
     }
@@ -150,6 +153,13 @@ def section_patch(document, patch):
                 raise HTTPException(422, "OpenAI API Key 无效")
             if key and key.strip():
                 current["api_key"] = key.strip()
+        if section == "ai_usage":
+            for name, key in updates.items():
+                if key is not None and (not isinstance(key, str) or len(key) > 4096):
+                    raise HTTPException(422, "AI 用量密钥格式无效")
+                if key and key.strip():
+                    current[name] = key.strip()
+            continue
         if section == "webhook":
             device_key = updates.pop("device_key", None)
             if device_key is not None and not isinstance(device_key, str):

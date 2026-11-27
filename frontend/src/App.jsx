@@ -31,7 +31,7 @@ export default function App() {
   const [agentActive, setAgentActive] = useState(false);
   const immersiveView = clockOpen ? 'clock' : view === 'control' && playerOpen ? 'player' : null;
   const appearance = useAppearance(immersiveView);
-  const { widgets, defaultDevice } = appearance.preferences;
+  const { widgets, cardOrder, cardWidths, defaultDevice } = appearance.preferences;
   const watchAgents = view === 'control' || monitorOpen || settings ||
     (view === 'today' && defaultDevice !== HUB_DEVICE_ID && (widgets.host !== false || widgets.media !== false));
   const info = useOverviewResource('/api/system/info', 60_000);
@@ -119,6 +119,7 @@ export default function App() {
             <motion.section key={view} role="tabpanel" aria-labelledby={`tab-${view}`} id={`panel-${view}`}
               initial={{ opacity: 0, y: reduced ? 0 : 7 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 0 }} transition={{ duration: reduced ? 0 : 0.16 }}>
               {view === 'today' && <TodayPage telemetry={telemetry} media={media} dark={dark} widgets={widgets}
+                cardOrder={cardOrder} cardWidths={cardWidths}
                 hub={hub} primaryDevice={primaryDevice} waitingForPrimary={waitingForPrimary}
                 openMonitor={() => { navigate('control', primaryDevice?.device_id ?? HUB_DEVICE_ID); setMonitorOpen(true); }}
                 openControl={() => {

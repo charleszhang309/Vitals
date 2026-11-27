@@ -7,7 +7,8 @@ import { measure, number, sleepTime, time } from './format.js';
 import { DetailLink, IconButton, Modal, Segmented } from './ui.jsx';
 import HealthTrend from './HealthTrend.jsx';
 import useResource from './useOverviewResource.js';
-import { overviewCards } from './overviewCards.js';
+import { orderedCards } from './overviewCards.js';
+import { AiUsageDetails, AiUsagePreview } from './AiUsageWidget.jsx';
 import { CalendarDetails, CalendarPreview } from './CalendarWidget.jsx';
 import { CountdownDetails, CountdownPreview, RateDetails, RatePreview, TasksDetails, TasksPreview } from './LifeWidgets.jsx';
 
@@ -19,6 +20,7 @@ const stages = [
   ['deep', '深睡'], ['rem', 'REM'], ['core', '核心'], ['asleep', '未分期'], ['awake', '清醒'],
 ];
 const weatherMetrics = [{ value: 'temperature', label: '温度' }, { value: 'rain', label: '降水概率' }];
+const forecastWeekday = new Intl.DateTimeFormat('zh-CN', { timeZone: 'UTC', weekday: 'short' });
 
 function DailyBriefing() {
   const { data, setData } = useResource('/api/ai/briefing', 300_000);
@@ -116,7 +118,7 @@ function AirBadge({ air, compact = false }) {
   </span>;
 }
 
-function WeatherPreview({ resource }) {
+function WeatherPreview({ resource, wide }) {
   const reply = resource.data;
   const current = reply?.data?.current;
   const [, description] = condition(current?.code);
@@ -124,6 +126,7 @@ function WeatherPreview({ resource }) {
     : resource.error || reply?.status === 'unavailable' ? '天气暂不可用' : '正在获取天气…';
   const temperature = (value) => Number.isFinite(value) ? `${number(value, 0)}°` : '—';
   const percent = (value) => Number.isFinite(value) ? `${number(value, 0)}%` : '—';
+  const forecast = wide ? reply?.data?.daily?.slice(1, 4) ?? [] : [];
   return <div className="weather-preview">
     <div className="widget-weather">
       <div className="widget-weather-current">
@@ -138,6 +141,16 @@ function WeatherPreview({ resource }) {
       ['体感', temperature(current?.feels_like_c)], ['湿度', percent(current?.humidity_percent)],
       ['降水', percent(current?.precipitation_percent)],
     ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd className="numeric">{value}</dd></div>)}</dl>
+    {forecast.length > 0 && <ul className="widget-weather-forecast">
+      {forecast.map((day) => {
+        const [Icon, label] = condition(day.code);
+        return <li key={day.date} title={label}>
+          <time dateTime={day.date}>{forecastWeekday.format(new Date(`${day.date}T00:00:00Z`))}</time>
+          <Icon size={17} role="img" aria-label={label} />
+          <span className="numeric"><span className="muted">{temperature(day.low_c)}</span> {temperature(day.high_c)}</span>
+        </li>;
+      })}
+    </ul>}
   </div>;
 }
 
@@ -172,7 +185,6 @@ function ForecastDays({ days }) {
   const values = days.flatMap((day) => [day.low_c, day.high_c]).filter(Number.isFinite);
   const minimum = values.length ? Math.min(...values) : 0;
   const span = values.length ? Math.max(Math.max(...values) - minimum, 1) : 1;
-  const formatter = new Intl.DateTimeFormat('zh-CN', { timeZone: 'UTC', weekday: 'short' });
   return (
     <section className="surface panel forecast-card">
       <div className="panel-header"><h3>未来 7 天</h3></div>
@@ -182,7 +194,7 @@ function ForecastDays({ days }) {
         const start = valid ? (day.low_c - minimum) / span * 100 : 0;
         const width = valid ? (day.high_c - day.low_c) / span * 100 : 0;
         return <li className="forecast-row" key={day.date}>
-          <span className="forecast-day">{index === 0 ? '今天' : formatter.format(new Date(`${day.date}T00:00:00Z`))}</span>
+          <span className="forecast-day">{index === 0 ? '今天' : forecastWeekday.format(new Date(`${day.date}T00:00:00Z`))}</span>
           <span className="forecast-condition" aria-label={label} title={label}><Icon size={19} aria-hidden="true" /><span>{label}</span></span>
           <span className="numeric muted">{measure(day.low_c, '°', 0)}</span>
           <span className="temperature-track" aria-hidden="true">{valid && <span style={{ left: `${start}%`, width: `max(4px, ${width}%)` }} />}</span>
@@ -353,8 +365,10 @@ function Health({ resource, dark }) {
   );
 }
 
-export default function TodayPage({ telemetry, media, hub, primaryDevice, waitingForPrimary, dark, openMonitor, openControl, briefingEnabled, widgets }) {
+export default function TodayPage({ telemetry, media, hub, primaryDevice, waitingForPrimary, dark, openMonitor, openControl,
+  briefingEnabled, widgets, cardOrder, cardWidths }) {
   const [open, setOpen] = useState(null);
+  const [usageSource, setUsageSource] = useState(null);
   const visible = (id) => widgets[id] !== false;
   const weather = useResource('/api/weather', 60_000, visible('weather'));
   const health = useResource('/api/health/summary', 20_000, visible('health'));
@@ -363,19 +377,24 @@ export default function TodayPage({ telemetry, media, hub, primaryDevice, waitin
   const habits = useResource('/api/habits', 15_000, visible('tasks'));
   const countdowns = useResource('/api/countdowns', 30_000, visible('countdowns'));
   const rates = useResource('/api/rates', 60_000, visible('rates'));
+  const aiUsage = useResource('/api/ai/usage', 300_000, visible('ai-usage'));
+  const isWide = (id) => cardWidths[id] === 'wide';
 
   const previews = {
-    weather: <WeatherPreview resource={weather} />, health: <HealthPreview resource={health} />,
-    calendar: <CalendarPreview resource={calendar} />, tasks: <TasksPreview todos={todos} habits={habits} />,
+    weather: <WeatherPreview resource={weather} wide={isWide('weather')} />, health: <HealthPreview resource={health} />,
+    calendar: <CalendarPreview resource={calendar} wide={isWide('calendar')} />,
+    tasks: <TasksPreview todos={todos} habits={habits} wide={isWide('tasks')} />,
     countdowns: <CountdownPreview resource={countdowns} />, rates: <RatePreview resource={rates} />,
+    'ai-usage': <AiUsagePreview resource={aiUsage} wide={isWide('ai-usage')} preferredSource={usageSource} />,
   };
   const details = {
     weather: <Weather resource={weather} dark={dark} />, health: <Health resource={health} dark={dark} />,
     tasks: <TasksDetails todos={todos} habits={habits} />,
     countdowns: <CountdownDetails resource={countdowns} />, rates: <RateDetails resource={rates} dark={dark} />,
+    'ai-usage': <AiUsageDetails resource={aiUsage} preferredSource={usageSource} onSource={setUsageSource} />,
   };
-  const selected = overviewCards.find(({ id }) => id === open && visible(id));
-  const shown = overviewCards.filter(({ id }) => visible(id));
+  const shown = orderedCards(cardOrder).filter(({ id }) => visible(id));
+  const selected = shown.find(({ id }) => id === open);
   const remoteTrack = primaryDevice?.online && primaryDevice.snapshot.media;
   const track = primaryDevice || waitingForPrimary
     ? remoteTrack && { ...remoteTrack, agent_id: primaryDevice.device_id }
@@ -388,7 +407,8 @@ export default function TodayPage({ telemetry, media, hub, primaryDevice, waitin
     {visible('briefing') && briefingEnabled && <DailyBriefing />}
     {shown.length > 0 && <div className="overview-grid">
       {shown.map(({ id, title, Icon, tone }) => (
-        <motion.section key={id} className={`surface detail-tile overview-widget tone-${tone}`} data-widget={id} whileTap={{ scale: 0.98 }}>
+        <motion.section key={id} className={`surface detail-tile overview-widget tone-${tone}`} data-widget={id}
+          data-width={isWide(id) ? 'wide' : 'standard'} whileTap={{ scale: 0.98 }}>
           <header><span className="metric-icon"><Icon size={18} aria-hidden="true" /></span><h2>{title}</h2>
             {id === 'weather' && <div className="widget-aqi"><AirBadge air={weather.data?.air_quality} compact /></div>}
           </header>

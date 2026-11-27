@@ -6,6 +6,10 @@
 
 ## 安装和配置
 
+Vitals 2.1 桌面应用可在菜单栏选择「配置桌面模式…」并切换为「远程（Remote）」。输入主机的 HTTPS 地址及配对令牌后，桌面应用会打开远程网页并管理内置 Mac agent。此方式使用系统默认提醒事项列表。已有独立 LaunchAgent 的用户切换前应先停用旧登录项，避免两个 agent 同步同一个列表。
+
+以下安装方法适用于单独运行 Mac agent。
+
 需要 macOS、Python 3.10 或更新版本。请先在 Windows 部署同版本的后端和前端，再升级 Mac agent。Windows 端的 `config.json` 必须设置 `agents.token`。从仓库根目录执行以下命令。
 
 ```bash

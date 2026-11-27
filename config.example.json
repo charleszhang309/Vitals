@@ -29,6 +29,11 @@
     "model": "gpt-6-luna",
     "include_vitals_context": true
   },
+  "ai_usage": {
+    "deepseek_api_key": null,
+    "openai_admin_key": null,
+    "anthropic_admin_key": null
+  },
   "lhm": {
     "url": "http://localhost:8085/data.json",
     "timeout_seconds": 1.0,

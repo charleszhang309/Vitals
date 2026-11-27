@@ -8,14 +8,14 @@ function ReminderSource({ item }) {
   return item.external_source === 'apple_reminders' && <small className="reminder-source">提醒事项</small>;
 }
 
-export function TasksPreview({ todos, habits }) {
+export function TasksPreview({ todos, habits, wide }) {
   if (!todos.data || !habits.data) return <p className="widget-muted">{todos.error || habits.error ? '事项暂不可用' : '正在读取事项…'}</p>;
   const items = [...todos.data.items, ...habits.data.items];
   const done = items.filter((item) => item.done).length;
   return <>
     <p className="widget-value numeric">{done} <small>/ {items.length} 已完成</small></p>
     <ProgressBar label="今日完成进度" value={items.length ? done / items.length * 100 : 0} />
-    <ul className="widget-lines">{items.filter((item) => !item.done).slice(0, 2).map((item, index) =>
+    <ul className="widget-lines">{items.filter((item) => !item.done).slice(0, wide ? 6 : 2).map((item, index) =>
       <li className="reminder-preview" key={index}><span className="widget-truncate">{item.title}</span><ReminderSource item={item} /></li>)}</ul>
     {items.length === done && <p className="widget-muted">{items.length ? '今日事项已完成' : '今日暂无事项'}</p>}
   </>;
