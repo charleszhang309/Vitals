@@ -40,6 +40,14 @@ STAGES = {"deep": "deep", "rem": "rem", "core": "core", "awake": "awake", "aslee
           "unspecified": "asleep", "inbed": "in_bed"}
 SLEEP_PHASES = ("awake", "deep", "rem", "core", "asleep")
 SLEEP_SESSION_GAP = timedelta(hours=2)
+# Apple 汇总、Android 汇总和原始分段的主键分别可能是日期、起点或终点。
+# 用实际结束时间为区间查询建索引，旧记录也能直接使用。
+SLEEP_END_SQL = {
+    "sleep_analysis": "coalesce(json_extract(payload, '$.in_bed_end'), json_extract(payload, '$.end'), at)",
+    "sleep_segment": "max(" + ", ".join(
+        f"coalesce(json_extract(payload, '$.{stage}'), at)" for stage in (*SLEEP_PHASES, "in_bed")
+    ) + ")",
+}
 
 
 def iso(value: datetime) -> str:
@@ -505,11 +513,66 @@ def mean(values):
     return sum(values) / len(values)
 
 
-def sleep_records(db, first, end, zone):
-    lower = iso(datetime.combine(first - timedelta(days=1), time.min, zone))
-    return tuple(db.execute("""SELECT at, payload FROM health_samples
-        WHERE metric = ? AND at >= ? AND at < ? ORDER BY at""", (metric, lower, end)).fetchall()
-                 for metric in ("sleep_analysis", "sleep_segment"))
+def sleep_records(db, lower, end):
+    rows = {metric: [] for metric in SLEEP_END_SQL}
+    upper = None
+    while True:
+        earliest = None
+        for metric, finish in SLEEP_END_SQL.items():
+            first = ("coalesce(json_extract(payload, '$.in_bed_start'), json_extract(payload, '$.start'), at)"
+                     if metric == "sleep_analysis" else "at")
+            query = f"""SELECT at, payload, {first} AS first_at FROM health_samples INDEXED BY health_{metric}_end
+                WHERE metric = '{metric}' AND {finish} >= ? AND at < ?"""
+            args = (lower, end)
+            if upper is not None:
+                query += f" AND {finish} < ?"
+                args += (upper,)
+            batch = db.execute(query, args).fetchall()
+            rows[metric].extend(batch)
+            if batch:
+                start = min(row["first_at"] for row in batch)
+                earliest = min(earliest, start) if earliest else start
+        # 查询边界若落在同一段睡眠中，继续读到第一个超过两小时的空档。
+        if earliest is None:
+            break
+        preceding = iso(datetime.fromisoformat(earliest) - SLEEP_SESSION_GAP)
+        if preceding >= lower:
+            break
+        upper, lower = lower, preceding
+    return rows["sleep_analysis"], rows["sleep_segment"]
+
+
+def latest_measured_sleep(records, end):
+    measured = ((wake, record) for wake, record in records if wake < end and record["total_minutes"] is not None)
+    return max(measured, key=lambda option: option[0], default=(None, None))[1]
+
+
+def latest_sleep(db, end):
+    before = None
+    while True:
+        ends = []
+        for metric, finish in SLEEP_END_SQL.items():
+            measured = ("json_extract(payload, '$.total_minutes')" if metric == "sleep_analysis" else
+                        "coalesce(json_extract(payload, '$.core'), json_extract(payload, '$.deep'), "
+                        "json_extract(payload, '$.rem'), json_extract(payload, '$.asleep'))")
+            query = f"""SELECT max({finish}) FROM health_samples INDEXED BY health_{metric}_end
+                WHERE metric = '{metric}' AND at < ? AND {measured} IS NOT NULL"""
+            args = (end,)
+            if before is not None:
+                query += f" AND {finish} < ?"
+                args += (before,)
+            last = db.execute(query, args).fetchone()[0]
+            if last:
+                ends.append(last)
+        if not ends:
+            return None
+        lower = iso(datetime.fromisoformat(min(max(ends), end)) - timedelta(days=1))
+        summaries, segments = sleep_records(db, lower, end)
+        latest = latest_measured_sleep(sleep_options(summaries, segments), end)
+        if latest:
+            return latest
+        # 如果睡眠跨过统计截止时间，继续查找更早的完整睡眠。
+        before = lower
 
 
 def sleep_by_day(records, zone, end):
@@ -537,6 +600,9 @@ class HealthStore:
                 priority INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(metric, at)
             )""")
             db.execute("CREATE INDEX IF NOT EXISTS health_updated ON health_samples(updated_at)")
+            for metric, finish in SLEEP_END_SQL.items():
+                db.execute(f"""CREATE INDEX IF NOT EXISTS health_{metric}_end
+                    ON health_samples({finish}) WHERE metric = '{metric}'""")
             db.execute("""CREATE TABLE IF NOT EXISTS health_file_imports (
                 path TEXT PRIMARY KEY, modified_ns INTEGER NOT NULL, size INTEGER NOT NULL
             )""")
@@ -618,6 +684,7 @@ class HealthStore:
         start = iso(datetime.combine(day, time.min, self.zone))
         end = iso(datetime.combine(day + timedelta(days=1), time.min, self.zone))
         with self.connect() as db:
+            db.execute("BEGIN")
             updated = db.execute("SELECT MAX(updated_at) FROM health_samples").fetchone()[0]
             daily_rows = db.execute("""SELECT metric, at, payload FROM health_samples WHERE at >= ? AND at < ?
                 AND metric IN ('step_count','active_energy','apple_exercise_time','walking_running_distance','heart_rate') ORDER BY at""", (start, end)).fetchall()
@@ -625,8 +692,7 @@ class HealthStore:
             for name in (*LATEST, "heart_rate"):
                 row = db.execute("SELECT payload FROM health_samples WHERE metric = ? ORDER BY at DESC LIMIT 1", (name,)).fetchone()
                 latest[name] = json.loads(row[0]) if row else None
-            sleep_rows = db.execute("SELECT at, payload FROM health_samples WHERE metric = 'sleep_analysis' ORDER BY at DESC LIMIT 7").fetchall()
-            segments = db.execute("SELECT at, payload FROM health_samples WHERE metric = 'sleep_segment' ORDER BY at DESC LIMIT 512").fetchall()
+            sleep = latest_sleep(db, end)
 
         totals, beats, hours = defaultdict(list), [], defaultdict(list)
         for row in daily_rows:
@@ -638,7 +704,6 @@ class HealthStore:
             else:
                 totals[row["metric"]].append(values["qty"])
 
-        sleep = max(sleep_options(sleep_rows, segments), key=lambda option: option[0], default=(None, None))[1]
         return {
             "available": updated is not None, "updated_at": updated, "date": day.isoformat(), "timezone": self.config.timezone,
             "day_start": start, "day_end": end, "totals": {name: sum(totals[name]) if totals[name] else None for name in TOTALS},
@@ -662,7 +727,7 @@ class HealthStore:
                 day = datetime.fromisoformat(row["at"]).astimezone(self.zone).date()
                 records = steps if row["metric"] == "step_count" else resting
                 records[day].append(json.loads(row["payload"])["qty"])
-            summaries, segments = sleep_records(db, dates[0], end, self.zone)
+            summaries, segments = sleep_records(db, start, end)
         sleeps = sleep_by_day(sleep_options(summaries, segments), self.zone, end)
         daily = {
             "steps": {day: sum(values) for day, values in steps.items()},
@@ -689,7 +754,7 @@ class HealthStore:
         end = iso(now)
         with self.connect() as db:
             db.execute("BEGIN")
-            summaries, segments = sleep_records(db, day, end, self.zone)
+            summaries, segments = sleep_records(db, midnight, end)
         candidates = [(wake, record) for wake, record in sleep_options(summaries, segments)
                       if midnight <= wake < end and record["total_minutes"] is not None]
         # 有跨午夜的记录时优先使用它们，避免同一天的短午睡盖过昨晚。
@@ -788,25 +853,10 @@ class HealthStore:
                                 for name in names[:2] if category == "activity" or name == names[0]}} for day in dates]}
 
     def sleep_detail(self, db, dates, start, end):
-        # 睡眠通常跨午夜，额外读取前一天的分段，以醒来日归档。
-        lower = iso(datetime.fromisoformat(start) - timedelta(days=1))
-        summaries = db.execute("""SELECT at, payload FROM health_samples
-            WHERE metric = 'sleep_analysis' AND at >= ? AND at < ?""", (lower, end)).fetchall()
-        segments = db.execute("""SELECT at, payload FROM health_samples
-            WHERE metric = 'sleep_segment' AND at >= ? AND at < ?""", (lower, end)).fetchall()
+        summaries, segments = sleep_records(db, start, end)
         records = list(sleep_options(summaries, segments))
-        if not records:
-            summaries = db.execute("""SELECT at, payload FROM health_samples WHERE metric = 'sleep_analysis'
-                AND at < ? ORDER BY at DESC LIMIT 7""", (end,)).fetchall()
-            segments = db.execute("""SELECT at, payload FROM health_samples WHERE metric = 'sleep_segment'
-                AND at < ? ORDER BY at DESC LIMIT 512""", (end,)).fetchall()
-            records = list(sleep_options(summaries, segments))
         by_day = sleep_by_day(records, self.zone, end)
-        latest = None
-        for awake_at, sleep in sorted(records, key=lambda option: option[0]):
-            if awake_at >= end or sleep["total_minutes"] is None:
-                continue
-            latest = sleep
+        latest = latest_measured_sleep(records, end) or latest_sleep(db, end)
         night = {"blood_oxygen_saturation": None, "respiratory_rate": None}
         if latest:
             minutes = latest["in_bed_minutes"]

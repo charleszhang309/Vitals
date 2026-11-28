@@ -701,12 +701,6 @@ div.deck-key[data-empty="true"] .deck-key-empty-plus { display: none; }
   flex: 1 1 130px;
 }
 
-.deck-field-row {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: 8px;
-}
-
 .deck-field {
   display: grid;
   gap: 4px;

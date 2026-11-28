@@ -161,7 +161,9 @@ export default function MonitorPage({ telemetry, dark, power, onClose, hub, devi
   return <Modal id="full-monitor" title={t('硬件监控')} className={device ? 'detail-dialog remote-monitor-dialog' : 'monitor-dialog'} onClose={onClose}>
     <div className="monitor-content">
       <DevicePicker id="monitor-device" hub={hub} devices={devices} device={device} onChange={onDevice} />
-      {device ? <RemoteHardware device={device} /> : <HostMonitor telemetry={telemetry} platform={hub.platform} dark={dark} power={power} />}
+      {device?.snapshot && <RemoteHardware device={device} />}
+      {device && !device.snapshot && <p className="feedback" role="status">{t('设备状态暂不可用')}</p>}
+      {!device && <HostMonitor telemetry={telemetry} platform={hub.platform} dark={dark} power={power} />}
     </div>
   </Modal>;
 }

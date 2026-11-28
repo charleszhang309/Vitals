@@ -8,10 +8,12 @@ import { CUSTOM_ICON_RE, DECK_ICONS } from './deckIcons.js';
 import { Button, IconButton, Modal } from './ui.jsx';
 import { httpUrl, request, sendJson } from './api.js';
 import useResource from './useOverviewResource.js';
+import { useMedia } from './useMedia.js';
 import { focusClock } from './useFocusTimer.js';
 import { getLocale, t } from './i18n/messages.js';
 import { freshTile, liveLabels, SceneEditor, TileEditor } from './DeckEditor.jsx';
-import { deckSlots, fitsDeckGrid, grids } from './deckLayout.js';
+import { deckActionTile, deckSlots, fitsDeckGrid, grids } from './deckLayout.js';
+import { deckTarget, HUB_DEVICE_ID } from './controlDevice.js';
 import DeckPlugins from './DeckPlugins.jsx';
 import DeckTouchStrip, { useDeckFaders } from './DeckTouchStrip.jsx';
 import ScreenshotControl from './ScreenshotControl.jsx';
@@ -19,7 +21,7 @@ import { desktopPlatform } from './DesktopChrome.jsx';
 import './deck.css';
 
 const root = '/api/deck';
-const HUB = 'hub';
+const canceledAction = '目标或布局已更改，操作已取消。请重新选择按键。';
 
 function selectedScene(layout, id) {
   return layout?.scenes.find((item) => item.id === id) ?? layout?.scenes.find((item) => !item.folder);
@@ -129,10 +131,12 @@ function tileState(tile, { sample, audio, media, focus, ai, feedback }) {
   return {};
 }
 
-export default function DeckPage({ close, hub, devices, defaultDevice, sample, media, focus, refreshMedia, refreshDevices }) {
+export default function DeckPage({ close, hub, devices, defaultDevice, sample, focus, refreshDevices }) {
   const [selection, setSelection] = useState(defaultDevice);
-  const target = devices.find((item) => item.online && item.device_id === selection) ?? hub;
+  const target = deckTarget(selection, hub, devices);
+  const canRun = !target.statusUnknown;
   const [saved, setSaved] = useState(null);
+  const [announcedRevision, setAnnouncedRevision] = useState(-1);
   const [draft, setDraft] = useState(null);
   const [entry, setEntry] = useState(null);
   const [sceneId, setScene] = useState(null);
@@ -164,14 +168,15 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
   const list = layout?.scenes.filter((item) => draft || !item.folder) ?? [];
   const [columns, rows] = grids[scene?.grid] ?? [3, 2];
   const { data: catalog, retry: refreshCatalog } = useResource(`${root}/catalog`, 60_000);
-  const { data: hostAudio, setData: setHostAudio, retry: refreshAudio } = useResource(`${root}/audio?target=hub`, 2500, target.device_id === HUB);
+  const { data: hostAudio, setData: setHostAudio, retry: refreshAudio } = useResource(`${root}/audio?target=hub`, 2500, target.device_id === HUB_DEVICE_ID);
   const audioTarget = target.device_id;
   const currentTarget = useRef(audioTarget);
-  currentTarget.current = audioTarget;
-  const localTarget = audioTarget === HUB;
-  const targetTrack = localTarget ? media : target.snapshot?.media && { ...target.snapshot.media, agent_id: audioTarget };
+  currentTarget.current = canRun ? audioTarget : null;
+  const localTarget = audioTarget === HUB_DEVICE_ID;
+  const media = useMedia(localTarget);
+  const targetTrack = localTarget ? media.current : target.snapshot?.media && { ...target.snapshot.media, agent_id: audioTarget };
   const reportError = (text) => setMessage({ text, error: true });
-  const faders = useDeckFaders(audioTarget, localTarget ? hostAudio : target.snapshot?.volume, setHostAudio, refreshDevices, reportError);
+  const faders = useDeckFaders(canRun ? audioTarget : null, localTarget ? hostAudio : target.snapshot?.volume, setHostAudio, refreshDevices, reportError);
   const audio = faders.values;
   const { data: aiData } = useResource('/api/ai/usage', 60_000, Boolean(scene?.tiles.some((tile) => tile?.live === 'ai')));
   const quota = aiData?.sources?.find((item) => item.id === 'codex' || item.source === 'codex')?.quota;
@@ -180,6 +185,14 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
   const feedbackKey = scene?.tiles.flatMap((tile, index) => tile?.feedback ? [index] : []).join(',');
   const savedRevision = saved?.revision;
   const editing = Boolean(draft);
+  const confirmedTile = canRun && !editing && deckActionTile(confirm?.action, audioTarget, Math.max(savedRevision ?? -1, announcedRevision), scene);
+
+  useEffect(() => {
+    if (confirm && !confirmedTile) {
+      setConfirm(null);
+      setMessage({ text: t(canceledAction), error: true });
+    }
+  }, [confirm, confirmedTile]);
 
   function install(document) {
     if (document.revision < revision.current) return;
@@ -201,14 +214,19 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
         const value = await request(root, { signal: connection.signal });
         if (connection.signal.aborted || value.revision < revision.current) return;
         if (draftRef.current) setSyncConflict(value.revision > revision.current);
-        else { install(value); setMessage(null); }
+        else { install(value); setMessage((current) => current?.loadError ? null : current); }
       } catch (error) {
-        if (!connection.signal.aborted) setMessage({ text: error.message, error: true });
+        if (!connection.signal.aborted) setMessage({ text: error.message, error: true, loadError: true });
       }
     }
     load(Infinity);
     const stream = new EventSource(httpUrl(`${root}/events`));
-    stream.onmessage = (event) => load(Number(event.data));
+    stream.onmessage = (event) => {
+      const next = Number(event.data);
+      if (!Number.isSafeInteger(next)) return;
+      setAnnouncedRevision((previous) => Math.max(previous, next));
+      load(next);
+    };
     const refresh = () => { if (!document.hidden && !draftRef.current) load(Infinity); };
     document.addEventListener('visibilitychange', refresh);
     return () => {
@@ -429,39 +447,45 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
       }
       return;
     }
-    if (!tile || busy) return;
+    if (!tile || busy || !canRun) return;
     if (tile.kind === 'folder') {
       setTrail([...trail.slice(-15), scene.id]);
       setScene(tile.page);
       return;
     }
+    const action = { target: audioTarget, revision: savedRevision, scene: scene.id, slot: index };
     if (tile.steps.some((step) => step.action.id === 'desktop' && step.action.params.action === 'lock')) {
-      setConfirm(index);
+      setConfirm({ action, name: target.name });
       return;
     }
-    if (tile.steps.length) run(index);
+    if (tile.steps.length) run(action);
   }
 
-  async function run(index) {
-    const tile = scene.tiles[index];
+  async function run(action) {
+    const tile = deckActionTile(action, currentTarget.current, Math.max(revision.current, announcedRevision), scene);
+    if (!tile || draftRef.current) {
+      setMessage({ text: t(canceledAction), error: true });
+      return;
+    }
+    if (sending.current || busy) return;
     const controller = new AbortController();
-    if (sending.current) return;
     sending.current = controller;
     setBusy(true);
     setMessage(null);
-    const isLink = (step) => step.action.id === 'launcher' && catalog?.launchers.some((item) => item.id === step.action.params.id && item.kind === 'url');
-    const containsEffects = tile.steps.some((step) => ['focus', 'screenshot'].includes(step.action.id) || isLink(step));
-    const directLink = tile.steps.length === 1 && isLink(tile.steps[0]) && !tile.steps[0].delay_ms;
     try {
+      const isLink = (step) => step.action.id === 'launcher' && catalog?.launchers.some((item) => item.id === step.action.params.id && item.kind === 'url');
+      const containsEffects = tile.steps.some((step) => ['focus', 'screenshot'].includes(step.action.id) || isLink(step));
+      const directLink = tile.steps.length === 1 && isLink(tile.steps[0]) && !tile.steps[0].delay_ms;
       if (directLink) {
         const url = httpUrl(`/api/control/launchers/${encodeURIComponent(tile.steps[0].action.params.id)}/open`).href;
         window.open(url, '_blank', 'noopener,noreferrer');
         return;
       }
       async function call(step) {
+        if (currentTarget.current !== action.target) throw new Error(t(canceledAction));
         const result = await request(`${root}/run`, { method: 'POST', timeoutMs: 75_000, signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ revision: saved.revision, scene: scene.id, slot: index, target: audioTarget, step }) });
+          body: JSON.stringify({ ...action, step }) });
         for (const effect of result.results) {
           if (effect.effect === 'focus') focus.control(effect.action, effect.minutes);
           if (effect.effect === 'screenshot' && (currentTarget.current !== audioTarget || !(await screenshot.current?.open()))) {
@@ -480,8 +504,10 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
         await call(undefined);
       }
       if (alive.current) {
-        refreshAudio();
-        refreshMedia();
+        if (localTarget) {
+          refreshAudio();
+          media.reload();
+        }
         refreshDevices();
         setMessage((current) => current ?? { text: t('动作已执行') });
       }
@@ -540,7 +566,7 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
             <span className="deck-target-label">{t('目标主机')}</span>
             <select aria-label={t('目标主机')} value={audioTarget}
               disabled={busy} onChange={(event) => setSelection(event.target.value)}>
-              {[hub, ...devices.filter((device) => device.online)].map((device) =>
+              {[hub, ...devices.filter((device) => device.online), ...(target.statusUnknown ? [target] : [])].map((device) =>
                 <option key={device.device_id} value={device.device_id}>{device.name}</option>)}
             </select>
           </label>
@@ -566,6 +592,7 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
           </div>
         </div>
       </header>
+      {target.statusUnknown && <p className="feedback" role="status">{t('暂时无法确认 {p1} 的状态，设备操作已暂停。', { p1: target.name })}</p>}
       {scene ? <>
         {draft && <SceneEditor scene={scene} set={updateScene} add={addScene} remove={removeScene}
           canAdd={draft.scenes.length < 16} canRemove={scene.folder || draft.scenes.filter((item) => !item.folder).length > 1}
@@ -606,7 +633,7 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
                     data-selected={editing && entry === index}>
                     {isButton ? <button type="button" className={classes} title={label}
                       data-deck-color={tile?.color || 'slate'} data-kind={tile?.kind} data-active={Boolean(state.active)} data-selected={editing && entry === index}
-                      data-empty={!tile} data-has-cover={hasCover} disabled={busy && !editing} aria-pressed={tile?.kind === 'toggle' ? Boolean(state.active) : undefined}
+                      data-empty={!tile} data-has-cover={hasCover} disabled={!editing && (busy || !canRun)} aria-pressed={tile?.kind === 'toggle' ? Boolean(state.active) : undefined}
                       onClick={() => pressTile(index, tile)}>{content}</button>
                       : <div className={classes} data-empty={!tile} data-has-cover={hasCover} data-kind={tile?.kind} data-deck-color={tile?.color || 'slate'} data-active={Boolean(state.active)}>{content}</div>}
                     {editing && tile && <button className="deck-grip" type="button" aria-label={t('移动按键')} aria-pressed={moveFrom === index}
@@ -642,24 +669,24 @@ export default function DeckPage({ close, hub, devices, defaultDevice, sample, m
           </>}
         </div>
       </> : !message && <p className="deck-loading" role="status">{t('正在加载 Deck…')}</p>}
-      <DeckTouchStrip key={audioTarget} deviceId={audioTarget} track={targetTrack} faders={faders} reportError={reportError}
-        onMediaChange={localTarget ? refreshMedia : refreshDevices} />
+      <DeckTouchStrip key={audioTarget} deviceId={audioTarget} track={targetTrack} faders={faders} reportError={reportError} disabled={!canRun}
+        onMediaChange={localTarget ? media.reload : refreshDevices} />
       {message && <div className={`deck-toast ${message.error ? 'is-error' : ''}`} role={message.error ? 'alert' : 'status'}>
         {!message.error && <Check size={14} aria-hidden="true" />}
         {message.link ? <a href={httpUrl(`/api/control/launchers/${encodeURIComponent(message.link)}/open`).href}
           target="_blank" rel="noreferrer">{message.text}</a> : <span>{message.text}</span>}
       </div>}
       <div className="deck-screenshot">
-        <ScreenshotControl key={audioTarget} deviceId={localTarget ? null : audioTarget} deviceName={target.name} controlRef={screenshot} />
+        <ScreenshotControl key={audioTarget} deviceId={localTarget ? null : audioTarget} deviceName={target.name} controlRef={screenshot} disabled={!canRun} />
       </div>
       <AnimatePresence>
         {pluginsOpen && <DeckPlugins key="plugins" close={() => setPluginsOpen(false)} initialKey={managementKey}
           rememberKey={setManagementKey} onChange={refreshCatalog} />}
-        {confirm !== null && <Modal key="lock" id={confirmationId} title={t('确认锁屏')} onClose={() => setConfirm(null)}>
-          <p>{t('要锁定 {p1} 吗？', { p1: target.name })}</p>
+        {confirmedTile && <Modal key="lock" id={confirmationId} title={t('确认锁屏')} onClose={() => setConfirm(null)}>
+          <p>{t('要锁定 {p1} 吗？', { p1: confirm.name })}</p>
           <div className="deck-editor-actions">
             <Button onClick={() => setConfirm(null)}>{t('取消')}</Button>
-            <Button onClick={() => { const index = confirm; setConfirm(null); run(index); }}>{t('确认锁屏')}</Button>
+            <Button onClick={() => { setConfirm(null); run(confirm.action); }}>{t('确认锁屏')}</Button>
           </div>
         </Modal>}
       </AnimatePresence>

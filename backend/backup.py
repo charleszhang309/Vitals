@@ -1,7 +1,8 @@
 """Online backup export and verified, restart-time restore."""
 
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from datetime import date
+from hashlib import sha256
 import os
 from pathlib import Path
 import re
@@ -23,6 +24,9 @@ from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.responses import FileResponse
 
 from .config import GIB, MIB
+from .backup_database import copy_portable_database, retain_local_plugin_settings
+from .deck_icons import ICON_FILENAME, MAX_ICON_BYTES, read_image
+from .scratchpad import check_local_path
 
 ARCHIVE_LIMIT = 4 * GIB
 MEMBER_LIMIT = 2 * GIB
@@ -30,41 +34,39 @@ WALLPAPER_LIMIT = 10 * MIB
 ENTRY_LIMIT = 50_000
 ZIP_READ_LIMIT = 16 * MIB
 CHUNK = 128 * 1024
-KEY = re.compile(r"[0-9a-f]{32}")
 UPLOAD = re.compile(r"uploads/[0-9a-f]{32}")
-REQUIRED_COLUMNS = {
-    "scratchpad": {"id", "kind", "text", "filename", "size_bytes", "mime_type", "storage_key", "created_at"},
-    "todos": {"id", "title", "day", "done"},
-    "habits": {"id", "title"},
-}
+PORTABLE_MARKER = ".vitals-portable-restore"
 
 
-def read_db(path):
-    return sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+def checked_icon(path):
+    check_local_path(path)
+    with path.open("rb") as source:
+        data = source.read(MAX_ICON_BYTES + 1)
+    if len(data) > MAX_ICON_BYTES:
+        raise ValueError("备份 Deck 图标过大")
+    try:
+        canonical, extension = read_image(data, path.name)
+    except HTTPException as error:
+        raise ValueError("备份 Deck 图标无效") from error
+    if canonical != data or f"{sha256(data).hexdigest()}.{extension}" != path.name:
+        raise ValueError("备份 Deck 图标与文件名不一致")
+    return data
 
 
-def upload_manifest(db):
-    files = {}
-    for key, size in db.execute("SELECT storage_key,size_bytes FROM scratchpad WHERE kind='file'"):
-        if not isinstance(key, str) or not KEY.fullmatch(key) or type(size) is not int or size < 0 or key in files:
-            raise ValueError("中转站文件索引无效")
-        files[key] = size
-    return files
+def sanitize_restored_database(staged, work):
+    with TemporaryDirectory(dir=work) as directory:
+        clean = Path(directory)
+        uploads = copy_portable_database(staged / "app.db", clean)
+        if uploads != {f.name: check_local_path(f).st_size for f in (staged / "uploads").iterdir()}:
+            raise ValueError("备份中的附件与 SQLite 文件索引不一致")
+        (clean / "app.db").replace(staged / "app.db")
 
 
-def validate_database(path):
-    with closing(read_db(path)) as db:
-        db.execute("PRAGMA trusted_schema=OFF")
-        tables = {name: sql or "" for name, sql in db.execute("SELECT name,sql FROM sqlite_schema WHERE type='table'")}
-        if (db.execute("SELECT 1 FROM sqlite_schema WHERE type IN ('trigger','view') LIMIT 1").fetchone()
-                or any(sql.lstrip().upper().startswith("CREATE VIRTUAL TABLE") for sql in tables.values())):
-            raise ValueError("备份数据库包含不支持的对象")
-        for table, columns in REQUIRED_COLUMNS.items():
-            if table not in tables or not columns <= {row[1] for row in db.execute(f"PRAGMA table_info({table})")}:
-                raise ValueError("SQLite 文件缺少 Vitals 表或字段")
-        if db.execute("PRAGMA integrity_check(1)").fetchone() != ("ok",):
-            raise ValueError("SQLite 完整性校验失败")
-        return upload_manifest(db)
+def check_plugin_members(directory, names):
+    for name in names:
+        child = Path(directory) / name
+        check_local_path(child, directory=child.is_dir())
+    return []
 
 
 class ArchiveReader:
@@ -156,6 +158,18 @@ class Backups:
                 move_restore_directory(previous, self.data_dir)
             raise
         try:
+            marker = self.data_dir / PORTABLE_MARKER
+            if marker.exists():
+                marker.unlink()
+            else:
+                # A restore staged by an older version still contains its original SQLite schema.
+                sanitize_restored_database(self.data_dir, self.work)
+            if previous is not None:
+                if check_local_path(previous / "app.db", missing_ok=True):
+                    retain_local_plugin_settings(previous / "app.db", self.data_dir / "app.db")
+                plugins = previous / "plugins"
+                if check_local_path(plugins, directory=True, missing_ok=True):
+                    shutil.copytree(plugins, self.data_dir / "plugins", ignore=check_plugin_members)
             yield
         except BaseException:
             move_restore_directory(self.data_dir, self.work / f"failed-{restore_id}")
@@ -170,25 +184,18 @@ class Backups:
         try:
             target = root / "app.db"
             archive = root / "backup.zip"
-            deadline = monotonic() + 30
-
-            def limit_time(*_):
-                if monotonic() > deadline:
-                    raise HTTPException(503, "备份 SQLite 超时，请稍后重试")
-
-            if self.store.database.is_symlink() or self.store.uploads.is_symlink():
-                raise HTTPException(409, "备份数据库和附件目录须位于数据目录内")
-            with self.store.files_lock, closing(read_db(self.store.database)) as source, closing(sqlite3.connect(target)) as copy:
-                source.backup(copy, pages=128, progress=limit_time, sleep=.05)
-                copy.execute("PRAGMA journal_mode=DELETE")
-                uploads = upload_manifest(copy)
+            check_local_path(self.data_dir, directory=True)
+            check_local_path(self.store.database)
+            check_local_path(self.store.uploads, directory=True)
+            with self.store.files_lock:
+                uploads = copy_portable_database(self.store.database, root, exporting=True)
                 with ZipFile(archive, "w", ZIP_DEFLATED, compresslevel=1) as output:
                     total = 0
 
                     def add(path, name, limit, expected=None):
                         nonlocal total
-                        status = path.lstat()
-                        if not stat.S_ISREG(status.st_mode) or (expected is not None and status.st_size != expected):
+                        status = check_local_path(path)
+                        if expected is not None and status.st_size != expected:
                             raise HTTPException(409, "备份源中有无效文件")
                         total += status.st_size
                         if status.st_size > limit or total >= ARCHIVE_LIMIT:
@@ -199,7 +206,18 @@ class Backups:
                         raise HTTPException(413, "备份文件数超出上限")
                     add(target, "app.db", MEMBER_LIMIT)
                     for key, size in uploads.items():
-                        add(self.store.uploads / key, f"uploads/{key}", MEMBER_LIMIT, size)
+                        add(self.store.attachment_path(key), f"uploads/{key}", MEMBER_LIMIT, size)
+                    icons = self.data_dir / "deck_icons"
+                    if check_local_path(icons, directory=True, missing_ok=True):
+                        for path in icons.iterdir():
+                            if ICON_FILENAME.fullmatch(path.name):
+                                if len(output.filelist) + 2 > ENTRY_LIMIT:
+                                    raise HTTPException(413, "备份文件数超出上限")
+                                data = checked_icon(path)
+                                total += len(data)
+                                if total > ARCHIVE_LIMIT:
+                                    raise HTTPException(413, "备份超过文件大小上限")
+                                output.writestr(f"deck_icons/{path.name}", data)
                     with self.wallpaper_lock:
                         wallpaper = self.data_dir / "wallpaper.webp"
                         if wallpaper.exists() or wallpaper.is_symlink():
@@ -219,16 +237,18 @@ class Backups:
             staged = Path(directory) / "data"
             staged.mkdir(mode=0o700)
             (staged / "uploads").mkdir()
+            (staged / "deck_icons").mkdir()
             with ZipFile(ArchiveReader(stream)) as archive:
                 extract_backup(archive, staged)
-            uploads = validate_database(staged / "app.db")
-            if uploads != {f.name: f.stat().st_size for f in (staged / "uploads").iterdir()}:
-                raise ValueError("备份中的附件与 SQLite 文件索引不一致")
+            sanitize_restored_database(staged, self.work)
+            for icon in (staged / "deck_icons").iterdir():
+                checked_icon(icon)
             if (wallpaper := staged / "wallpaper.webp").is_file():
                 with Image.open(wallpaper, formats=["WEBP"]) as image:
                     if max(image.size) > 2560 or getattr(image, "n_frames", 1) != 1:
                         raise ValueError("备份壁纸无效")
                     image.load()
+            (staged / PORTABLE_MARKER).touch()
             staged.rename(self.pending)
 
 
@@ -240,13 +260,15 @@ def extract_backup(archive, target):
     for entry in entries:
         name = entry.filename
         kind = stat.S_IFMT(entry.external_attr >> 16)
-        directory = name == "uploads/" and kind in (0, stat.S_IFDIR)
-        regular = (name in {"app.db", "wallpaper.webp"} or UPLOAD.fullmatch(name)) and kind in (0, stat.S_IFREG)
+        directory = name in {"uploads/", "deck_icons/"} and kind in (0, stat.S_IFDIR)
+        icon = name.startswith("deck_icons/") and ICON_FILENAME.fullmatch(name[len("deck_icons/"):])
+        regular = (name in {"app.db", "wallpaper.webp"} or UPLOAD.fullmatch(name) or icon) and kind in (0, stat.S_IFREG)
         if (name in seen or entry.orig_filename != name or not (directory or regular)
+                or entry.external_attr & stat.FILE_ATTRIBUTE_REPARSE_POINT
                 or entry.flag_bits & 1 or entry.compress_type not in (ZIP_STORED, ZIP_DEFLATED)):
             raise ValueError("备份包包含不允许的路径、重复项或文件类型")
         seen.add(name)
-        limit = WALLPAPER_LIMIT if name == "wallpaper.webp" else MEMBER_LIMIT
+        limit = MAX_ICON_BYTES if icon else WALLPAPER_LIMIT if name == "wallpaper.webp" else MEMBER_LIMIT
         total += entry.file_size
         if entry.file_size > limit or total > ARCHIVE_LIMIT:
             raise HTTPException(413, "解压大小超过备份上限")

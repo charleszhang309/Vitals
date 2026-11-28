@@ -15,7 +15,7 @@ import { useAiSettings } from './useAiSettings.js';
 import { useMedia } from './useMedia.js';
 import { useFocusTimer } from './useFocusTimer.js';
 import useOverviewResource from './useOverviewResource.js';
-import { HUB_DEVICE_ID } from './RemoteDevice.jsx';
+import { controlDevice, HUB_DEVICE_ID, reportedDevices } from './controlDevice.js';
 import { request, sendJson } from './api.js';
 import { useI18n } from './i18n/index.jsx';
 import DesktopChrome, { desktopPlatform, dragDesktop } from './DesktopChrome.jsx';
@@ -91,16 +91,11 @@ export default function App() {
   const agents = useOverviewResource('/api/agents', agentActive ? 250 : 2500, watchAgents);
   const aliasResource = useOverviewResource('/api/agents/aliases', 10_000, deckOpen || view !== 'scratchpad' || settings);
   const aliases = aliasResource.data?.aliases ?? {};
-  const devices = (agents.data?.devices ?? []).map((item) => ({
-    ...item,
-    name: aliases[item.device_id] ?? (aliasResource.data ? item.snapshot.name : item.name),
-    online: item.online && !agents.error,
-  }));
-  const device = devices.find((item) => item.online && item.device_id === (selectedDevice ?? defaultDevice));
+  const devices = reportedDevices(agents.data, aliasResource.data, agents.error);
+  const device = controlDevice(selectedDevice ?? defaultDevice, devices, aliases);
   const onlineDevices = devices.filter((item) => item.online);
   const primaryDevice = devices.find((item) => item.device_id === defaultDevice);
   const waitingForPrimary = defaultDevice !== HUB_DEVICE_ID && !agents.data;
-  const waitingForSelection = (selectedDevice ?? defaultDevice) !== HUB_DEVICE_ID && !agents.data && !agents.error;
   const telemetry = useTelemetry(true, { activeTelemetry: deckOpen || monitorOpen || view === 'control' });
   const platform = info.data?.platform ?? telemetry.sample?.platform;
   const hub = {
@@ -109,16 +104,15 @@ export default function App() {
     name: aliases[HUB_DEVICE_ID] ?? (platform === 'macos' ? t('本机 Mac') : platform === 'windows' ? 'Windows' : t('本机')),
     online: Boolean((info.data && !info.error) || telemetry.connection === 'online'),
   };
-  const power = usePowerControls((view === 'control' || monitorOpen) && !device && !waitingForSelection && platform === 'windows');
+  const power = usePowerControls((view === 'control' || monitorOpen) && !device && platform === 'windows');
   const ai = useAiSettings();
-  const media = useMedia(deckOpen || (view === 'control' && !device && !waitingForSelection) ||
-    (view === 'today' && !primaryDevice && !waitingForPrimary && widgets.media !== false));
+  const media = useMedia(!deckOpen && ((view === 'control' && !device) ||
+    (view === 'today' && !primaryDevice && !waitingForPrimary && widgets.media !== false)));
   const focusTimer = useFocusTimer();
   const [chat, setChat] = useState(false);
   const reduced = useReducedMotion();
   const dark = appearance.theme === 'dark';
   const { data: agentData, error: agentsError } = agents;
-  const updatePreference = appearance.update;
   useEffect(() => {
     const invoke = window.__TAURI__?.core?.invoke;
     if (window.location.hostname !== '127.0.0.1' || typeof invoke !== 'function') return undefined;
@@ -140,16 +134,9 @@ export default function App() {
     return () => controller.abort();
   }, []);
   useEffect(() => {
-    if (!agentData || agentsError) return;
-    const exists = (id) => id === HUB_DEVICE_ID || agentData.devices.some((item) => item.device_id === id);
-    if (!exists(defaultDevice)) updatePreference('defaultDevice', HUB_DEVICE_ID);
-    if (selectedDevice && !exists(selectedDevice)) setSelectedDevice(HUB_DEVICE_ID);
-  }, [agentData, agentsError, defaultDevice, selectedDevice, updatePreference]);
-
-  useEffect(() => {
     if (view !== 'control' || !agentData || agentsError) return;
     const id = selectedDevice ?? defaultDevice;
-    const offline = agentData.devices.find((item) => item.device_id === id && !item.online);
+    const offline = agentData.devices.find((item) => item.device_id === id && item.online === false);
     if (offline) {
       setOfflineNotice(t('{p1} 已离线，已切回本机。', { p1: aliases[id] ?? offline.name }));
       setSelectedDevice(HUB_DEVICE_ID);
@@ -229,21 +216,18 @@ export default function App() {
                   navigate('control', primaryDevice?.device_id ?? HUB_DEVICE_ID);
                 }}
                 briefingEnabled={Boolean(ai.settings?.enabled && ai.settings.configured && ai.settings.include_vitals_context)} />}
-              {view === 'control' && (waitingForSelection
-                ? <p className="feedback" role="status">{agents.error || t('正在读取设备…')}</p>
-                : <ControlPage media={media} open={playerOpen} onOpenChange={setPlayerOpen} hub={hub}
+              {view === 'control' && <ControlPage media={media} open={playerOpen} onOpenChange={setPlayerOpen} hub={hub}
                 sample={telemetry.sample} power={power} onMonitor={() => setMonitorOpen(true)}
                 devices={onlineDevices} device={device} offlineNotice={offlineNotice} onDevice={chooseDevice}
-                onAgentCommand={agents.retry} onAgentActivity={setAgentActive} />)}
+                loadingDevices={!agents.data && !agents.error} onAgentCommand={agents.retry} onAgentActivity={setAgentActive} />}
               {view === 'scratchpad' && <ScratchpadPage aiEnabled={Boolean(ai.settings?.enabled && ai.settings.configured)} />}
             </motion.section>
           </AnimatePresence>
         </main>
         </>}
         {deckOpen && <Suspense fallback={<p className="main-content" role="status">{t('正在加载 Deck…')}</p>}>
-          <DeckPage close={() => { setDeckOpen(false); chooseDevice(null); }} hub={hub} devices={onlineDevices}
-            defaultDevice={defaultDevice} sample={telemetry.sample} media={media.current} focus={focusTimer}
-            refreshMedia={media.reload} refreshDevices={agents.retry} />
+          <DeckPage close={() => { setDeckOpen(false); chooseDevice(null); }} hub={hub} devices={devices}
+            defaultDevice={defaultDevice} sample={telemetry.sample} focus={focusTimer} refreshDevices={agents.retry} />
         </Suspense>}
         <AnimatePresence>
           {chat && ai.settings?.enabled && <Suspense key="chat" fallback={null}>

@@ -12,3 +12,9 @@ export function deckSlots(scene) {
   return Array.from({ length: columns * rows }, (_, index) => index)
     .filter((index) => index % columns === 0 || scene.tiles[index - 1]?.span !== 2);
 }
+
+export function deckActionTile(action, target, revision, scene) {
+  if (!action || action.target !== target || action.revision !== revision || action.scene !== scene?.id) return null;
+  const tile = scene?.tiles[action.slot];
+  return tile?.steps?.length ? tile : null;
+}

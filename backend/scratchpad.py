@@ -8,6 +8,7 @@ from pathlib import Path, PureWindowsPath
 import re
 import shutil
 import sqlite3
+import stat
 from threading import Lock
 from typing import Annotated, BinaryIO, Literal
 from urllib.parse import quote
@@ -30,10 +31,25 @@ logger = logging.getLogger(__name__)
 CHUNK = 64 * 1024
 PREVIEW_LIMIT = 15_000_000
 STORED_FILE = re.compile(r"([0-9a-f]{32})(\.(?:part|deleting))?")
+STORAGE_KEY = re.compile(r"[0-9a-f]{32}")
 MEDIA_TYPE = re.compile(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+")
 PREVIEW_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon"}
 PUBLIC_FIELDS = "id, kind, text, filename, size_bytes, mime_type, created_at, pinned"
 ItemID = Annotated[int, PathParam(ge=1, le=2**63 - 1)]
+
+
+def check_local_path(path, *, directory=False, missing_ok=False):
+    try:
+        status = path.lstat()
+    except FileNotFoundError:
+        if missing_ok:
+            return
+        raise
+    is_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if (not is_type(status.st_mode)
+            or getattr(status, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+        raise ValueError("数据路径包含链接或不支持的文件类型")
+    return status
 
 
 def clean_filename(value: str) -> str:
@@ -94,7 +110,10 @@ class Scratchpad:
             db.close()
 
     def initialize(self):
+        self.uploads.parent.mkdir(parents=True, exist_ok=True)
+        check_local_path(self.uploads.parent, directory=True)
         self.uploads.mkdir(parents=True, exist_ok=True)
+        check_local_path(self.uploads, directory=True)
         with self.connect() as db:
             db.execute("PRAGMA journal_mode = WAL")
             db.execute("BEGIN IMMEDIATE")
@@ -148,14 +167,27 @@ class Scratchpad:
         # 恢复上次中断的删除，清理操作中断留下的临时文件。
         for path in self.uploads.iterdir():
             match = STORED_FILE.fullmatch(path.name)
-            if not match or not path.is_file():
+            if not match:
                 continue
             key, suffix = match.groups()
-            original = self.uploads / key
+            path = self.attachment_path(key, suffix or "")
+            original = self.attachment_path(key)
             if suffix == ".deleting" and key in keys and not original.exists():
                 path.replace(original)
             elif suffix is not None or key not in keys:
                 self.remove_file(path)
+
+    def attachment_path(self, key, suffix="") -> Path:
+        if not isinstance(key, str) or not STORAGE_KEY.fullmatch(key) or suffix not in {"", ".part", ".deleting"}:
+            raise HTTPException(409, "中转站文件索引无效")
+        path = self.uploads / (key + suffix)
+        try:
+            check_local_path(self.uploads.parent, directory=True)
+            check_local_path(self.uploads, directory=True)
+            check_local_path(path, missing_ok=True)
+        except ValueError as error:
+            raise HTTPException(409, "中转站文件路径无效") from error
+        return path
 
     @staticmethod
     def remove_file(path: Path):
@@ -198,8 +230,8 @@ class Scratchpad:
 
     def add_file(self, source: BinaryIO, filename: str, size: int, mime_type: str) -> dict:
         key = uuid4().hex
-        temporary = self.uploads / f"{key}.part"
-        final = self.uploads / key
+        temporary = self.attachment_path(key, ".part")
+        final = self.attachment_path(key)
         moved = False
         try:
             with temporary.open("xb") as target:
@@ -225,7 +257,7 @@ class Scratchpad:
             if row is None:
                 raise HTTPException(404, "中转站文件不存在")
             try:
-                return row, (self.uploads / row["storage_key"]).open("rb")
+                return row, self.attachment_path(row["storage_key"]).open("rb")
             except FileNotFoundError as error:
                 raise HTTPException(404, "中转站文件已缺失") from error
 
@@ -256,21 +288,24 @@ class Scratchpad:
             try:
                 with self.connect() as db:
                     db.execute("BEGIN IMMEDIATE")
-                    row = db.execute("SELECT storage_key, pinned, created_at FROM scratchpad WHERE id = ?", (item_id,)).fetchone()
+                    row = db.execute("SELECT kind, storage_key, pinned, created_at FROM scratchpad WHERE id = ?", (item_id,)).fetchone()
                     if row is None:
                         return False
                     if cutoff is not None:
                         active = db.execute("SELECT retention_days FROM scratchpad_settings WHERE id = 1").fetchone()[0]
                         if active != days or row["pinned"] or row["created_at"] >= cutoff:
                             return False
-                    if row["storage_key"]:
-                        original = self.uploads / row["storage_key"]
+                    if row["kind"] == "file":
+                        original = self.attachment_path(row["storage_key"])
+                        destination = self.attachment_path(row["storage_key"], ".deleting")
                         try:
-                            tombstone = original.rename(original.with_suffix(".deleting"))
+                            tombstone = original.rename(destination)
                         except FileNotFoundError:
                             pass
                         except PermissionError as error:
                             raise HTTPException(409, "文件正在使用或无法移动，请稍后重试") from error
+                    elif row["kind"] != "text" or row["storage_key"] is not None:
+                        raise HTTPException(409, "中转站记录无效")
                     db.execute("DELETE FROM scratchpad WHERE id = ?", (item_id,))
             except sqlite3.Error:
                 if tombstone is not None:

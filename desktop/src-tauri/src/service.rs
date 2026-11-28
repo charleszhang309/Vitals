@@ -3,7 +3,7 @@ use crate::settings::Remote;
 use crate::settings::Role;
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -34,6 +34,72 @@ enum Probe {
     Free,
     Busy,
     Vitals(Option<String>),
+}
+
+const LOG_LIMIT: u64 = 5 * 1024 * 1024;
+// A final chunk from a stopping child can arrive after its successor starts.
+static LOG_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn append_log(path: &Path, mut bytes: &[u8], limit: u64) -> io::Result<()> {
+    let _guard = LOG_WRITE.lock().unwrap_or_else(|error| error.into_inner());
+    loop {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .read(true)
+            .open(path)?;
+        let size = file.metadata()?.len();
+        if size >= limit {
+            let old = path.with_extension("log.old");
+            if size > limit {
+                // Older releases could leave an arbitrarily large log. Keep its recent tail.
+                file.seek(SeekFrom::End(-(limit as i64)))?;
+                let mut tail = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
+                io::copy(&mut file.take(limit), &mut tail)?;
+                tail.persist(old)?;
+                fs::OpenOptions::new().write(true).open(path)?.set_len(0)?;
+            } else {
+                drop(file);
+                fs::rename(path, old)?;
+            }
+            continue;
+        }
+        let count = bytes.len().min((limit - size) as usize);
+        file.write_all(&bytes[..count])?;
+        bytes = &bytes[count..];
+        if bytes.is_empty() {
+            return Ok(());
+        }
+    }
+}
+
+fn child_log(path: PathBuf) -> io::Result<io::PipeWriter> {
+    append_log(&path, &[], LOG_LIMIT)?;
+    let (mut reader, writer) = io::pipe()?;
+    std::thread::Builder::new()
+        .name("vitals-log".into())
+        .spawn(move || {
+            let mut buffer = [0; 8192];
+            let mut failed = false;
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let result = append_log(&path, &buffer[..n], LOG_LIMIT);
+                        if !failed {
+                            if let Err(error) = &result {
+                                eprintln!("Could not write Vitals desktop log: {error}");
+                            }
+                        }
+                        // Keep draining the child even when the disk is full.
+                        failed = result.is_err();
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+        })?;
+    Ok(writer)
 }
 
 pub struct Hub {
@@ -126,10 +192,7 @@ impl Hub {
         sidecar_args: &[&str],
     ) -> io::Result<Command> {
         fs::create_dir_all(home)?;
-        let log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(home.join(log_name))?;
+        let log = child_log(home.join(log_name))?;
         let mut command = if self.sidecar.is_file() {
             let mut command = Command::new(&self.sidecar);
             command.current_dir(home).args(sidecar_args);

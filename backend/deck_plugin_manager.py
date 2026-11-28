@@ -21,6 +21,15 @@ PluginId = Annotated[str, RoutePath(pattern=PLUGIN_ID_PATTERN)]
 logger = logging.getLogger(__name__)
 
 
+def initialize_plugin_tables(db):
+    db.execute("""CREATE TABLE IF NOT EXISTS deck_plugin_settings (
+        id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, settings TEXT NOT NULL
+    )""")
+    db.execute("""CREATE TABLE IF NOT EXISTS deck_plugin_management (
+        id INTEGER PRIMARY KEY CHECK(id=1), key TEXT NOT NULL
+    )""")
+
+
 def settings_from(plugin, supplied, *, stored=False):
     declared = {field.id: field for field in plugin.manifest.config_schema}
     if not stored and supplied.keys() - declared.keys():
@@ -60,14 +69,7 @@ class DeckPluginManager:
 
     def initialize(self):
         with self.connect() as db:
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS deck_plugin_settings (
-                    id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, settings TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS deck_plugin_management (
-                    id INTEGER PRIMARY KEY CHECK(id=1), key TEXT NOT NULL
-                );
-            """)
+            initialize_plugin_tables(db)
             saved = {row[0]: (bool(row[1]), json.loads(row[2]))
                      for row in db.execute("SELECT id,enabled,settings FROM deck_plugin_settings")}
         for plugin in self.registry.inventory():

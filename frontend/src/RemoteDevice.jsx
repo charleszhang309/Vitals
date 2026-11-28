@@ -1,5 +1,5 @@
 import { t } from './i18n/messages.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { Activity, Clipboard, Coffee, LockKeyhole, MonitorOff, Moon } from 'lucide-react';
 import { postJson } from './api.js';
@@ -7,7 +7,7 @@ import { bytes, measure, rateText, sleepTime, time } from './format.js';
 import ScreenshotControl from './ScreenshotControl.jsx';
 import { Button, DetailLink, DetailValues, Modal, ProgressBar, Segmented } from './ui.jsx';
 
-export const HUB_DEVICE_ID = 'hub';
+export { HUB_DEVICE_ID } from './controlDevice.js';
 const compactPicker = '(max-width: 640px)';
 
 export function DeviceDot({ online }) {
@@ -23,22 +23,23 @@ export function DevicePicker({ id, hub, devices, device, onChange }) {
     return () => media.removeEventListener('change', sync);
   }, []);
   const choices = [hub, ...devices];
-  if (!devices.length) return null;
+  if (device && !choices.some((item) => item.device_id === device.device_id)) choices.push(device);
+  if (choices.length === 1) return null;
   const selected = device ?? hub;
   if (choices.length >= (compact ? 3 : 4)) {
     return <div className="device-picker device-picker-select" data-offline={!selected.online}>
       <DeviceDot online={selected.online} />
       <select aria-label={t('设备')} value={selected.device_id} onChange={(event) => onChange(event.target.value)}>
-        {choices.map(({ device_id: key, name, online }) => <option key={key} value={key} data-online={Boolean(online)}>
-          {online ? '●' : '○'} {name}{!online ? t(' · 离线') : ''}
+        {choices.map(({ device_id: key, name, online, statusUnknown }) => <option key={key} value={key} data-online={Boolean(online)}>
+          {online ? '●' : '○'} {name}{statusUnknown ? ` · ${t('状态未知')}` : !online ? t(' · 离线') : ''}
         </option>)}
       </select>
     </div>;
   }
-  const options = choices.map(({ device_id: key, name, online }) => ({
+  const options = choices.map(({ device_id: key, name, online, statusUnknown }) => ({
     value: key, label: <span className="device-segment-label" data-offline={!online} title={name}>
       <DeviceDot online={online} /><span>{name}</span>
-      {!online && <span className="sr-only">{t('（离线）')}</span>}
+      {!online && <span className="sr-only">{statusUnknown ? t('状态未知') : t('（离线）')}</span>}
     </span>,
   }));
   return <div className="device-picker"><Segmented id={id} label={t('设备')} options={options}
@@ -58,7 +59,7 @@ export function batteryNote(battery) {
 
 function RemoteStatus({ device }) {
   return <span className="remote-status"><span className={`state-dot ${device.online ? 'live-dot' : ''}`} aria-hidden="true" />
-    {device.online ? t('在线') : t('已休眠或离线')}</span>;
+    {device.statusUnknown ? t('设备状态暂不可用') : device.online ? t('在线') : t('已休眠或离线')}</span>;
 }
 
 function RemoteLastSeen({ device }) {
@@ -155,15 +156,12 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
   const pendingVolume = useRef(new Map());
   const volumeWriting = useRef(false);
 
-  useEffect(() => () => {
-    window.clearTimeout(volumeTimer.current);
-    pendingVolume.current.clear();
-  }, []);
-  useEffect(() => {
-    if (!device.online) {
+  useLayoutEffect(() => {
+    if (!device.online) setConfirm(null);
+    return () => {
       window.clearTimeout(volumeTimer.current);
       pendingVolume.current.clear();
-    }
+    };
   }, [device.online]);
 
   const { media, volume, caffeinate, timestamp } = device.snapshot;
@@ -205,12 +203,12 @@ export function RemoteControl({ device, onMonitor, onCommand, onActivity, childr
   const playingOverride = device.online && media && mediaChange?.trackId === media.track_id ? mediaChange : null;
   const track = media?.title || media?.artist ? {
     ...media, agent_id: device.device_id, session_id: device.device_id,
-    status: device.online ? playingOverride?.status ?? media.status : 'offline',
+    status: device.statusUnknown ? 'unavailable' : device.online ? playingOverride?.status ?? media.status : 'offline',
     position_seconds: playingOverride?.position ?? media.position_seconds,
     actions: { toggle: device.online && !awaiting('media_play_pause'), previous: device.online, next: device.online },
   } : null;
   const received = playingOverride?.received ?? sampledAt;
-  const offlineLabel = device.online ? undefined : t('{p1} 已休眠或离线', { p1: device.name });
+  const offlineLabel = device.statusUnknown ? t('设备状态暂不可用') : device.online ? undefined : t('{p1} 已休眠或离线', { p1: device.name });
   const playback = { track, sessions: [], received, reload: onCommand, offlineLabel };
 
   function predict(action, value) {

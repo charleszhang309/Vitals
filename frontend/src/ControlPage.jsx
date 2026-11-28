@@ -9,7 +9,7 @@ import { HardwareSummary, MacQuickControlCard, PowerCard, QuickControlCard } fro
 import { DevicePicker, RemoteControl } from './RemoteDevice.jsx';
 import Launchers from './Launchers.jsx';
 
-export const playbackLabels = { get playing() { return t('播放中'); }, get paused() { return t('已暂停'); }, get stopped() { return t('已停止'); }, get offline() { return t('设备离线'); } };
+export const playbackLabels = { get playing() { return t('播放中'); }, get paused() { return t('已暂停'); }, get stopped() { return t('已停止'); }, get offline() { return t('设备离线'); }, get unavailable() { return t('设备状态暂不可用'); } };
 const volumePath = '/api/media/volume';
 const AmllLyrics = lazy(() => import('./AmllLyrics.jsx'));
 
@@ -105,7 +105,7 @@ function useTrackLyrics(track) {
   const sessionId = track?.session_id;
   const agentId = track?.agent_id;
   const trackId = track?.track_id;
-  const lookupKey = sessionId && trackId && track.status !== 'offline' && track.title?.trim() && track.artist?.trim()
+  const lookupKey = sessionId && trackId && !['offline', 'unavailable'].includes(track.status) && track.title?.trim() && track.artist?.trim()
     ? `${sessionId}:${trackId}` : '';
 
   useEffect(() => {
@@ -270,7 +270,7 @@ function VolumeControls({ sound, immersive = false, input = false }) {
       aria-valuetext={percent == null ? t('音量不可用') : `${percent}%`}
       disabled={disabled || !canAdjust} value={percent ?? 0} style={{ '--range-fill': `${percent ?? 0}%` }}
       onChange={(event) => queue({ percent: Number(event.target.value) })} onPointerUp={flush} onBlur={flush} />
-    {!immersive && <span className="numeric volume-readout">{available && percent != null ? `${percent}%` : '—'}</span>}
+    {!immersive && <span className="numeric volume-readout">{percent != null ? `${percent}%` : '—'}</span>}
   </div>;
 }
 
@@ -416,16 +416,18 @@ function HostControl({ sample, platform, power, onMonitor, media, ...player }) {
   </>;
 }
 
-export default function ControlPage({ hub, devices, device, offlineNotice, onDevice, onAgentCommand, onAgentActivity, ...props }) {
+export default function ControlPage({ hub, devices, device, loadingDevices, offlineNotice, onDevice, onAgentCommand, onAgentActivity, ...props }) {
   return <>
     <div className="page-heading control-heading"><h1>{t('控制')}</h1>
       <DevicePicker id="control-device" hub={hub} devices={devices} device={device} onChange={onDevice} />
     </div>
     {offlineNotice && <p className="feedback" role="status">{offlineNotice}</p>}
-    {device ? <RemoteControl key={device.device_id} device={device} onMonitor={props.onMonitor}
+    {device?.statusUnknown && <p className="feedback" role="status">{loadingDevices ? t('正在读取设备…') :
+      t('暂时无法确认 {p1} 的状态，设备操作已暂停。', { p1: device.name })}</p>}
+    {device?.snapshot && <RemoteControl key={device.device_id} device={device} onMonitor={props.onMonitor}
       onCommand={onAgentCommand} onActivity={onAgentActivity}>
       {(playback) => <PlaybackControls {...playback} open={props.open} onOpenChange={props.onOpenChange} />}
-    </RemoteControl>
-      : <HostControl platform={hub.platform} {...props} />}
+    </RemoteControl>}
+    {!device && <HostControl platform={hub.platform} {...props} />}
   </>;
 }

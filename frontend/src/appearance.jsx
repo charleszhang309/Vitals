@@ -540,7 +540,7 @@ function BackupSettings() {
       {file && <Modal id="restore-backup" title={t('确认恢复备份')} className="detail-dialog shutdown-dialog"
         onClose={() => !busy && setFile(null)}>
         <p className="backup-file-name">{file.name}</p>
-        <p>{t('重启后将用备份替换本机数据库、中转站附件和壁纸。')}</p>
+        <p>{t('重启后将用备份替换本机数据、中转站附件、壁纸和 Deck 图标。插件使用本机配置和凭据。')}</p>
         {feedback && <p className="feedback error" role="alert">{feedback.text}</p>}
         <div className="quick-confirm-actions">
           <Button disabled={busy} onClick={() => { setFile(null); setFeedback(null); }}>{t('取消')}</Button>

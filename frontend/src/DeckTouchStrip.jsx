@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Mic, MicOff, Pause, Play, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import { MediaCover } from './ControlPage.jsx';
 import { postJson, request } from './api.js';
@@ -11,11 +11,12 @@ export function useDeckFaders(target, snapshot, setHostAudio, refreshDevices, re
   const [optimistic, setOptimistic] = useState(null);
   const queueRef = useRef(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    setOptimistic(null);
+    if (!target) return undefined;
     const controller = new AbortController();
     const queue = { target, controller, pending: {}, writing: false };
     queueRef.current = queue;
-    setOptimistic(null);
     return () => {
       controller.abort();
       clearTimeout(queue.timer);
@@ -83,7 +84,7 @@ export function useDeckFaders(target, snapshot, setHostAudio, refreshDevices, re
   return { values, change, flush };
 }
 
-function Fader({ audio, input = false }) {
+function Fader({ audio, input = false, disabled }) {
   const volumeField = input ? 'input_percent' : 'percent';
   const muteField = input ? 'input_muted' : 'muted';
   const percent = audio.values?.[volumeField];
@@ -97,9 +98,9 @@ function Fader({ audio, input = false }) {
   return <div className="deck-strip-module deck-fader" role="group" aria-label={label}>
     <span className="deck-strip-label">{label}</span>
     <div className="deck-fader-controls">
-      <IconButton label={muteLabel} aria-pressed={canMute ? muted : undefined} disabled={!canMute}
+      <IconButton label={muteLabel} aria-pressed={canMute ? muted : undefined} disabled={disabled || !canMute}
         onClick={() => audio.change(muteField, !muted, true)}><Icon size={16} aria-hidden="true" /></IconButton>
-      <input type="range" min="0" max="100" aria-label={label} disabled={!canAdjust} value={level}
+      <input type="range" min="0" max="100" aria-label={label} disabled={disabled || !canAdjust} value={level}
         style={{ '--deck-level': `${level}%` }} onChange={(event) => audio.change(volumeField, Number(event.target.value))}
         onPointerUp={audio.flush} onPointerCancel={audio.flush} onBlur={audio.flush} />
       <output className="numeric">{canAdjust ? `${level}%` : '—'}</output>
@@ -107,7 +108,7 @@ function Fader({ audio, input = false }) {
   </div>;
 }
 
-export default function DeckTouchStrip({ deviceId, track, faders, onMediaChange, reportError }) {
+export default function DeckTouchStrip({ deviceId, track, faders, onMediaChange, reportError, disabled }) {
   const [pending, setPending] = useState(false);
   const playing = track?.status === 'playing';
   const action = track?.actions?.toggle ? 'toggle' : playing ? 'pause' : 'play';
@@ -117,6 +118,7 @@ export default function DeckTouchStrip({ deviceId, track, faders, onMediaChange,
   const canSkip = activeTrack && (deviceId !== 'hub' || track.actions?.next);
 
   async function control(operation) {
+    if (disabled || pending) return;
     setPending(true);
     try {
       if (deviceId === 'hub') {
@@ -135,8 +137,8 @@ export default function DeckTouchStrip({ deviceId, track, faders, onMediaChange,
   }
 
   return <div className="surface deck-touch-strip" role="group" aria-label={t('触控条')}>
-    <Fader audio={faders} />
-    <Fader audio={faders} input />
+    <Fader audio={faders} disabled={disabled} />
+    <Fader audio={faders} input disabled={disabled} />
     <div className="deck-strip-module deck-strip-media">
       <MediaCover compact track={track} />
       <div className="deck-strip-track">
@@ -144,9 +146,9 @@ export default function DeckTouchStrip({ deviceId, track, faders, onMediaChange,
         {activeTrack && track.artist && <small title={track.artist}>{track.artist}</small>}
       </div>
       <div className="deck-strip-transport">
-        <IconButton label={t(playing ? '暂停' : '播放')} disabled={!canToggle || pending}
+        <IconButton label={t(playing ? '暂停' : '播放')} disabled={disabled || !canToggle || pending}
           onClick={() => control(action)}><PlayIcon size={16} aria-hidden="true" /></IconButton>
-        <IconButton label={t('下一首')} disabled={!canSkip || pending}
+        <IconButton label={t('下一首')} disabled={disabled || !canSkip || pending}
           onClick={() => control('next')}><SkipForward size={16} aria-hidden="true" /></IconButton>
       </div>
     </div>

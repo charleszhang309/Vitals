@@ -1,4 +1,5 @@
 export default {
+  '目标或布局已更改，操作已取消。请重新选择按键。': 'Action canceled because the target or layout changed. Select the key again.',
   '触控条': 'Touch Strip',
   '扬声器': 'Speaker',
   '麦克风': 'Microphone',

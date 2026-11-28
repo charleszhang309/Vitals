@@ -6,6 +6,22 @@ mod settings;
 include!("../src/service.rs");
 use settings::{Selection, SettingsStore};
 
+#[test]
+fn desktop_log_rotates_while_running_and_on_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("desktop-hub.log");
+    let old = dir.path().join("desktop-hub.log.old");
+    fs::write(&path, b"older01234567").unwrap();
+    append_log(&path, &[], 8).unwrap();
+    assert_eq!(fs::read(&old).unwrap(), b"01234567");
+    append_log(&path, b"abcdefghijklmno", 8).unwrap();
+    assert_eq!(fs::read(&old).unwrap(), b"abcdefgh");
+    assert_eq!(fs::read(&path).unwrap(), b"ijklmno");
+    append_log(&path, b"pqr", 8).unwrap();
+    assert_eq!(fs::read(&old).unwrap(), b"ijklmnop");
+    assert_eq!(fs::read(&path).unwrap(), b"qr");
+}
+
 fn remote_role(home: &Path) -> Role {
     let (store, default) = SettingsStore::load(home);
     assert!(default == Role::Hub);

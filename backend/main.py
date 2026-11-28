@@ -382,6 +382,17 @@ def bound_sockets(host: str, port: int, desktop: bool = False):
         yield listeners
 
 
+def desktop_access_errors(record: logging.LogRecord) -> bool:
+    # Uvicorn access records carry peer, method, path, protocol and status.
+    if isinstance(record.args, tuple) and len(record.args) == 5:
+        peer, method, path, protocol, status = record.args
+        if isinstance(status, int):
+            if status < 400:
+                return False
+            record.args = (peer, method, str(path).partition("?")[0], protocol, status)
+    return True
+
+
 def main():
     import uvicorn
 
@@ -410,6 +421,8 @@ def main():
             workers=1, proxy_headers=False, ws_max_size=16 * 1024, ws_ping_interval=20, ws_ping_timeout=20,
             timeout_graceful_shutdown=5 if args.desktop_stdio else None,
         )
+        if args.desktop_stdio:
+            logging.getLogger("uvicorn.access").addFilter(desktop_access_errors)
         logger.info("Vitals 正在监听 %s:%s", settings.host, settings.port)
         server = uvicorn.Server(config)
         if args.desktop_stdio:

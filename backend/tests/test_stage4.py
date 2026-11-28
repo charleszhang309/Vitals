@@ -1,6 +1,6 @@
 """验证本地文档预览、聊天配置与流式历史。"""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -303,6 +303,37 @@ def test_sleep_overlap_does_not_double_count_legacy_summaries_or_merge_separate_
     detail = health.detail("sleep", datetime(2026, 1, 3, 21, tzinfo=timezone.utc))
     assert detail["sleep"]["total_minutes"] == 30
     assert detail["weekly"][-1]["total_minutes"] == 370
+
+
+@pytest.mark.parametrize("raw", [False, True], ids=["summaries", "segments"])
+def test_complete_fragmented_sleep_on_home_detail_and_briefing(tmp_path, raw):
+    store = Scratchpad(tmp_path)
+    store.initialize()
+    health = HealthStore(store.connect, HealthConfig(timezone="America/Toronto"))
+    health.initialize()
+    start = datetime.fromisoformat("2026-01-02T22:00:00-05:00")
+    count, spacing, duration = (540, 1, 1) if raw else (9, 60, 40)
+    entries = []
+    for index in range(count):
+        first = start + timedelta(minutes=index * spacing)
+        end = first + timedelta(minutes=duration)
+        if raw:
+            entries.append({"start": first.isoformat(), "end": end.isoformat(), "value": "Core"})
+        else:
+            entries.append(sleep_export_part(first.isoformat(), end.isoformat(), duration))
+    assert health.ingest(sleep_export(*entries), 2) == count
+    morning = datetime.fromisoformat("2026-01-03T09:00:00-05:00")
+    expected = count * duration
+    for now in (morning, morning + timedelta(days=14)):
+        homepage = health.summary(now)["sleep"]
+        detail = health.detail("sleep", now)
+        for record in (homepage, detail["sleep"]):
+            assert datetime.fromisoformat(record["start"]) == start
+            assert datetime.fromisoformat(record["end"]) == end
+            assert record["total_minutes"] == record["in_bed_minutes"] == expected
+            assert record["stages"]["core"] == expected
+        assert detail["weekly"][-1]["total_minutes"] == (expected if now == morning else None)
+    assert health.last_night_minutes(morning) == expected
 
 
 def test_unsummarized_apple_unspecified_sleep_is_counted_in_hourly_chart(tmp_path):
